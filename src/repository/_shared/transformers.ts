@@ -57,6 +57,8 @@ export function toProvider(dbProvider: any): Provider {
     groupTag: dbProvider?.groupTag ?? null,
     providerType: dbProvider?.providerType ?? "claude",
     modelRedirects: dbProvider?.modelRedirects ?? null,
+    useUnifiedClientId: dbProvider?.useUnifiedClientId ?? false,
+    unifiedClientId: dbProvider?.unifiedClientId ?? null,
     codexInstructionsStrategy: dbProvider?.codexInstructionsStrategy ?? "auto",
     mcpPassthroughType: dbProvider?.mcpPassthroughType ?? "none",
     mcpPassthroughUrl: dbProvider?.mcpPassthroughUrl ?? null,

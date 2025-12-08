@@ -1086,7 +1086,14 @@
             "desc": "When enabled, this provider will participate in load balancing with Claude-type providers",
             "help": "Available only when there is a redirect mapping to claude-* models. When users request claude-* models, this provider also joins scheduling."
           },
-          "modelWhitelist": {
+            "unifiedClientId": {
+              "label": "Unified client identifier",
+              "desc": "When enabled, all requests will use the same logical client identifier towards upstream (Claude / Claude-Auth providers only).",
+              "idLabel": "Unified client ID",
+              "regenerate": "Regenerate",
+              "help": "The ID is a 64-character hexadecimal string. It is recommended to keep the auto-generated value and avoid reusing it across different deployments."
+            },
+            "modelWhitelist": {
             "title": "Model Allowlist",
             "desc": "Restrict which models this provider can serve. By default, a provider can serve all models of its type.",
             "label": "Allowed Models",

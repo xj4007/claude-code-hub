@@ -993,7 +993,14 @@
             "desc": "啟用後，此供應商將與 Claude 類型供應商共同參與負載均衡",
             "help": "僅當存在映射至 claude-* 的規則時可用。當用戶請求 claude-* 模型時，此供應商也會被納入調度。"
           },
-          "modelWhitelist": {
+            "unifiedClientId": {
+              "label": "統一客戶端識別",
+              "desc": "啟用後，向上游發送請求時會使用統一的客戶端標識（僅對 Claude / Claude-Auth 供應商生效）",
+              "idLabel": "統一客戶端 ID",
+              "regenerate": "重新產生",
+              "help": "ID 為 64 位十六進位字串，建議保留自動產生結果，不要在不同部署之間重複使用。"
+            },
+            "modelWhitelist": {
             "title": "模型允許清單",
             "desc": "限制此供應商可處理的模型。預設可處理該類型下的所有模型。",
             "label": "允許的模型",

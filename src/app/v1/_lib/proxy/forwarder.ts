@@ -108,6 +108,55 @@ function filterPrivateParameters(obj: unknown): unknown {
   return filtered;
 }
 
+/**
+ * Apply unified client id for Claude / Claude-auth providers.
+ *
+ * When enabled on provider, this rewrites metadata.user_id from
+ *   user_{clientId}_account__session_{sessionId}
+ * to
+ *   user_{unifiedClientId}_account__session_{sessionId}
+ * keeping the session part intact for sticky sessions.
+ */
+function applyUnifiedClientIdForProvider(
+  message: unknown,
+  provider: ProxySession["provider"]
+): unknown {
+  if (!provider) return message;
+  if (!provider.useUnifiedClientId || !provider.unifiedClientId) return message;
+  if (provider.providerType !== "claude" && provider.providerType !== "claude-auth") {
+    return message;
+  }
+
+  if (typeof message !== "object" || message === null) {
+    return message;
+  }
+
+  const obj = message as Record<string, unknown>;
+  const metadata = (obj as Record<string, unknown>).metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return message;
+  }
+
+  const metaObj = { ...(metadata as Record<string, unknown>) };
+  const userId = metaObj.user_id;
+  if (typeof userId !== "string" || userId.length === 0) {
+    return message;
+  }
+
+  const match = /^user_([0-9a-f]{64})_account__session_(.+)$/i.exec(userId);
+  if (!match) {
+    return message;
+  }
+
+  const newUserId = `user_${provider.unifiedClientId}_account__session_${match[2]}`;
+  metaObj.user_id = newUserId;
+
+  return {
+    ...obj,
+    metadata: metaObj,
+  };
+}
+
 export class ProxyForwarder {
   static async send(session: ProxySession): Promise<Response> {
     if (!session.provider || !session.authState?.success) {
@@ -874,12 +923,13 @@ export class ProxyForwarder {
         usedBaseUrl: effectiveBaseUrl,
       });
 
-      const hasBody = session.method !== "GET" && session.method !== "HEAD";
+        const hasBody = session.method !== "GET" && session.method !== "HEAD";
 
-      if (hasBody) {
-        const filteredMessage = filterPrivateParameters(session.request.message);
-        const bodyString = JSON.stringify(filteredMessage);
-        requestBody = bodyString;
+        if (hasBody) {
+          const filteredMessage = filterPrivateParameters(session.request.message);
+          const finalMessage = applyUnifiedClientIdForProvider(filteredMessage, provider);
+          const bodyString = JSON.stringify(finalMessage);
+          requestBody = bodyString;
 
         try {
           const parsed = JSON.parse(bodyString);
