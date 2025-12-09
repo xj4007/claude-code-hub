@@ -705,6 +705,51 @@ export class ProxyResponseHandler {
       const chunks: string[] = [];
       let usageForCost: UsageMetrics | null = null;
       let isFirstChunk = true; // ⭐ 标记是否为第一块数据
+      const isAnthropicProvider =
+        provider.providerType === "claude" || provider.providerType === "claude-auth";
+      let hasAnthropicTerminalChunk = !isAnthropicProvider; // 非 Anthropic 默认视为已结束
+      let lastChunkText = "";
+
+      // Anthropic 总时长保护（尾包超时 180s）
+      const totalTimeoutMs = isAnthropicProvider ? 180_000 : Infinity;
+      let totalTimeoutId: NodeJS.Timeout | null = null;
+      const clearTotalTimer = () => {
+        if (totalTimeoutId) {
+          clearTimeout(totalTimeoutId);
+          totalTimeoutId = null;
+        }
+      };
+      const startTotalTimer = () => {
+        if (totalTimeoutMs === Infinity || totalTimeoutId) return;
+        totalTimeoutId = setTimeout(() => {
+          const err = new Error("streaming_total_timeout");
+          logger.error("ResponseHandler: Anthropic stream total timeout", {
+            taskId,
+            providerId: provider.id,
+            providerName: provider.name,
+            totalTimeoutMs,
+            chunksCollected: chunks.length,
+          });
+          try {
+            if (streamController) {
+              emitClientStreamError(
+                streamController,
+                "stream_total_timeout",
+                "anthropic stream exceeded 180s without completion",
+                504
+              );
+              (streamController as TransformStreamDefaultController<Uint8Array>).error(err);
+            }
+          } catch (e) {
+            logger.warn("ResponseHandler: Failed to close client stream on total timeout", {
+              taskId,
+              providerId: provider.id,
+              error: e,
+            });
+          }
+          abortController.abort(err);
+        }, totalTimeoutMs);
+      };
 
       // ⭐ 静默期 Watchdog：监控流式请求中途卡住（无新数据推送）
       const idleTimeoutMs =
@@ -894,7 +939,12 @@ export class ProxyResponseHandler {
           }
           if (value) {
             const chunkSize = value.length;
-            chunks.push(decoder.decode(value, { stream: true }));
+            const chunkText = decoder.decode(value, { stream: true });
+            chunks.push(chunkText);
+            lastChunkText = chunkText;
+            if (isAnthropicProvider && detectAnthropicTerminalChunk(chunkText)) {
+              hasAnthropicTerminalChunk = true;
+            }
 
             // ⭐ 每次收到数据后重置静默期计时器（首次收到数据时启动）
             startIdleTimer();
@@ -909,6 +959,7 @@ export class ProxyResponseHandler {
             // ⭐ 流式：读到第一块数据后立即清除响应超时定时器
             if (isFirstChunk) {
               isFirstChunk = false;
+              startTotalTimer();
               const sessionWithCleanup = session as typeof session & {
                 clearResponseTimeout?: () => void;
               };
@@ -926,7 +977,61 @@ export class ProxyResponseHandler {
 
         // ⭐ 流式读取完成：清除静默期计时器
         clearIdleTimer();
+        clearTotalTimer();
         const allContent = flushAndJoin();
+
+        // Anthropic：缺少终止包则判定失败，向客户端显式发送错误事件
+        if (isAnthropicProvider && !hasAnthropicTerminalChunk) {
+          const err = new Error("anthropic_missing_terminal_chunk");
+          logger.error("ResponseHandler: Anthropic stream finished without terminal chunk", {
+            taskId,
+            providerId: provider.id,
+            providerName: provider.name,
+            messageId: messageContext.id,
+            durationMs: Date.now() - session.startTime,
+            chunksCollected: chunks.length,
+            lastChunkPreview: summarizeChunkForLog(lastChunkText),
+          });
+
+          try {
+            if (streamController) {
+              emitClientStreamError(
+                streamController,
+                "stream_incomplete",
+                "anthropic stream ended without terminal chunk",
+                502
+              );
+              (streamController as TransformStreamDefaultController<Uint8Array>).error(err);
+            }
+          } catch (e) {
+            logger.warn("ResponseHandler: Failed to emit client stream error", {
+              taskId,
+              providerId: provider.id,
+              error: e,
+            });
+          }
+
+          try {
+            const { recordFailure } = await import("@/lib/circuit-breaker");
+            await recordFailure(provider.id, err);
+          } catch (cbError) {
+            logger.warn("ResponseHandler: Failed to record missing terminal chunk", {
+              providerId: provider.id,
+              error: cbError,
+            });
+          }
+
+          await persistRequestFailure({
+            session,
+            messageContext,
+            statusCode: 502,
+            error: err,
+            taskId,
+            phase: "stream",
+          });
+          return; // 不再进入 finalize，避免计费/成功标记
+        }
+
         await finalizeStream(allContent);
       } catch (error) {
         // 检测 AbortError 的来源：响应超时 vs 静默期超时 vs 客户端/上游中断
@@ -937,6 +1042,7 @@ export class ProxyResponseHandler {
         const clientAborted = session.clientAbortSignal?.aborted ?? false;
         const isResponseControllerAborted =
           sessionWithController.responseController?.signal.aborted ?? false;
+        const isTotalTimeout = err.message?.includes("streaming_total_timeout");
 
         if (isClientAbortError(err)) {
           // 区分不同的超时来源
@@ -1012,6 +1118,34 @@ export class ProxyResponseHandler {
               session,
               messageContext,
               statusCode: statusCode && statusCode >= 400 ? statusCode : 502,
+              error: err,
+              taskId,
+              phase: "stream",
+            });
+          } else if (isTotalTimeout) {
+            // 总时长超时：计入熔断 + 502/504 失败记录
+            logger.error("ResponseHandler: Anthropic stream total timeout (forced abort)", {
+              taskId,
+              providerId: provider.id,
+              providerName: provider.name,
+              messageId: messageContext.id,
+              chunksCollected: chunks.length,
+            });
+
+            try {
+              const { recordFailure } = await import("@/lib/circuit-breaker");
+              await recordFailure(provider.id, err);
+            } catch (cbError) {
+              logger.warn("ResponseHandler: Failed to record total timeout in circuit breaker", {
+                providerId: provider.id,
+                error: cbError,
+              });
+            }
+
+            await persistRequestFailure({
+              session,
+              messageContext,
+              statusCode: 504,
               error: err,
               taskId,
               phase: "stream",
@@ -1687,5 +1821,51 @@ function formatProcessingError(error: unknown): string {
     return JSON.stringify(error);
   } catch {
     return String(error);
+  }
+}
+
+/**
+ * 检测 Anthropic SSE 是否包含终止事件（message_stop / [DONE]）
+ */
+function detectAnthropicTerminalChunk(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("message_stop") ||
+    lower.includes('"event":"message_stop"') ||
+    lower.includes('"type":"message_stop"') ||
+    lower.includes("[done]")
+  );
+}
+
+/**
+ * 截断 chunk 内容，避免日志过长
+ */
+function summarizeChunkForLog(chunk: string, maxLength = 200): string {
+  if (!chunk) return "(empty)";
+  const trimmed = chunk.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  const half = Math.floor(maxLength / 2);
+  return `${trimmed.slice(0, half)} ... ${trimmed.slice(-half)}`;
+}
+
+/**
+ * 向 SSE 客户端发送错误事件，便于上游/客户端识别失败并重试
+ */
+function emitClientStreamError(
+  controller: TransformStreamDefaultController<Uint8Array>,
+  code: string,
+  message: string,
+  status?: number
+) {
+  try {
+    const payload: Record<string, unknown> = { type: "error", error: { code, message } };
+    if (status) {
+      (payload.error as Record<string, unknown>).status = status;
+    }
+    const text = `event: error\ndata: ${JSON.stringify(payload)}\n\n`;
+    controller.enqueue(new TextEncoder().encode(text));
+  } catch {
+    // ignore enqueue errors
   }
 }
