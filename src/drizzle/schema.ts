@@ -160,7 +160,9 @@ export const providers = pgTable('providers', {
   // MCP 透传 URL：MCP 服务的基础 URL
   // 如果未配置，则自动从 provider.url 提取基础域名
   // 例如：https://api.minimaxi.com/anthropic -> https://api.minimaxi.com
-  mcpPassthroughUrl: varchar('mcp_passthrough_url', { length: 512 }),
+    mcpPassthroughUrl: varchar('mcp_passthrough_url', { length: 512 }),
+    useUnifiedClientId: boolean('use_unified_client_id').default(false),
+    unifiedClientId: varchar('unified_client_id', { length: 64 }),
 
   // 金额限流配置
   limit5hUsd: numeric('limit_5h_usd', { precision: 10, scale: 2 }),

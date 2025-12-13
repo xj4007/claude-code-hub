@@ -1086,6 +1086,13 @@
             "desc": "When enabled, this provider will participate in load balancing with Claude-type providers",
             "help": "Available only when there is a redirect mapping to claude-* models. When users request claude-* models, this provider also joins scheduling."
           },
+          "unifiedClientId": {
+              "label": "Unified client identifier",
+              "desc": "When enabled, all requests will use the same logical client identifier towards upstream (Claude / Claude-Auth providers only).",
+              "idLabel": "Unified client ID",
+              "regenerate": "Regenerate",
+              "help": "The ID is a 64-character hexadecimal string. It is recommended to keep the auto-generated value and avoid reusing it across different deployments."
+            },
           "preserveClientIp": {
             "label": "Forward client IP",
             "desc": "Pass x-forwarded-for / x-real-ip to upstream providers (may expose real client IP)",

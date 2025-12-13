@@ -27,6 +27,8 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     codexInstructionsStrategy: providerData.codex_instructions_strategy ?? "auto",
     mcpPassthroughType: providerData.mcp_passthrough_type ?? "none",
     mcpPassthroughUrl: providerData.mcp_passthrough_url ?? null,
+    useUnifiedClientId: providerData.use_unified_client_id ?? false,
+    unifiedClientId: providerData.unified_client_id ?? null,
     limit5hUsd: providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null,
     limitDailyUsd:
       providerData.limit_daily_usd != null ? providerData.limit_daily_usd.toString() : null,
@@ -74,6 +76,8 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     codexInstructionsStrategy: providers.codexInstructionsStrategy,
     mcpPassthroughType: providers.mcpPassthroughType,
     mcpPassthroughUrl: providers.mcpPassthroughUrl,
+    useUnifiedClientId: providers.useUnifiedClientId,
+    unifiedClientId: providers.unifiedClientId,
     limit5hUsd: providers.limit5hUsd,
     limitDailyUsd: providers.limitDailyUsd,
     dailyResetMode: providers.dailyResetMode,
@@ -128,6 +132,8 @@ export async function findProviderList(
       codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
+      useUnifiedClientId: providers.useUnifiedClientId,
+      unifiedClientId: providers.unifiedClientId,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -193,6 +199,8 @@ export async function findAllProviders(): Promise<Provider[]> {
       codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
+      useUnifiedClientId: providers.useUnifiedClientId,
+      unifiedClientId: providers.unifiedClientId,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -252,6 +260,8 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
+      useUnifiedClientId: providers.useUnifiedClientId,
+      unifiedClientId: providers.unifiedClientId,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -322,6 +332,10 @@ export async function updateProvider(
     dbData.mcpPassthroughType = providerData.mcp_passthrough_type;
   if (providerData.mcp_passthrough_url !== undefined)
     dbData.mcpPassthroughUrl = providerData.mcp_passthrough_url;
+  if (providerData.use_unified_client_id !== undefined)
+    dbData.useUnifiedClientId = providerData.use_unified_client_id;
+  if (providerData.unified_client_id !== undefined)
+    dbData.unifiedClientId = providerData.unified_client_id;
   if (providerData.limit_5h_usd !== undefined)
     dbData.limit5hUsd =
       providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null;

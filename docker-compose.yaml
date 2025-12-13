@@ -46,7 +46,11 @@ services:
       start_period: 5s
 
   app:
-    image: ghcr.io/ding113/claude-code-hub:latest
+    build:
+      context: .
+      dockerfile: ./deploy/Dockerfile
+    image: claude-code-hub:latest   # 随便一个你自己的 tag
+    # image: ghcr.io/ding113/claude-code-hub:latest
     container_name: claude-code-hub-app
     depends_on:
       postgres:

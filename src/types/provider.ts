@@ -60,6 +60,9 @@ export interface Provider {
   // 如果未配置，则自动从 provider.url 提取基础域名
   // 例如：https://api.minimaxi.com/anthropic -> https://api.minimaxi.com
   mcpPassthroughUrl: string | null;
+  // Unified client id configuration (only for claude / claude-auth)
+  useUnifiedClientId: boolean;
+  unifiedClientId: string | null;
 
   // 金额限流配置
   limit5hUsd: number | null;
@@ -134,6 +137,9 @@ export interface ProviderDisplay {
   mcpPassthroughType: McpPassthroughType;
   // MCP 透传 URL
   mcpPassthroughUrl: string | null;
+  // Unified client id configuration
+  useUnifiedClientId: boolean;
+  unifiedClientId: string | null;
   // 金额限流配置
   limit5hUsd: number | null;
   limitDailyUsd: number | null;
@@ -195,6 +201,8 @@ export interface CreateProviderData {
   codex_instructions_strategy?: CodexInstructionsStrategy;
   mcp_passthrough_type?: McpPassthroughType;
   mcp_passthrough_url?: string | null;
+  use_unified_client_id?: boolean;
+  unified_client_id?: string | null;
 
   // 金额限流配置
   limit_5h_usd?: number | null;
@@ -259,6 +267,8 @@ export interface UpdateProviderData {
   codex_instructions_strategy?: CodexInstructionsStrategy;
   mcp_passthrough_type?: McpPassthroughType;
   mcp_passthrough_url?: string | null;
+  use_unified_client_id?: boolean;
+  unified_client_id?: string | null;
 
   // 金额限流配置
   limit_5h_usd?: number | null;
