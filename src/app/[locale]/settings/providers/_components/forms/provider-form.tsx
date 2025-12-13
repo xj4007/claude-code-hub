@@ -133,6 +133,14 @@ export function ProviderForm({
     sourceProvider?.unifiedClientId ?? ""
   );
 
+  // Unified client id configuration
+  const [useUnifiedClientId, setUseUnifiedClientId] = useState<boolean>(
+    sourceProvider?.useUnifiedClientId ?? false
+  );
+  const [unifiedClientId, setUnifiedClientId] = useState<string>(
+    sourceProvider?.unifiedClientId ?? ""
+  );
+
   // 熔断器配置（以分钟为单位显示，提交时转换为毫秒）
   // 允许 undefined，用户可以清空输入框，提交时使用默认值
   const [failureThreshold, setFailureThreshold] = useState<number | undefined>(
