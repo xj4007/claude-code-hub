@@ -13,6 +13,22 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
   const session = await ProxySession.fromContext(c);
 
   try {
+    // 屏蔽内部后台/账单路由，避免误入代理链触发熔断与供应商切换
+    const BLOCKED_PREFIXES = ["/v1/dashboard", "/dashboard"];
+    if (BLOCKED_PREFIXES.some((p) => session.requestUrl.pathname.startsWith(p))) {
+      logger.info("[ProxyHandler] Blocked non-proxy endpoint", {
+        path: session.requestUrl.pathname,
+        method: session.method,
+      });
+      return new Response(
+        JSON.stringify({ error: "Not a proxied endpoint", path: session.requestUrl.pathname }),
+        {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }
+      );
+    }
+
     // 自动检测请求格式（端点优先，请求体补充）
     if (session.originalFormat === "claude") {
       // 第一步：尝试端点检测（优先级最高，最准确）
