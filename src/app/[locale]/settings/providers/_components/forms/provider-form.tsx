@@ -126,11 +126,18 @@ export function ProviderForm({
     sourceProvider?.cacheTtlPreference ?? "inherit"
   );
 
+  // Unified client id configuration
+  const [useUnifiedClientId, setUseUnifiedClientId] = useState<boolean>(
+    sourceProvider?.useUnifiedClientId ?? false
+  );
+  const [unifiedClientId, setUnifiedClientId] = useState<string>(
+    sourceProvider?.unifiedClientId ?? ""
+  );
+
   // 1M Context Window 偏好配置（仅对 Anthropic 类型供应商有效）
   const [context1mPreference, setContext1mPreference] = useState<
     "inherit" | "force_enable" | "disabled"
   >((sourceProvider?.context1mPreference as "inherit" | "force_enable" | "disabled") ?? "inherit");
-
   // 熔断器配置（以分钟为单位显示，提交时转换为毫秒）
   // 允许 undefined，用户可以清空输入框，提交时使用默认值
   const [failureThreshold, setFailureThreshold] = useState<number | undefined>(
@@ -271,6 +278,15 @@ export function ProviderForm({
     });
   };
 
+  // Generate 64-hex unified client id
+  const generateUnifiedClientId = () => {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return Array.from(array)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -329,6 +345,8 @@ export function ProviderForm({
             codex_instructions_strategy?: CodexInstructionsStrategy;
             mcp_passthrough_type?: McpPassthroughType;
             mcp_passthrough_url?: string | null;
+            use_unified_client_id?: boolean;
+            unified_client_id?: string | null;
             preserve_client_ip?: boolean;
             tpm?: number | null;
             rpm?: number | null;
@@ -378,6 +396,8 @@ export function ProviderForm({
             codex_instructions_strategy: codexInstructionsStrategy,
             mcp_passthrough_type: mcpPassthroughType,
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
+            use_unified_client_id: useUnifiedClientId,
+            unified_client_id: useUnifiedClientId ? (unifiedClientId || null) : null,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -440,6 +460,8 @@ export function ProviderForm({
             codex_instructions_strategy: codexInstructionsStrategy,
             mcp_passthrough_type: mcpPassthroughType,
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
+            use_unified_client_id: useUnifiedClientId,
+            unified_client_id: useUnifiedClientId ? (unifiedClientId || null) : null,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -462,6 +484,8 @@ export function ProviderForm({
           setModelRedirects({});
           setAllowedModels([]);
           setJoinClaudePool(false);
+          setUseUnifiedClientId(false);
+          setUnifiedClientId("");
           setPriority(0);
           setWeight(1);
           setCostMultiplier(1.0);
@@ -741,6 +765,61 @@ export function ProviderForm({
                 })()}
 
               {/* 模型白名单配置 */}
+              {(providerType === "claude" || providerType === "claude-auth") && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label
+                        htmlFor={
+                          isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"
+                        }
+                      >
+                        {t("sections.routing.unifiedClientId.label")}
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        {t("sections.routing.unifiedClientId.desc")}
+                      </p>
+                    </div>
+                    <Switch
+                      id={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
+                      checked={useUnifiedClientId}
+                      onCheckedChange={(checked) => {
+                        setUseUnifiedClientId(checked);
+                        if (checked && !unifiedClientId) {
+                          setUnifiedClientId(generateUnifiedClientId());
+                        }
+                      }}
+                      disabled={isPending}
+                    />
+                  </div>
+
+                  {useUnifiedClientId && (
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                          {t("sections.routing.unifiedClientId.idLabel")}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setUnifiedClientId(generateUnifiedClientId())}
+                          disabled={isPending}
+                        >
+                          {t("sections.routing.unifiedClientId.regenerate")}
+                        </Button>
+                      </div>
+                      <code className="block w-full select-all break-all rounded bg-gray-100 px-3 py-2 font-mono text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                        {unifiedClientId}
+                      </code>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {t("sections.routing.unifiedClientId.help")}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-1">
                 <div className="text-sm font-medium">
                   {t("sections.routing.modelWhitelist.title")}

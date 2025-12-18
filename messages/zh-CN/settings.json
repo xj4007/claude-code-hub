@@ -680,6 +680,13 @@
             "desc": "启用后，此供应商将与 Claude 类型供应商一起参与负载均衡调度",
             "help": "仅当模型重定向配置中存在映射到 claude-* 模型时可用。启用后，当用户请求 claude-* 模型时，此供应商也会参与调度选择。"
           },
+          "unifiedClientId": {
+              "label": "统一客户端标识",
+              "desc": "启用后，将使用统一的客户端标识向上游发送请求（仅 Claude / Claude-Auth 供应商生效）",
+              "idLabel": "统一客户端 ID",
+              "regenerate": "重新生成",
+              "help": "ID 为 64 位十六进制字符串，建议保持默认自动生成，不要在不同实例之间复用。"
+            },
           "preserveClientIp": {
             "label": "透传客户端 IP",
             "desc": "向上游转发 x-forwarded-for / x-real-ip，可能暴露真实来源 IP",

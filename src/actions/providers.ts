@@ -192,6 +192,8 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         codexInstructionsStrategy: provider.codexInstructionsStrategy,
         mcpPassthroughType: provider.mcpPassthroughType,
         mcpPassthroughUrl: provider.mcpPassthroughUrl,
+        useUnifiedClientId: provider.useUnifiedClientId,
+        unifiedClientId: provider.unifiedClientId,
         limit5hUsd: provider.limit5hUsd,
         limitDailyUsd: provider.limitDailyUsd,
         dailyResetMode: provider.dailyResetMode,
@@ -313,10 +315,12 @@ export async function addProvider(data: {
   streaming_idle_timeout_ms?: number;
   request_timeout_non_streaming_ms?: number;
   website_url?: string | null;
-  codex_instructions_strategy?: "auto" | "force_official" | "keep_original";
-  mcp_passthrough_type?: "none" | "minimax" | "glm" | "custom";
-  mcp_passthrough_url?: string | null;
-  tpm: number | null;
+    codex_instructions_strategy?: "auto" | "force_official" | "keep_original";
+    mcp_passthrough_type?: "none" | "minimax" | "glm" | "custom";
+    mcp_passthrough_url?: string | null;
+    use_unified_client_id?: boolean;
+    unified_client_id?: string | null;
+    tpm: number | null;
   rpm: number | null;
   rpd: number | null;
   cc: number | null;
@@ -469,10 +473,12 @@ export async function editProvider(
     streaming_idle_timeout_ms?: number;
     request_timeout_non_streaming_ms?: number;
     website_url?: string | null;
-    codex_instructions_strategy?: "auto" | "force_official" | "keep_original";
-    mcp_passthrough_type?: "none" | "minimax" | "glm" | "custom";
-    mcp_passthrough_url?: string | null;
-    tpm?: number | null;
+      codex_instructions_strategy?: "auto" | "force_official" | "keep_original";
+      mcp_passthrough_type?: "none" | "minimax" | "glm" | "custom";
+      mcp_passthrough_url?: string | null;
+      use_unified_client_id?: boolean;
+      unified_client_id?: string | null;
+      tpm?: number | null;
     rpm?: number | null;
     rpd?: number | null;
     cc?: number | null;

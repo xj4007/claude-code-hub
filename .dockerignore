@@ -4,7 +4,7 @@
 
 # Node modules and build artifacts
 node_modules
-.next
+# .next   # 需要把 .next 打进镜像，所以不要忽略
 out
 coverage
 dist

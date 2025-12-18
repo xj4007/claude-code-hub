@@ -356,6 +356,13 @@ export const CreateProviderSchema = z.object({
     .nullable()
     .optional(),
   // 金额限流配置
+  use_unified_client_id: z.boolean().optional().default(false),
+  unified_client_id: z
+    .string()
+    .length(64)
+    .regex(/^[0-9a-f]+$/i)
+    .nullable()
+    .optional(),
   limit_5h_usd: z.coerce
     .number()
     .min(0, "5小时消费上限不能为负数")
@@ -548,6 +555,13 @@ export const UpdateProviderSchema = z
       .nullable()
       .optional(),
     // 金额限流配置
+    use_unified_client_id: z.boolean().optional(),
+    unified_client_id: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]+$/i)
+      .nullable()
+      .optional(),
     limit_5h_usd: z.coerce
       .number()
       .min(0, "5小时消费上限不能为负数")
