@@ -50,6 +50,20 @@ Use code <code>WITHCCH</code> for <b>15% off</b> → <a href="https://privnode.c
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="200">
+<a href="https://www.packyapi.com/register?aff=withcch">
+<img src="public/readme/packycode.png" alt="PackyCode Logo" width="180"/>
+</a>
+</td>
+<td>
+<b>💎 Special Offer</b>: Thanks to <a href="https://www.packyapi.com/register?aff=withcch">PackyCode</a> for sponsoring this project! PackyCode is a stable and efficient API relay service provider, offering relay services for Claude Code, Codex, Gemini and more.<br/>
+PackyCode offers a special discount for users of this software. Register via this link and enter code <code>WITHCCH</code> when recharging to enjoy <b>10% off</b> → <a href="https://www.packyapi.com/register?aff=withcch">Visit Now</a>
+</td>
+</tr>
+</table>
+
 ## ✨ Core Highlights
 
 - 🤖 **Intelligent load balancing**: Weight + priority + grouping scheduler with built-in circuit breaker and up to three failover retries to keep requests stable.
@@ -260,6 +274,7 @@ Docker Compose is the **preferred deployment method** — it automatically provi
 | `DSN`                                      | -                        | PostgreSQL connection string, e.g., `postgres://user:pass@host:5432/db`.                             |
 | `AUTO_MIGRATE`                             | `true`                   | Executes Drizzle migrations on startup; consider disabling in production for manual control.         |
 | `REDIS_URL`                                | `redis://localhost:6379` | Redis endpoint, supports `rediss://` for TLS providers.                                              |
+| `REDIS_TLS_REJECT_UNAUTHORIZED`            | `true`                   | Validate Redis TLS certificates; set `false` to skip (for self-signed/shared certs).                 |
 | `ENABLE_RATE_LIMIT`                        | `true`                   | Toggles multi-dimensional rate limiting; Fail-Open handles Redis outages gracefully.                 |
 | `SESSION_TTL`                              | `300`                    | Session cache window (seconds) that drives vendor reuse.                                             |
 | `ENABLE_SECURE_COOKIES`                    | `true`                   | Browsers require HTTPS for Secure cookies; set to `false` when serving plain HTTP outside localhost. |
