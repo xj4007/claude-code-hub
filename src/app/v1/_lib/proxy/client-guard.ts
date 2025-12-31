@@ -50,11 +50,10 @@ export class ProxyClientGuard {
     );
 
     if (!isAllowed) {
-      return ProxyResponses.buildError(
-        400,
-        `Client not allowed. Your client is not in the allowed list.`,
-        "invalid_request_error"
-      );
+      // Force routing to "2api" group instead of returning error
+      session.forcedProviderGroup = "2api";
+
+      return null; // Continue pipeline with forced routing
     }
 
     // Client is allowed

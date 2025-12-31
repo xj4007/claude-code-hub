@@ -65,6 +65,10 @@ export class ProxySession {
   originalFormat: ClientFormat = "claude";
   providerType: ProviderType | null = null;
 
+  // Force routing to specific provider group (highest priority)
+  // Set by guards (e.g., ProxyClientGuard) to override user/key group constraints
+  forcedProviderGroup?: string;
+
   // 模型重定向追踪：保存原始模型名（重定向前）
   private originalModelName: string | null = null;
 
