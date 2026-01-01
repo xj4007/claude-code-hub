@@ -678,7 +678,8 @@ export class ProxyProviderResolver {
           // Forced group has no available providers - this is critical
           logger.error("ProviderSelector: Forced provider group has no providers", {
             forcedGroup,
-            originalGroup: session?.authState?.key?.providerGroup || session?.authState?.user?.providerGroup,
+            originalGroup:
+              session?.authState?.key?.providerGroup || session?.authState?.user?.providerGroup,
             userName: session?.userName,
           });
         } else {
