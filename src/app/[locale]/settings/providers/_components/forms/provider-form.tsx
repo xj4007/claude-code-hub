@@ -397,7 +397,7 @@ export function ProviderForm({
             mcp_passthrough_type: mcpPassthroughType,
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
             use_unified_client_id: useUnifiedClientId,
-            unified_client_id: useUnifiedClientId ? (unifiedClientId || null) : null,
+            unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -461,7 +461,7 @@ export function ProviderForm({
             mcp_passthrough_type: mcpPassthroughType,
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
             use_unified_client_id: useUnifiedClientId,
-            unified_client_id: useUnifiedClientId ? (unifiedClientId || null) : null,
+            unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -770,9 +770,7 @@ export function ProviderForm({
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
                       <Label
-                        htmlFor={
-                          isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"
-                        }
+                        htmlFor={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
                       >
                         {t("sections.routing.unifiedClientId.label")}
                       </Label>

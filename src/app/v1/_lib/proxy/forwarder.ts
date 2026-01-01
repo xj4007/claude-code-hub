@@ -1230,13 +1230,13 @@ export class ProxyForwarder {
         usedBaseUrl: effectiveBaseUrl,
       });
 
-        const hasBody = session.method !== "GET" && session.method !== "HEAD";
+      const hasBody = session.method !== "GET" && session.method !== "HEAD";
 
-        if (hasBody) {
-          const filteredMessage = filterPrivateParameters(session.request.message);
-          const finalMessage = applyUnifiedClientIdForProvider(filteredMessage, provider);
-          const bodyString = JSON.stringify(finalMessage);
-          requestBody = bodyString;
+      if (hasBody) {
+        const filteredMessage = filterPrivateParameters(session.request.message);
+        const finalMessage = applyUnifiedClientIdForProvider(filteredMessage, provider);
+        const bodyString = JSON.stringify(finalMessage);
+        requestBody = bodyString;
 
         try {
           const parsed = JSON.parse(bodyString);
