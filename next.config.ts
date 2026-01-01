@@ -13,6 +13,7 @@ const nextConfig: NextConfig = {
   // 排除服务端专用包（避免打包到客户端）
   // bull 和相关依赖只在服务端使用，包含 Node.js 原生模块
   // postgres 和 drizzle-orm 包含 Node.js 原生模块（net, tls, crypto, stream, perf_hooks）
+  // pino 和相关依赖包含测试文件，会导致构建错误
   serverExternalPackages: [
     "bull",
     "bullmq",
@@ -21,6 +22,9 @@ const nextConfig: NextConfig = {
     "ioredis",
     "postgres",
     "drizzle-orm",
+    "pino",
+    "pino-pretty",
+    "thread-stream",
   ],
 
   // 强制包含 undici 到 standalone 输出
