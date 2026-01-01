@@ -18,13 +18,13 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
 
     // 屏蔽内部后台/账单路由,避免误入代理链触发熔断与供应商切换
     const BLOCKED_PREFIXES = ["/v1/dashboard", "/dashboard"];
-    if (BLOCKED_PREFIXES.some((p) => session.requestUrl.pathname.startsWith(p))) {
+    if (BLOCKED_PREFIXES.some((p) => session!.requestUrl.pathname.startsWith(p))) {
       logger.info("[ProxyHandler] Blocked non-proxy endpoint", {
-        path: session.requestUrl.pathname,
-        method: session.method,
+        path: session!.requestUrl.pathname,
+        method: session!.method,
       });
       return new Response(
-        JSON.stringify({ error: "Not a proxied endpoint", path: session.requestUrl.pathname }),
+        JSON.stringify({ error: "Not a proxied endpoint", path: session!.requestUrl.pathname }),
         {
           status: 404,
           headers: { "content-type": "application/json" },
@@ -33,66 +33,66 @@ export async function handleProxyRequest(c: Context): Promise<Response> {
     }
 
     // 自动检测请求格式(端点优先,请求体补充)
-    if (session.originalFormat === "claude") {
+    if (session!.originalFormat === "claude") {
       // 第一步:尝试端点检测(优先级最高,最准确)
-      const endpointFormat = detectFormatByEndpoint(session.requestUrl.pathname);
+      const endpointFormat = detectFormatByEndpoint(session!.requestUrl.pathname);
 
       if (endpointFormat) {
-        session.setOriginalFormat(endpointFormat);
+        session!.setOriginalFormat(endpointFormat);
         logger.debug("[ProxyHandler] Detected format by endpoint", {
-          endpoint: session.requestUrl.pathname,
+          endpoint: session!.requestUrl.pathname,
           format: endpointFormat,
         });
       } else {
         // 第二步:降级到请求体检测(作为 fallback)
         const detectedFormat = detectClientFormat(
-          session.request.message as Record<string, unknown>
+          session!.request.message as Record<string, unknown>
         );
-        session.setOriginalFormat(detectedFormat);
+        session!.setOriginalFormat(detectedFormat);
 
         if (detectedFormat !== "claude") {
           logger.debug("[ProxyHandler] Detected format by request body (endpoint unknown)", {
             format: detectedFormat,
-            endpoint: session.requestUrl.pathname,
+            endpoint: session!.requestUrl.pathname,
             hasContents: Array.isArray(
-              (session.request.message as Record<string, unknown>).contents
+              (session!.request.message as Record<string, unknown>).contents
             ),
             hasRequest:
-              typeof (session.request.message as Record<string, unknown>).request === "object",
+              typeof (session!.request.message as Record<string, unknown>).request === "object",
           });
         }
       }
     }
 
     // Decide request type and build configured guard pipeline
-    const type = session.isCountTokensRequest() ? RequestType.COUNT_TOKENS : RequestType.CHAT;
+    const type = session!.isCountTokensRequest() ? RequestType.COUNT_TOKENS : RequestType.CHAT;
     const pipeline = GuardPipelineBuilder.fromRequestType(type);
 
     // Run guard chain; may return early Response
-    const early = await pipeline.run(session);
+    const early = await pipeline.run(session!);
     if (early) return early;
 
     // 9. 增加并发计数(在所有检查通过后,请求开始前) - 跳过 count_tokens
-    if (session.sessionId && !session.isCountTokensRequest()) {
-      await SessionTracker.incrementConcurrentCount(session.sessionId);
+    if (session!.sessionId && !session!.isCountTokensRequest()) {
+      await SessionTracker.incrementConcurrentCount(session!.sessionId);
     }
 
     // 10. 记录请求开始
-    if (session.messageContext && session.provider) {
+    if (session!.messageContext && session!.provider) {
       const tracker = ProxyStatusTracker.getInstance();
       tracker.startRequest({
-        userId: session.messageContext.user.id,
-        userName: session.messageContext.user.name,
-        requestId: session.messageContext.id,
-        keyName: session.messageContext.key.name,
-        providerId: session.provider.id,
-        providerName: session.provider.name,
-        model: session.request.model || "unknown",
+        userId: session!.messageContext.user.id,
+        userName: session!.messageContext.user.name,
+        requestId: session!.messageContext.id,
+        keyName: session!.messageContext.key.name,
+        providerId: session!.provider.id,
+        providerName: session!.provider.name,
+        model: session!.request.model || "unknown",
       });
     }
 
-    const response = await ProxyForwarder.send(session);
-    return await ProxyResponseHandler.dispatch(session, response);
+    const response = await ProxyForwarder.send(session!);
+    return await ProxyResponseHandler.dispatch(session!, response);
   } catch (error) {
     logger.error("Proxy handler error:", error);
     if (session) {
