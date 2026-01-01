@@ -12,6 +12,7 @@ import { USER_DEFAULTS } from "@/lib/constants/user.constants";
 import { logger } from "@/lib/logger";
 import { getUnauthorizedFields } from "@/lib/permissions/user-field-permissions";
 import { ERROR_CODES } from "@/lib/utils/error-messages";
+import { normalizeProviderGroup } from "@/lib/utils/provider-group";
 import { maskKey } from "@/lib/utils/validation";
 import { formatZodError } from "@/lib/utils/zod-i18n";
 import { CreateUserSchema, UpdateUserSchema } from "@/lib/validation/schemas";
@@ -28,22 +29,36 @@ import {
   findUserById,
   findUserList,
   findUserListBatch,
+  getAllUserProviderGroups as getAllUserProviderGroupsRepository,
+  getAllUserTags as getAllUserTagsRepository,
+  searchUsersForFilter as searchUsersForFilterRepository,
   updateUser,
 } from "@/repository/user";
 import type { User, UserDisplay } from "@/types/user";
 import type { ActionResult } from "./types";
 
 export interface GetUsersBatchParams {
-  cursor?: { id: number; createdAt: string };
+  cursor?: number;
   limit?: number;
   searchTerm?: string;
-  tagFilter?: string;
-  keyGroupFilter?: string;
+  tagFilters?: string[];
+  keyGroupFilters?: string[];
+  statusFilter?: "all" | "active" | "expired" | "expiringSoon" | "enabled" | "disabled";
+  sortBy?:
+    | "name"
+    | "tags"
+    | "expiresAt"
+    | "limit5hUsd"
+    | "limitDailyUsd"
+    | "limitWeeklyUsd"
+    | "limitMonthlyUsd"
+    | "createdAt";
+  sortOrder?: "asc" | "desc";
 }
 
 export interface GetUsersBatchResult {
   users: UserDisplay[];
-  nextCursor: { id: number; createdAt: string } | null;
+  nextCursor: number | null;
   hasMore: boolean;
 }
 
@@ -128,28 +143,23 @@ export async function syncUserProviderGroupFromKeys(userId: number): Promise<voi
   // and should fail explicitly if provider group sync fails to maintain data consistency.
   const keys = await findKeyList(userId);
   const allGroups = new Set<string>();
-  let hasEmptyGroup = false;
 
   for (const key of keys) {
-    if (key.providerGroup) {
-      const groups = key.providerGroup
-        .split(",")
-        .map((g) => g.trim())
-        .filter(Boolean);
-      groups.forEach((g) => allGroups.add(g));
-    } else {
-      hasEmptyGroup = true;
-    }
+    // NOTE(#400): Key.providerGroup is now required (no more null semantics).
+    // For backward compatibility, treat null/empty as "default".
+    const group = key.providerGroup || PROVIDER_GROUP.DEFAULT;
+    group
+      .split(",")
+      .map((g) => g.trim())
+      .filter(Boolean)
+      .forEach((g) => allGroups.add(g));
   }
 
-  if (hasEmptyGroup) {
-    allGroups.add(PROVIDER_GROUP.DEFAULT);
-  }
-
-  const newProviderGroup = allGroups.size > 0 ? Array.from(allGroups).sort().join(",") : null;
+  const newProviderGroup =
+    allGroups.size > 0 ? Array.from(allGroups).sort().join(",") : PROVIDER_GROUP.DEFAULT;
   await updateUser(userId, { providerGroup: newProviderGroup });
   logger.info(
-    `[UserAction] Synced user provider group: userId=${userId}, groups=${newProviderGroup || "null"}`
+    `[UserAction] Synced user provider group: userId=${userId}, groups=${newProviderGroup}`
   );
 }
 
@@ -299,6 +309,111 @@ export async function getUsers(): Promise<UserDisplay[]> {
   }
 }
 
+export async function searchUsersForFilter(
+  searchTerm?: string
+): Promise<ActionResult<Array<{ id: number; name: string }>>> {
+  try {
+    const tError = await getTranslations("errors");
+
+    const session = await getSession();
+    if (!session) {
+      return {
+        ok: false,
+        error: tError("UNAUTHORIZED"),
+        errorCode: ERROR_CODES.UNAUTHORIZED,
+      };
+    }
+
+    if (session.user.role !== "admin") {
+      return {
+        ok: false,
+        error: tError("PERMISSION_DENIED"),
+        errorCode: ERROR_CODES.PERMISSION_DENIED,
+      };
+    }
+
+    const users = await searchUsersForFilterRepository(searchTerm);
+    return { ok: true, data: users };
+  } catch (error) {
+    logger.error("Failed to search users for filter:", error);
+    const message = error instanceof Error ? error.message : "Failed to search users for filter";
+    return { ok: false, error: message, errorCode: ERROR_CODES.DATABASE_ERROR };
+  }
+}
+
+/**
+ * 获取所有用户标签（用于标签筛选下拉框）
+ * 返回所有用户的标签，不受当前筛选条件影响
+ *
+ * 注意：仅管理员可用。
+ */
+export async function getAllUserTags(): Promise<ActionResult<string[]>> {
+  try {
+    const tError = await getTranslations("errors");
+
+    const session = await getSession();
+    if (!session) {
+      return {
+        ok: false,
+        error: tError("UNAUTHORIZED"),
+        errorCode: ERROR_CODES.UNAUTHORIZED,
+      };
+    }
+
+    if (session.user.role !== "admin") {
+      return {
+        ok: false,
+        error: tError("PERMISSION_DENIED"),
+        errorCode: ERROR_CODES.PERMISSION_DENIED,
+      };
+    }
+
+    const tags = await getAllUserTagsRepository();
+    return { ok: true, data: tags };
+  } catch (error) {
+    logger.error("Failed to get all user tags:", error);
+    const message = error instanceof Error ? error.message : "Failed to get all user tags";
+    return { ok: false, error: message, errorCode: ERROR_CODES.DATABASE_ERROR };
+  }
+}
+
+/**
+ * 获取所有用户密钥分组（用于密钥分组筛选下拉框）
+ * 返回所有用户的分组，不受当前筛选条件影响
+ *
+ * 注意：仅管理员可用。
+ */
+export async function getAllUserKeyGroups(): Promise<ActionResult<string[]>> {
+  try {
+    const tError = await getTranslations("errors");
+
+    const session = await getSession();
+    if (!session) {
+      return {
+        ok: false,
+        error: tError("UNAUTHORIZED"),
+        errorCode: ERROR_CODES.UNAUTHORIZED,
+      };
+    }
+
+    if (session.user.role !== "admin") {
+      return {
+        ok: false,
+        error: tError("PERMISSION_DENIED"),
+        errorCode: ERROR_CODES.PERMISSION_DENIED,
+      };
+    }
+
+    const groups = await getAllUserProviderGroupsRepository();
+    return { ok: true, data: groups };
+  } catch (error) {
+    logger.error("Failed to get all user provider groups:", error);
+    const message =
+      error instanceof Error ? error.message : "Failed to get all user provider groups";
+    return { ok: false, error: message, errorCode: ERROR_CODES.DATABASE_ERROR };
+  }
+}
+
 /**
  * 游标分页获取用户列表（用于无限滚动）
  *
@@ -333,8 +448,11 @@ export async function getUsersBatch(
       cursor: params.cursor,
       limit: params.limit,
       searchTerm: params.searchTerm,
-      tagFilter: params.tagFilter,
-      keyGroupFilter: params.keyGroupFilter,
+      tagFilters: params.tagFilters,
+      keyGroupFilters: params.keyGroupFilters,
+      statusFilter: params.statusFilter,
+      sortBy: params.sortBy,
+      sortOrder: params.sortOrder,
     });
 
     if (users.length === 0) {
@@ -700,11 +818,12 @@ export async function addUser(data: {
     }
 
     const validatedData = validationResult.data;
+    const providerGroup = normalizeProviderGroup(validatedData.providerGroup);
 
     const newUser = await createUser({
       name: validatedData.name,
       description: validatedData.note || "",
-      providerGroup: validatedData.providerGroup || null,
+      providerGroup,
       tags: validatedData.tags,
       rpm: validatedData.rpm,
       dailyQuota: validatedData.dailyQuota ?? undefined,
@@ -729,6 +848,7 @@ export async function addUser(data: {
       key: generatedKey,
       is_enabled: true,
       expires_at: undefined,
+      provider_group: providerGroup,
     });
 
     revalidatePath("/dashboard");
@@ -882,11 +1002,12 @@ export async function createUserOnly(data: {
     }
 
     const validatedData = validationResult.data;
+    const providerGroup = normalizeProviderGroup(validatedData.providerGroup);
 
     const newUser = await createUser({
       name: validatedData.name,
       description: validatedData.note || "",
-      providerGroup: validatedData.providerGroup || null,
+      providerGroup,
       tags: validatedData.tags,
       rpm: validatedData.rpm,
       dailyQuota: validatedData.dailyQuota ?? undefined,
@@ -1035,11 +1156,16 @@ export async function editUser(
       };
     }
 
+    const nextProviderGroup =
+      validatedData.providerGroup === undefined
+        ? undefined
+        : normalizeProviderGroup(validatedData.providerGroup);
+
     // Update user with validated data
     await updateUser(userId, {
       name: validatedData.name,
       description: validatedData.note,
-      providerGroup: validatedData.providerGroup,
+      ...(nextProviderGroup !== undefined ? { providerGroup: nextProviderGroup } : {}),
       tags: validatedData.tags,
       rpm: validatedData.rpm,
       dailyQuota: validatedData.dailyQuota,
@@ -1274,6 +1400,7 @@ export async function toggleUserEnabled(userId: number, enabled: boolean): Promi
 
     await updateUser(userId, { isEnabled: enabled });
 
+    revalidatePath("/dashboard/users");
     revalidatePath("/dashboard");
     return { ok: true };
   } catch (error) {

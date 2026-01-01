@@ -234,6 +234,7 @@ export class ProxyResponseHandler {
           await updateMessageRequestDuration(messageContext.id, duration);
           await updateMessageRequestDetails(messageContext.id, {
             statusCode: statusCode,
+            ttfbMs: session.ttfbMs ?? duration,
             providerChain: session.getProviderChain(),
             model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
             providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
@@ -342,7 +343,7 @@ export class ProxyResponseHandler {
           // 计算成本（复用相同逻辑）
           let costUsdStr: string | undefined;
           if (session.request.model) {
-            const priceData = await session.getCachedPriceData();
+            const priceData = await session.getCachedPriceDataByBillingSource();
             if (priceData) {
               const cost = calculateRequestCost(
                 usageMetrics,
@@ -378,6 +379,7 @@ export class ProxyResponseHandler {
             statusCode: statusCode,
             inputTokens: usageMetrics?.input_tokens,
             outputTokens: usageMetrics?.output_tokens,
+            ttfbMs: session.ttfbMs ?? duration,
             cacheCreationInputTokens: usageMetrics?.cache_creation_input_tokens,
             cacheReadInputTokens: usageMetrics?.cache_read_input_tokens,
             cacheCreation5mInputTokens: usageMetrics?.cache_creation_5m_input_tokens,
@@ -572,6 +574,8 @@ export class ProxyResponseHandler {
         };
         if (sessionWithCleanup.clearResponseTimeout) {
           sessionWithCleanup.clearResponseTimeout();
+          // ⭐ 同步记录 TTFB，与首字节超时口径一致
+          session.recordTtfb();
           logger.debug(
             "[ResponseHandler] Gemini passthrough: First byte timeout cleared on response received",
             {
@@ -592,6 +596,7 @@ export class ProxyResponseHandler {
 
             const chunks: string[] = [];
             const decoder = new TextDecoder();
+            let isFirstChunk = true;
 
             while (true) {
               if (session.clientAbortSignal?.aborted) break;
@@ -599,6 +604,10 @@ export class ProxyResponseHandler {
               const { done, value } = await reader.read();
               if (done) break;
               if (value) {
+                if (isFirstChunk) {
+                  isFirstChunk = false;
+                  session.recordTtfb();
+                }
                 chunks.push(decoder.decode(value, { stream: true }));
               }
             }
@@ -941,7 +950,7 @@ export class ProxyResponseHandler {
         if (session.sessionId && usageForCost) {
           let costUsdStr: string | undefined;
           if (session.request.model) {
-            const priceData = await session.getCachedPriceData();
+            const priceData = await session.getCachedPriceDataByBillingSource();
             if (priceData) {
               const cost = calculateRequestCost(
                 usageForCost,
@@ -973,6 +982,7 @@ export class ProxyResponseHandler {
           statusCode: statusCode,
           inputTokens: usageForCost?.input_tokens,
           outputTokens: usageForCost?.output_tokens,
+          ttfbMs: session.ttfbMs,
           cacheCreationInputTokens: usageForCost?.cache_creation_input_tokens,
           cacheReadInputTokens: usageForCost?.cache_read_input_tokens,
           cacheCreation5mInputTokens: usageForCost?.cache_creation_5m_input_tokens,
@@ -1022,6 +1032,7 @@ export class ProxyResponseHandler {
 
             // ⭐ 流式：读到第一块数据后立即清除响应超时定时器
             if (isFirstChunk) {
+              session.recordTtfb();
               isFirstChunk = false;
               startTotalTimer();
               const sessionWithCleanup = session as typeof session & {
@@ -1414,8 +1425,28 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     }
   }
 
+  // 兼容顶层扁平格式：cache_creation_5m_input_tokens / cache_creation_1h_input_tokens
+  // 部分供应商/relay 直接在顶层返回细分字段，而非嵌套在 cache_creation 对象中
+  // 优先级：嵌套格式 > 顶层扁平格式 > 旧 relay 格式
+  if (
+    result.cache_creation_5m_input_tokens === undefined &&
+    typeof usage.cache_creation_5m_input_tokens === "number"
+  ) {
+    result.cache_creation_5m_input_tokens = usage.cache_creation_5m_input_tokens;
+    cacheCreationDetailedTotal += usage.cache_creation_5m_input_tokens;
+    hasAny = true;
+  }
+  if (
+    result.cache_creation_1h_input_tokens === undefined &&
+    typeof usage.cache_creation_1h_input_tokens === "number"
+  ) {
+    result.cache_creation_1h_input_tokens = usage.cache_creation_1h_input_tokens;
+    cacheCreationDetailedTotal += usage.cache_creation_1h_input_tokens;
+    hasAny = true;
+  }
+
   // 兼容部分 relay / 旧字段命名：claude_cache_creation_5_m_tokens / claude_cache_creation_1_h_tokens
-  // 仅在标准字段缺失时使用，避免重复统计
+  // 仅在标准字段缺失时使用，避免重复统计（优先级最低）
   if (
     result.cache_creation_5m_input_tokens === undefined &&
     typeof usage.claude_cache_creation_5_m_tokens === "number"
@@ -1848,6 +1879,7 @@ async function finalizeRequestStats(
     // 即使没有 usageMetrics，也需要更新状态码和 provider chain
     await updateMessageRequestDetails(messageContext.id, {
       statusCode: statusCode,
+      ttfbMs: session.ttfbMs ?? duration,
       providerChain: session.getProviderChain(),
       model: session.getCurrentModel() ?? undefined,
       providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
@@ -1891,7 +1923,7 @@ async function finalizeRequestStats(
   if (session.sessionId) {
     let costUsdStr: string | undefined;
     if (session.request.model) {
-      const priceData = await session.getCachedPriceData();
+      const priceData = await session.getCachedPriceDataByBillingSource();
       if (priceData) {
         const cost = calculateRequestCost(
           normalizedUsage,
@@ -1923,6 +1955,7 @@ async function finalizeRequestStats(
     statusCode: statusCode,
     inputTokens: normalizedUsage.input_tokens,
     outputTokens: normalizedUsage.output_tokens,
+    ttfbMs: session.ttfbMs ?? duration,
     cacheCreationInputTokens: normalizedUsage.cache_creation_input_tokens,
     cacheReadInputTokens: normalizedUsage.cache_read_input_tokens,
     cacheCreation5mInputTokens: normalizedUsage.cache_creation_5m_input_tokens,
@@ -1952,7 +1985,7 @@ async function trackCostToRedis(session: ProxySession, usage: UsageMetrics | nul
   if (!modelName) return;
 
   // 计算成本（应用倍率）- 使用 session 缓存避免重复查询
-  const priceData = await session.getCachedPriceData();
+  const priceData = await session.getCachedPriceDataByBillingSource();
   if (!priceData) return;
 
   const cost = calculateRequestCost(
@@ -2061,6 +2094,7 @@ async function persistRequestFailure(options: {
       errorMessage,
       errorStack,
       errorCause,
+      ttfbMs: phase === "non-stream" ? (session.ttfbMs ?? duration) : session.ttfbMs,
       providerChain: session.getProviderChain(),
       model: session.getCurrentModel() ?? undefined,
       providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）

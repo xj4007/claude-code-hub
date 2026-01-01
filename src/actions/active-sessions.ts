@@ -8,6 +8,7 @@ import {
   setSessionDetailsCache,
 } from "@/lib/cache/session-cache";
 import { logger } from "@/lib/logger";
+import { normalizeRequestSequence } from "@/lib/utils/request-sequence";
 import type { ActiveSessionInfo } from "@/types/session";
 import { summarizeTerminateSessionsBatch } from "./active-sessions-utils";
 import type { ActionResult } from "./types";
@@ -512,10 +513,14 @@ export async function getSessionDetails(
   ActionResult<{
     messages: unknown | null;
     response: string | null;
+    requestHeaders: Record<string, string> | null;
+    responseHeaders: Record<string, string> | null;
     sessionStats: Awaited<
       ReturnType<typeof import("@/repository/message").aggregateSessionStats>
     > | null;
     currentSequence: number | null;
+    prevSequence: number | null;
+    nextSequence: number | null;
   }>
 > {
   try {
@@ -572,21 +577,54 @@ export async function getSessionDetails(
       };
     }
 
-    // 5. 并行获取 messages 和 response（不缓存，因为这些数据较大）
+    // 5. 解析 requestSequence：未指定时默认取当前最新请求序号
     const { SessionManager } = await import("@/lib/session-manager");
-    const [messages, response, requestCount] = await Promise.all([
-      SessionManager.getSessionMessages(sessionId, requestSequence),
-      SessionManager.getSessionResponse(sessionId, requestSequence),
-      SessionManager.getSessionRequestCount(sessionId),
+    const requestCount = await SessionManager.getSessionRequestCount(sessionId);
+    const normalizedSequence = normalizeRequestSequence(requestSequence);
+    const effectiveSequence = normalizedSequence ?? (requestCount > 0 ? requestCount : undefined);
+
+    const { findAdjacentRequestSequences } = await import("@/repository/message");
+    const adjacent =
+      effectiveSequence == null
+        ? { prevSequence: null, nextSequence: null }
+        : await findAdjacentRequestSequences(sessionId, effectiveSequence);
+
+    const parseJsonStringOrNull = (value: unknown): unknown => {
+      if (typeof value !== "string") return value;
+      try {
+        return JSON.parse(value) as unknown;
+      } catch (error) {
+        logger.warn("getSessionDetails: failed to parse session messages JSON string", {
+          sessionId,
+          requestSequence: effectiveSequence ?? null,
+          error,
+        });
+        return null;
+      }
+    };
+
+    // 6. 并行获取 messages 和 response（不缓存，因为这些数据较大）
+    const [messages, response, requestHeaders, responseHeaders] = await Promise.all([
+      SessionManager.getSessionMessages(sessionId, effectiveSequence),
+      SessionManager.getSessionResponse(sessionId, effectiveSequence),
+      SessionManager.getSessionRequestHeaders(sessionId, effectiveSequence),
+      SessionManager.getSessionResponseHeaders(sessionId, effectiveSequence),
     ]);
+
+    // 兼容：历史/异常数据可能是 JSON 字符串（前端需要根级对象/数组）
+    const normalizedMessages = parseJsonStringOrNull(messages);
 
     return {
       ok: true,
       data: {
-        messages,
+        messages: normalizedMessages,
         response,
+        requestHeaders,
+        responseHeaders,
         sessionStats,
-        currentSequence: requestSequence ?? (requestCount > 0 ? requestCount : null),
+        currentSequence: effectiveSequence ?? null,
+        prevSequence: adjacent.prevSequence,
+        nextSequence: adjacent.nextSequence,
       },
     };
   } catch (error) {

@@ -25,7 +25,7 @@ export const users = pgTable('users', {
   role: varchar('role').default('user'),
   rpmLimit: integer('rpm_limit').default(60),
   dailyLimitUsd: numeric('daily_limit_usd', { precision: 10, scale: 2 }).default('100.00'),
-  providerGroup: varchar('provider_group', { length: 50 }),
+  providerGroup: varchar('provider_group', { length: 50 }).default('default'),
   // 用户标签（用于分类和筛选）
   tags: jsonb('tags').$type<string[]>().default([]),
 
@@ -97,8 +97,8 @@ export const keys = pgTable('keys', {
   limitTotalUsd: numeric('limit_total_usd', { precision: 10, scale: 2 }),
   limitConcurrentSessions: integer('limit_concurrent_sessions').default(0),
 
-  // Provider group override (null = inherit from user)
-  providerGroup: varchar('provider_group', { length: 50 }),
+  // Provider group for this key (explicit; defaults to "default")
+  providerGroup: varchar('provider_group', { length: 50 }).default('default'),
 
   // Cache TTL override：null/NULL 表示遵循供应商或客户端请求
   cacheTtlPreference: varchar('cache_ttl_preference', { length: 10 }),
@@ -154,11 +154,8 @@ export const providers = pgTable('providers', {
   // 启用后，如果该提供商配置了重定向到 claude-* 模型，可以加入 claude 调度池
   joinClaudePool: boolean('join_claude_pool').default(false),
 
-  // Codex Instructions 策略：控制如何处理 Codex 请求的 instructions 字段
-  // - 'auto' (默认): 透传客户端 instructions，400 错误时自动重试（使用官方 instructions）
-  // - 'force_official': 始终强制使用官方 Codex CLI instructions（约 4000+ 字完整 prompt）
-  // - 'keep_original': 始终透传客户端 instructions，不自动重试（适用于宽松的中转站）
-  // 仅对 providerType = 'codex' 的供应商有效
+  // Codex instructions 策略（已废弃）：历史字段保留以兼容旧数据
+  // 当前运行时对 Codex 请求的 instructions 一律透传，不再读取/生效此配置
   codexInstructionsStrategy: varchar('codex_instructions_strategy', { length: 20 })
     .default('auto')
     .$type<'auto' | 'force_official' | 'keep_original'>(),
@@ -290,6 +287,7 @@ export const messageRequest = pgTable('message_request', {
   // Token 使用信息
   inputTokens: integer('input_tokens'),
   outputTokens: integer('output_tokens'),
+  ttfbMs: integer('ttfb_ms'),
   cacheCreationInputTokens: integer('cache_creation_input_tokens'),
   cacheReadInputTokens: integer('cache_read_input_tokens'),
   cacheCreation5mInputTokens: integer('cache_creation_5m_input_tokens'),
@@ -396,12 +394,19 @@ export const requestFilters = pgTable('request_filters', {
   replacement: jsonb('replacement'),
   priority: integer('priority').notNull().default(0),
   isEnabled: boolean('is_enabled').notNull().default(true),
+  bindingType: varchar('binding_type', { length: 20 })
+    .notNull()
+    .default('global')
+    .$type<'global' | 'providers' | 'groups'>(),
+  providerIds: jsonb('provider_ids').$type<number[] | null>(),
+  groupTags: jsonb('group_tags').$type<string[] | null>(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
   requestFiltersEnabledIdx: index('idx_request_filters_enabled').on(table.isEnabled, table.priority),
   requestFiltersScopeIdx: index('idx_request_filters_scope').on(table.scope),
   requestFiltersActionIdx: index('idx_request_filters_action').on(table.action),
+  requestFiltersBindingIdx: index('idx_request_filters_binding').on(table.isEnabled, table.bindingType),
 }));
 
 // Sensitive Words table
@@ -451,7 +456,7 @@ export const systemSettings = pgTable('system_settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
-// Notification Settings table - 企业微信机器人通知配置
+// Notification Settings table - Webhook 通知配置
 export const notificationSettings = pgTable('notification_settings', {
   id: serial('id').primaryKey(),
 

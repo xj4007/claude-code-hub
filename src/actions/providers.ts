@@ -10,8 +10,7 @@ import {
   getAllHealthStatusAsync,
   resetCircuit,
 } from "@/lib/circuit-breaker";
-import { CodexInstructionsCache } from "@/lib/codex-instructions-cache";
-import { PROVIDER_TIMEOUT_DEFAULTS } from "@/lib/constants/provider.constants";
+import { PROVIDER_GROUP, PROVIDER_TIMEOUT_DEFAULTS } from "@/lib/constants/provider.constants";
 import { logger } from "@/lib/logger";
 import {
   executeProviderTest,
@@ -257,32 +256,36 @@ export async function getAvailableProviderGroups(userId?: number): Promise<strin
   try {
     const { getDistinctProviderGroups } = await import("@/repository/provider");
     const allGroups = await getDistinctProviderGroups();
+    const allGroupsWithDefault = [
+      PROVIDER_GROUP.DEFAULT,
+      ...allGroups.filter((group) => group !== PROVIDER_GROUP.DEFAULT),
+    ];
 
     // 如果没有提供 userId，返回所有分组（向后兼容）
     if (!userId) {
-      return allGroups;
+      return allGroupsWithDefault;
     }
 
     // 查询用户配置的 providerGroup
     const { findUserById } = await import("@/repository/user");
     const user = await findUserById(userId);
 
-    if (!user || !user.providerGroup) {
-      // 用户未配置 providerGroup，返回所有分组
-      return allGroups;
-    }
-
-    // 解析用户的 providerGroup（逗号分隔）
-    const userGroups = user.providerGroup
+    const userGroups = (user?.providerGroup || PROVIDER_GROUP.DEFAULT)
       .split(",")
       .map((g) => g.trim())
       .filter(Boolean);
 
-    // 过滤：只返回用户配置的分组
-    return allGroups.filter((group) => userGroups.includes(group));
+    // 管理员通配符：可访问所有分组
+    if (userGroups.includes(PROVIDER_GROUP.ALL)) {
+      return allGroupsWithDefault;
+    }
+
+    // 过滤：只返回用户配置的分组（但始终包含 default）
+    const filtered = allGroupsWithDefault.filter((group) => userGroups.includes(group));
+    return [PROVIDER_GROUP.DEFAULT, ...filtered.filter((g) => g !== PROVIDER_GROUP.DEFAULT)];
   } catch (error) {
     logger.error("获取供应商分组失败:", error);
-    return [];
+    return [PROVIDER_GROUP.DEFAULT];
   }
 }
 
@@ -298,21 +301,29 @@ export async function getProviderGroupsWithCount(): Promise<
     const groupCounts = new Map<string, number>();
 
     for (const provider of providers) {
-      if (provider.groupTag) {
-        const groups = provider.groupTag
-          .split(",")
-          .map((g) => g.trim())
-          .filter(Boolean);
+      const groupTag = provider.groupTag?.trim();
+      if (!groupTag) {
+        groupCounts.set(PROVIDER_GROUP.DEFAULT, (groupCounts.get(PROVIDER_GROUP.DEFAULT) || 0) + 1);
+        continue;
+      }
 
-        for (const group of groups) {
-          groupCounts.set(group, (groupCounts.get(group) || 0) + 1);
-        }
+      const groups = groupTag
+        .split(",")
+        .map((g) => g.trim())
+        .filter(Boolean);
+
+      for (const group of groups) {
+        groupCounts.set(group, (groupCounts.get(group) || 0) + 1);
       }
     }
 
     const result = Array.from(groupCounts.entries())
       .map(([group, providerCount]) => ({ group, providerCount }))
-      .sort((a, b) => a.group.localeCompare(b.group));
+      .sort((a, b) => {
+        if (a.group === PROVIDER_GROUP.DEFAULT) return -1;
+        if (b.group === PROVIDER_GROUP.DEFAULT) return 1;
+        return a.group.localeCompare(b.group);
+      });
 
     return { ok: true, data: result };
   } catch (error) {
@@ -355,7 +366,6 @@ export async function addProvider(data: {
   streaming_idle_timeout_ms?: number;
   request_timeout_non_streaming_ms?: number;
   website_url?: string | null;
-  codex_instructions_strategy?: "auto" | "force_official" | "keep_original";
   mcp_passthrough_type?: "none" | "minimax" | "glm" | "custom";
   mcp_passthrough_url?: string | null;
   use_unified_client_id?: boolean;
@@ -513,7 +523,6 @@ export async function editProvider(
     streaming_idle_timeout_ms?: number;
     request_timeout_non_streaming_ms?: number;
     website_url?: string | null;
-    codex_instructions_strategy?: "auto" | "force_official" | "keep_original";
     mcp_passthrough_type?: "none" | "minimax" | "glm" | "custom";
     mcp_passthrough_url?: string | null;
     use_unified_client_id?: boolean;
@@ -593,19 +602,6 @@ export async function editProvider(
         logger.debug("editProvider:config_synced_to_redis", { providerId });
       } catch (error) {
         logger.warn("editProvider:redis_sync_failed", {
-          providerId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // 清理 Codex Instructions 缓存（如果策略有变化）
-    if (validated.codex_instructions_strategy !== undefined) {
-      try {
-        await CodexInstructionsCache.clearByProvider(providerId);
-        logger.debug("editProvider:codex_cache_cleared", { providerId });
-      } catch (error) {
-        logger.warn("editProvider:codex_cache_clear_failed", {
           providerId,
           error: error instanceof Error ? error.message : String(error),
         });

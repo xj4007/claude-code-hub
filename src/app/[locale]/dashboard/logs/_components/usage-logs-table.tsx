@@ -17,31 +17,17 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn, formatTokenAmount } from "@/lib/utils";
 import type { CurrencyCode } from "@/lib/utils/currency";
 import { formatCurrency } from "@/lib/utils/currency";
+import {
+  calculateOutputRate,
+  formatDuration,
+  NON_BILLING_ENDPOINT,
+} from "@/lib/utils/performance-formatter";
 import { formatProviderSummary } from "@/lib/utils/provider-chain-formatter";
 import type { UsageLogRow } from "@/repository/usage-logs";
 import type { BillingModelSource } from "@/types/system-config";
 import { ErrorDetailsDialog } from "./error-details-dialog";
 import { ModelDisplayWithRedirect } from "./model-display-with-redirect";
 import { ProviderChainPopover } from "./provider-chain-popover";
-
-const NON_BILLING_ENDPOINT = "/v1/messages/count_tokens";
-
-/**
- * 格式化请求耗时
- * - 1000ms 以上显示为秒（如 "1.23s"）
- * - 1000ms 以下显示为毫秒（如 "850ms"）
- */
-function formatDuration(durationMs: number | null): string {
-  if (!durationMs) return "-";
-
-  // 1000ms 以上转换为秒
-  if (durationMs >= 1000) {
-    return `${(Number(durationMs) / 1000).toFixed(2)}s`;
-  }
-
-  // 1000ms 以下显示毫秒
-  return `${durationMs}ms`;
-}
 
 interface UsageLogsTableProps {
   logs: UsageLogRow[];
@@ -87,19 +73,17 @@ export function UsageLogsTable({
               <TableHead>{t("logs.columns.key")}</TableHead>
               <TableHead>{t("logs.columns.provider")}</TableHead>
               <TableHead>{t("logs.columns.model")}</TableHead>
-              <TableHead className="text-right">{t("logs.columns.inputTokens")}</TableHead>
-              <TableHead className="text-right">{t("logs.columns.outputTokens")}</TableHead>
-              <TableHead className="text-right">{t("logs.columns.cacheWrite")}</TableHead>
-              <TableHead className="text-right">{t("logs.columns.cacheRead")}</TableHead>
+              <TableHead className="text-right">{t("logs.columns.tokens")}</TableHead>
+              <TableHead className="text-right">{t("logs.columns.cache")}</TableHead>
               <TableHead className="text-right">{t("logs.columns.cost")}</TableHead>
-              <TableHead className="text-right">{t("logs.columns.duration")}</TableHead>
+              <TableHead className="text-right">{t("logs.columns.performance")}</TableHead>
               <TableHead>{t("logs.columns.status")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {logs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center text-muted-foreground">
+                <TableCell colSpan={10} className="text-center text-muted-foreground">
                   {t("logs.table.noData")}
                 </TableCell>
               </TableRow>
@@ -133,45 +117,67 @@ export function UsageLogsTable({
                       ) : (
                         <div className="flex items-start gap-2">
                           <div className="flex flex-col items-start gap-0.5 min-w-0 flex-1">
-                            {log.providerChain && log.providerChain.length > 0 ? (
-                              <>
-                                <div className="w-full">
-                                  <ProviderChainPopover
-                                    chain={log.providerChain}
-                                    finalProvider={
-                                      log.providerChain[log.providerChain.length - 1].name ||
-                                      log.providerName ||
-                                      tChain("circuit.unknown")
-                                    }
-                                  />
-                                </div>
-                                {/* 摘要文字（第二行显示，左对齐） */}
-                                {formatProviderSummary(log.providerChain, tChain) && (
+                            {(() => {
+                              // 计算倍率，用于判断是否显示 Badge
+                              const successfulProvider =
+                                log.providerChain && log.providerChain.length > 0
+                                  ? [...log.providerChain]
+                                      .reverse()
+                                      .find(
+                                        (item) =>
+                                          item.reason === "request_success" ||
+                                          item.reason === "retry_success"
+                                      )
+                                  : null;
+                              const actualCostMultiplier =
+                                successfulProvider?.costMultiplier ?? log.costMultiplier;
+                              const hasCostBadge =
+                                !!actualCostMultiplier &&
+                                parseFloat(String(actualCostMultiplier)) !== 1.0;
+
+                              return (
+                                <>
                                   <div className="w-full">
-                                    <TooltipProvider>
-                                      <Tooltip delayDuration={300}>
-                                        <TooltipTrigger asChild>
-                                          <span className="text-xs text-muted-foreground cursor-help truncate max-w-[200px] block text-left">
-                                            {formatProviderSummary(log.providerChain, tChain)}
-                                          </span>
-                                        </TooltipTrigger>
-                                        <TooltipContent
-                                          side="bottom"
-                                          align="start"
-                                          className="max-w-[500px]"
-                                        >
-                                          <p className="text-xs whitespace-normal break-words font-mono">
-                                            {formatProviderSummary(log.providerChain, tChain)}
-                                          </p>
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    </TooltipProvider>
+                                    <ProviderChainPopover
+                                      chain={log.providerChain ?? []}
+                                      finalProvider={
+                                        (log.providerChain && log.providerChain.length > 0
+                                          ? log.providerChain[log.providerChain.length - 1].name
+                                          : null) ||
+                                        log.providerName ||
+                                        tChain("circuit.unknown")
+                                      }
+                                      hasCostBadge={hasCostBadge}
+                                    />
                                   </div>
-                                )}
-                              </>
-                            ) : (
-                              <span>{log.providerName || "-"}</span>
-                            )}
+                                  {/* 摘要文字（第二行显示，左对齐） */}
+                                  {log.providerChain &&
+                                    log.providerChain.length > 0 &&
+                                    formatProviderSummary(log.providerChain, tChain) && (
+                                      <div className="w-full">
+                                        <TooltipProvider>
+                                          <Tooltip delayDuration={300}>
+                                            <TooltipTrigger asChild>
+                                              <span className="text-xs text-muted-foreground cursor-help truncate max-w-[200px] block text-left">
+                                                {formatProviderSummary(log.providerChain, tChain)}
+                                              </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent
+                                              side="bottom"
+                                              align="start"
+                                              className="max-w-[500px]"
+                                            >
+                                              <p className="text-xs whitespace-normal break-words font-mono">
+                                                {formatProviderSummary(log.providerChain, tChain)}
+                                              </p>
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
+                                      </div>
+                                    )}
+                                </>
+                              );
+                            })()}
                           </div>
                           {/* 显示供应商倍率 Badge（不为 1.0 时） */}
                           {(() => {
@@ -229,17 +235,35 @@ export function UsageLogsTable({
                       </TooltipProvider>
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {formatTokenAmount(log.inputTokens)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {formatTokenAmount(log.outputTokens)}
+                      <TooltipProvider>
+                        <Tooltip delayDuration={250}>
+                          <TooltipTrigger asChild>
+                            <span className="cursor-help">
+                              {formatTokenAmount(log.inputTokens)} /{" "}
+                              {formatTokenAmount(log.outputTokens)}
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent align="end" className="text-xs space-y-1">
+                            <div>
+                              {t("logs.billingDetails.input")}: {formatTokenAmount(log.inputTokens)}
+                            </div>
+                            <div>
+                              {t("logs.billingDetails.output")}:{" "}
+                              {formatTokenAmount(log.outputTokens)}
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       <TooltipProvider>
                         <Tooltip delayDuration={250}>
                           <TooltipTrigger asChild>
                             <div className="flex items-center justify-end gap-1 cursor-help">
-                              <span>{formatTokenAmount(log.cacheCreationInputTokens)}</span>
+                              <span>
+                                {formatTokenAmount(log.cacheCreationInputTokens)} /{" "}
+                                {formatTokenAmount(log.cacheReadInputTokens)}
+                              </span>
                               {log.cacheTtlApplied ? (
                                 <Badge variant="outline" className="text-[10px] leading-tight px-1">
                                   {log.cacheTtlApplied}
@@ -248,14 +272,34 @@ export function UsageLogsTable({
                             </div>
                           </TooltipTrigger>
                           <TooltipContent align="end" className="text-xs space-y-1">
-                            <div>5m: {formatTokenAmount(log.cacheCreation5mInputTokens)}</div>
-                            <div>1h: {formatTokenAmount(log.cacheCreation1hInputTokens)}</div>
+                            <div className="font-medium">{t("logs.columns.cacheWrite")}</div>
+                            <div className="pl-2">
+                              5m:{" "}
+                              {formatTokenAmount(
+                                (log.cacheCreation5mInputTokens ?? 0) > 0
+                                  ? log.cacheCreation5mInputTokens
+                                  : log.cacheTtlApplied !== "1h"
+                                    ? log.cacheCreationInputTokens
+                                    : 0
+                              )}
+                            </div>
+                            <div className="pl-2">
+                              1h:{" "}
+                              {formatTokenAmount(
+                                (log.cacheCreation1hInputTokens ?? 0) > 0
+                                  ? log.cacheCreation1hInputTokens
+                                  : log.cacheTtlApplied === "1h"
+                                    ? log.cacheCreationInputTokens
+                                    : 0
+                              )}
+                            </div>
+                            <div className="font-medium mt-1">{t("logs.columns.cacheRead")}</div>
+                            <div className="pl-2">
+                              {formatTokenAmount(log.cacheReadInputTokens)}
+                            </div>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {formatTokenAmount(log.cacheReadInputTokens)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {isNonBilling ? (
@@ -349,7 +393,56 @@ export function UsageLogsTable({
                       )}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {formatDuration(log.durationMs)}
+                      {(() => {
+                        const rate = calculateOutputRate(
+                          log.outputTokens,
+                          log.durationMs,
+                          log.ttfbMs
+                        );
+                        const secondLine = [
+                          log.ttfbMs != null &&
+                            log.ttfbMs > 0 &&
+                            `TTFB ${formatDuration(log.ttfbMs)}`,
+                          rate !== null && `${rate.toFixed(0)} tok/s`,
+                        ]
+                          .filter(Boolean)
+                          .join(" | ");
+
+                        return (
+                          <TooltipProvider>
+                            <Tooltip delayDuration={250}>
+                              <TooltipTrigger asChild>
+                                <div className="flex flex-col items-end cursor-help">
+                                  <span>{formatDuration(log.durationMs)}</span>
+                                  {secondLine && (
+                                    <span className="text-muted-foreground text-[10px]">
+                                      {secondLine}
+                                    </span>
+                                  )}
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent align="end" className="text-xs space-y-1">
+                                <div>
+                                  {t("logs.details.performance.duration")}:{" "}
+                                  {formatDuration(log.durationMs)}
+                                </div>
+                                {log.ttfbMs != null && (
+                                  <div>
+                                    {t("logs.details.performance.ttfb")}:{" "}
+                                    {formatDuration(log.ttfbMs)}
+                                  </div>
+                                )}
+                                {rate !== null && (
+                                  <div>
+                                    {t("logs.details.performance.outputRate")}: {rate.toFixed(1)}{" "}
+                                    tok/s
+                                  </div>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell>
                       <ErrorDetailsDialog
@@ -368,6 +461,7 @@ export function UsageLogsTable({
                         billingModelSource={billingModelSource}
                         inputTokens={log.inputTokens}
                         outputTokens={log.outputTokens}
+                        cacheCreationInputTokens={log.cacheCreationInputTokens}
                         cacheCreation5mInputTokens={log.cacheCreation5mInputTokens}
                         cacheCreation1hInputTokens={log.cacheCreation1hInputTokens}
                         cacheReadInputTokens={log.cacheReadInputTokens}
@@ -375,6 +469,8 @@ export function UsageLogsTable({
                         costUsd={log.costUsd}
                         costMultiplier={log.costMultiplier}
                         context1mApplied={log.context1mApplied}
+                        durationMs={log.durationMs}
+                        ttfbMs={log.ttfbMs}
                         externalOpen={dialogState.logId === log.id ? true : undefined}
                         onExternalOpenChange={(open) => {
                           if (!open) setDialogState({ logId: null, scrollToRedirect: false });

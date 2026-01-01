@@ -28,7 +28,8 @@ export interface ProviderLeaderboardEntry {
   totalCost: number;
   totalTokens: number;
   successRate: number; // 0-1 之间的小数，UI 层负责格式化为百分比
-  avgResponseTime: number; // 毫秒
+  avgTtfbMs: number; // 毫秒
+  avgTokensPerSecond: number; // tok/s（仅统计流式且可计算的请求）
 }
 
 /**
@@ -196,34 +197,42 @@ export async function findCustomRangeLeaderboard(
  * 查询今日供应商消耗排行榜（不限制数量）
  * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于配置时区（Asia/Shanghai）
  */
-export async function findDailyProviderLeaderboard(): Promise<ProviderLeaderboardEntry[]> {
+export async function findDailyProviderLeaderboard(
+  providerType?: ProviderType
+): Promise<ProviderLeaderboardEntry[]> {
   const timezone = getEnvConfig().TZ;
-  return findProviderLeaderboardWithTimezone("daily", timezone);
+  return findProviderLeaderboardWithTimezone("daily", timezone, undefined, providerType);
 }
 
 /**
  * 查询本月供应商消耗排行榜（不限制数量）
  * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于配置时区（Asia/Shanghai）
  */
-export async function findMonthlyProviderLeaderboard(): Promise<ProviderLeaderboardEntry[]> {
+export async function findMonthlyProviderLeaderboard(
+  providerType?: ProviderType
+): Promise<ProviderLeaderboardEntry[]> {
   const timezone = getEnvConfig().TZ;
-  return findProviderLeaderboardWithTimezone("monthly", timezone);
+  return findProviderLeaderboardWithTimezone("monthly", timezone, undefined, providerType);
 }
 
 /**
  * 查询本周供应商消耗排行榜（不限制数量）
  */
-export async function findWeeklyProviderLeaderboard(): Promise<ProviderLeaderboardEntry[]> {
+export async function findWeeklyProviderLeaderboard(
+  providerType?: ProviderType
+): Promise<ProviderLeaderboardEntry[]> {
   const timezone = getEnvConfig().TZ;
-  return findProviderLeaderboardWithTimezone("weekly", timezone);
+  return findProviderLeaderboardWithTimezone("weekly", timezone, undefined, providerType);
 }
 
 /**
  * 查询全部时间供应商消耗排行榜（不限制数量）
  */
-export async function findAllTimeProviderLeaderboard(): Promise<ProviderLeaderboardEntry[]> {
+export async function findAllTimeProviderLeaderboard(
+  providerType?: ProviderType
+): Promise<ProviderLeaderboardEntry[]> {
   const timezone = getEnvConfig().TZ;
-  return findProviderLeaderboardWithTimezone("allTime", timezone);
+  return findProviderLeaderboardWithTimezone("allTime", timezone, undefined, providerType);
 }
 
 /**
@@ -292,8 +301,15 @@ export async function findAllTimeProviderCacheHitRateLeaderboard(
 async function findProviderLeaderboardWithTimezone(
   period: LeaderboardPeriod,
   timezone: string,
-  dateRange?: DateRangeParams
+  dateRange?: DateRangeParams,
+  providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
+  const whereConditions = [
+    isNull(messageRequest.deletedAt),
+    buildDateCondition(period, timezone, dateRange),
+    providerType ? eq(providers.providerType, providerType) : undefined,
+  ];
+
   const rankings = await db
     .select({
       providerId: messageRequest.providerId,
@@ -314,14 +330,29 @@ async function findProviderLeaderboardWithTimezone(
         / NULLIF(count(*)::double precision, 0),
         0::double precision
       )`,
-      avgResponseTime: sql<number>`COALESCE(avg(${messageRequest.durationMs})::double precision, 0::double precision)`,
+      avgTtfbMs: sql<number>`COALESCE(avg(${messageRequest.ttfbMs})::double precision, 0::double precision)`,
+      avgTokensPerSecond: sql<number>`COALESCE(
+        avg(
+          CASE
+            WHEN ${messageRequest.outputTokens} > 0
+              AND ${messageRequest.durationMs} IS NOT NULL
+              AND ${messageRequest.ttfbMs} IS NOT NULL
+              AND ${messageRequest.ttfbMs} < ${messageRequest.durationMs}
+            THEN (${messageRequest.outputTokens}::double precision)
+              / NULLIF((${messageRequest.durationMs} - ${messageRequest.ttfbMs}) / 1000.0, 0)
+          END
+        )::double precision,
+        0::double precision
+      )`,
     })
     .from(messageRequest)
     .innerJoin(
       providers,
       and(sql`${messageRequest.providerId} = ${providers.id}`, isNull(providers.deletedAt))
     )
-    .where(and(isNull(messageRequest.deletedAt), buildDateCondition(period, timezone, dateRange)))
+    .where(
+      and(...whereConditions.filter((c): c is NonNullable<(typeof whereConditions)[number]> => !!c))
+    )
     .groupBy(messageRequest.providerId, providers.name)
     .orderBy(desc(sql`sum(${messageRequest.costUsd})`));
 
@@ -332,7 +363,8 @@ async function findProviderLeaderboardWithTimezone(
     totalCost: parseFloat(entry.totalCost),
     totalTokens: entry.totalTokens,
     successRate: entry.successRate ?? 0,
-    avgResponseTime: entry.avgResponseTime ?? 0,
+    avgTtfbMs: entry.avgTtfbMs ?? 0,
+    avgTokensPerSecond: entry.avgTokensPerSecond ?? 0,
   }));
 }
 
@@ -415,10 +447,11 @@ async function findProviderCacheHitRateLeaderboardWithTimezone(
  * 查询自定义日期范围供应商消耗排行榜
  */
 export async function findCustomRangeProviderLeaderboard(
-  dateRange: DateRangeParams
+  dateRange: DateRangeParams,
+  providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
   const timezone = getEnvConfig().TZ;
-  return findProviderLeaderboardWithTimezone("custom", timezone, dateRange);
+  return findProviderLeaderboardWithTimezone("custom", timezone, dateRange, providerType);
 }
 
 /**

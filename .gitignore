@@ -35,6 +35,7 @@ yarn-error.log*
 # Bun lock files
 bun.lock
 bun.lockb
+.bun-cache/
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -62,7 +63,10 @@ next-env.d.ts
 !/data/README.md
 
 # dev tools (local development utilities)
-/dev/
+# Keep the dev toolchain in repo; ignore local-only overrides.
+/dev/.env
+/dev/.env.*
+!/dev/.env.example
 
 # translation checklists and temporary docs
 TRANSLATIONS_CHECKLIST.txt

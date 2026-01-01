@@ -1,6 +1,6 @@
 "use server";
 
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/drizzle/db";
 import { keys as keysTable, messageRequest, providers, users } from "@/drizzle/schema";
 import { formatCostForStorage } from "@/lib/utils/currency";
@@ -106,6 +106,7 @@ export async function updateMessageRequestDetails(
     statusCode?: number;
     inputTokens?: number;
     outputTokens?: number;
+    ttfbMs?: number | null;
     cacheCreationInputTokens?: number;
     cacheReadInputTokens?: number;
     cacheCreation5mInputTokens?: number;
@@ -132,6 +133,9 @@ export async function updateMessageRequestDetails(
   }
   if (details.outputTokens !== undefined) {
     updateData.outputTokens = details.outputTokens;
+  }
+  if (details.ttfbMs !== undefined) {
+    updateData.ttfbMs = details.ttfbMs;
   }
   if (details.cacheCreationInputTokens !== undefined) {
     updateData.cacheCreationInputTokens = details.cacheCreationInputTokens;
@@ -726,5 +730,41 @@ export async function findRequestsBySessionId(
       errorMessage: r.errorMessage,
     })),
     total,
+  };
+}
+
+export async function findAdjacentRequestSequences(
+  sessionId: string,
+  sequence: number
+): Promise<{ prevSequence: number | null; nextSequence: number | null }> {
+  const [prev] = await db
+    .select({
+      sequence: sql<number | null>`max(${messageRequest.requestSequence})`,
+    })
+    .from(messageRequest)
+    .where(
+      and(
+        eq(messageRequest.sessionId, sessionId),
+        isNull(messageRequest.deletedAt),
+        lt(messageRequest.requestSequence, sequence)
+      )
+    );
+
+  const [next] = await db
+    .select({
+      sequence: sql<number | null>`min(${messageRequest.requestSequence})`,
+    })
+    .from(messageRequest)
+    .where(
+      and(
+        eq(messageRequest.sessionId, sessionId),
+        isNull(messageRequest.deletedAt),
+        gt(messageRequest.requestSequence, sequence)
+      )
+    );
+
+  return {
+    prevSequence: prev?.sequence ?? null,
+    nextSequence: next?.sequence ?? null,
   };
 }

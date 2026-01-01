@@ -370,7 +370,7 @@
   },
   "notifications": {
     "title": "Push-уведомления",
-    "description": "Настройка push-уведомлений робота WeChat Work",
+    "description": "Настройка push-уведомлений Webhook",
     "global": {
       "title": "Главный переключатель уведомлений",
       "description": "Включить или отключить все функции push-уведомлений",
@@ -402,6 +402,9 @@
       "enable": "Включить оповещение о расходах",
       "webhook": "Webhook URL",
       "webhookPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
+      "webhookTypeWeCom": "WeCom",
+      "webhookTypeFeishu": "Feishu",
+      "webhookTypeUnknown": "Неизвестная платформа. Используйте URL вебхука WeCom или Feishu",
       "threshold": "Порог оповещения",
       "thresholdLabel": "Порог оповещения: {percent}%",
       "thresholdHelp": "Оповещение при достижении {percent}% квоты",
@@ -417,7 +420,7 @@
       "saveError": "Не удалось сохранить настройки",
       "loadError": "Не удалось загрузить настройки уведомлений",
       "webhookRequired": "Сначала заполните Webhook URL",
-      "testSuccess": "Тестовое сообщение отправлено, проверьте WeChat Work",
+      "testSuccess": "Тестовое сообщение отправлено",
       "testFailed": "Тест не пройден",
       "testFailedRetry": "Тест не пройден, попробуйте снова",
       "testError": "Ошибка тестирования подключения",
@@ -642,7 +645,7 @@
             "latency": "Задержка",
             "content": "Контент",
             "model": "Модель",
-            "firstByte": "Первый байт",
+            "firstByte": "1 байт",
             "totalLatency": "Общая задержка",
             "error": "Ошибка",
             "responsePreview": "Предпросмотр ответа"
@@ -650,7 +653,7 @@
           "timing": {
             "title": "Информация о времени",
             "totalLatency": "Общая задержка",
-            "firstByte": "Первый байт",
+            "firstByte": "1 байт",
             "testedAt": "Время теста"
           },
           "tokenUsage": {
@@ -774,7 +777,7 @@
       "confirmAddPending": "Добавление...",
       "confirmUpdate": "Подтвердить обновление",
       "confirmUpdatePending": "Обновление...",
-      "costMultiplier": "Множитель стоимости",
+      "costMultiplier": "Коэф цены",
       "costMultiplierDesc": "например: A (стоимость 1.0x), C (стоимость 0.8x)",
       "costMultiplierLabel": "Коэффициент стоимости",
       "costMultiplierPlaceholder": "1.0",
@@ -1123,7 +1126,7 @@
         },
         "timeout": {
           "title": "Конфигурация тайм-аута",
-          "summary": "Первый байт: {streaming}с | Интервал потока: {idle}с | Непотоковая: {nonStreaming}с",
+          "summary": "1 байт: {streaming}с | поток: {idle}с | не поток: {nonStreaming}с",
           "desc": "Установить время ожидания запроса, 0 означает отключение тайм-аута",
           "streamingFirstByte": {
             "label": "Тайм-аут первого байта потока (секунды)",
@@ -1170,6 +1173,41 @@
             }
           },
           "hint": "Подсказка: некоторым строгим шлюзам Codex (например, 88code, foxcode) требуются официальные инструкции. Выберите «Авто» или «Только официальные»."
+        },
+        "mcpPassthrough": {
+          "title": "Конфигурация сквозной передачи MCP",
+          "summary": {
+            "none": "Отключено",
+            "minimax": "Minimax",
+            "glm": "GLM",
+            "custom": "Пользовательский (Зарезервировано)"
+          },
+          "desc": "При включении передаёт вызовы инструментов MCP указанному AI-провайдеру (например, minimax для распознавания изображений, веб-поиска)",
+          "select": {
+            "label": "Тип сквозной передачи",
+            "none": {
+              "label": "Отключено",
+              "desc": "Не включать сквозную передачу MCP (по умолчанию)"
+            },
+            "minimax": {
+              "label": "Minimax",
+              "desc": "Сквозная передача в сервис minimax MCP (поддержка распознавания изображений, веб-поиска и т.д.)"
+            },
+            "glm": {
+              "label": "GLM",
+              "desc": "Сквозная передача в сервис GLM MCP (поддержка анализа изображений, видео и т.д.)"
+            },
+            "custom": {
+              "label": "Пользовательский",
+              "desc": "Сквозная передача в пользовательский сервис MCP (зарезервировано, не реализовано)"
+            },
+            "placeholder": "Выберите тип сквозной передачи"
+          },
+          "hint": "Подсказка: сквозная передача MCP позволяет клиенту Claude Code использовать возможности инструментов, предоставляемых сторонними AI-провайдерами (например, распознавание изображений, веб-поиск)",
+          "urlLabel": "URL сквозной передачи MCP",
+          "urlPlaceholder": "https://api.minimaxi.com",
+          "urlDesc": "Базовый URL сервиса MCP. Оставьте пустым для автоматического извлечения из URL провайдера",
+          "urlAuto": "Автоматически извлечено: {url}"
         }
       },
       "providerTypes": {
@@ -1333,14 +1371,27 @@
     "searchNoResults": "Поставщики не найдены",
     "searchResults": "Найдено {count} поставщиков",
     "section": {
-      "description": "Настройка ограничений по расходам и параллельным сеансам для вышестоящих поставщиков. Оставьте пустым для неограниченного доступа.",
-      "leaderboard": "Рейтинг провайдеров",
-      "title": "Управление поставщиками"
+      "description": "Настройка ограничений по расходам и параллельным сеансам для вышестоящих поставщиков.",
+      "leaderboard": "Рейтинг",
+      "title": "Поставщики"
     },
-    "subtitle": "Управление поставщиками",
-    "subtitleDesc": "Настройка ограничений по расходам и параллельным сеансам. Оставьте пустым для неограниченного доступа.",
-    "title": "Управление поставщиками",
-    "todayUsage": "Использование сегодня",
+    "addProvider": "Добавить",
+    "filter": {
+      "status": {
+        "all": "Все статусы",
+        "active": "Активные",
+        "inactive": "Неактивные"
+      },
+      "groups": {
+        "label": "Группы:",
+        "all": "Все",
+        "default": "default"
+      }
+    },
+    "subtitle": "Поставщики",
+    "subtitleDesc": "Настройка ограничений по расходам и параллельным сеансам.",
+    "title": "Поставщики",
+    "todayUsage": "Сегодня",
     "todayUsageCount": "{count} раз",
     "toggleFailed": "Не удалось переключить статус",
     "toggleSuccess": "Поставщик {status}",
@@ -1377,8 +1428,8 @@
     "list": {
       "priority": "Приоритет",
       "weight": "Вес",
-      "costMultiplier": "Множитель стоимости",
-      "todayUsageLabel": "Использование сегодня",
+      "costMultiplier": "Коэф цены",
+      "todayUsageLabel": "Сегодня",
       "todayUsageCount": "{count} раз(а)",
       "circuitBroken": "Разорвано",
       "officialWebsite": "Официальный",
@@ -1407,10 +1458,22 @@
       "statusEnabled": "включен",
       "statusDisabled": "отключен"
     },
+    "inlineEdit": {
+      "save": "Сохранить",
+      "cancel": "Отмена",
+      "saveSuccess": "Успешно сохранено",
+      "saveFailed": "Не удалось сохранить",
+      "priorityLabel": "Приоритет",
+      "weightLabel": "Вес",
+      "costMultiplierLabel": "Коэф цены",
+      "priorityInvalid": "Введите целое число >= 0",
+      "weightInvalid": "Введите целое число от 1 до 100",
+      "costMultiplierInvalid": "Введите число не меньше 0"
+    },
     "schedulingDialog": {
       "title": "Правила планирования провайдеров",
       "description": "Узнайте, как система интеллектуально выбирает вышестоящих провайдеров для высокой доступности и оптимизации затрат",
-      "triggerButton": "Правила планирования",
+      "triggerButton": "Правила",
       "step": "Шаг",
       "before": "До:",
       "after": "После:",
@@ -1528,7 +1591,22 @@
       "saving": "Сохранение...",
       "validation": {
         "fieldRequired": "Название и цель обязательны"
-      }
+      },
+      "bindingType": "Применить к",
+      "bindingGlobal": "Все провайдеры (глобально)",
+      "bindingProviders": "Конкретные провайдеры",
+      "bindingGroups": "Группы провайдеров",
+      "selectProviders": "Выберите провайдеров...",
+      "selectGroups": "Выберите группы...",
+      "searchProviders": "Поиск провайдеров...",
+      "searchGroups": "Поиск групп...",
+      "noProvidersFound": "Провайдеры не найдены",
+      "noGroupsFound": "Группы не найдены",
+      "providersSelected": "Выбрано провайдеров: {count}",
+      "groupsSelected": "Выбрано групп: {count}",
+      "loading": "Загрузка...",
+      "clear": "Очистить",
+      "selectAll": "Выбрать все"
     },
     "table": {
       "name": "Название",
@@ -1537,6 +1615,7 @@
       "target": "Цель",
       "replacement": "Значение",
       "priority": "Приоритет",
+      "apply": "Область",
       "status": "Статус",
       "createdAt": "Создано",
       "actions": "Действия"
@@ -1550,7 +1629,10 @@
       "set": "Установить header",
       "json_path": "Замена по JSON пути",
       "text_replace": "Замена текста"
-    }
+    },
+    "applyToAll": "Применяется ко всем запросам",
+    "providers": "Провайдеры",
+    "groups": "Группы"
   },
   "errorRules": {
     "nav": "Правила ошибок",

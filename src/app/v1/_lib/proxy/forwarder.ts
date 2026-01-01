@@ -1,3 +1,4 @@
+import { STATUS_CODES } from "node:http";
 import type { Readable } from "node:stream";
 import { createGunzip, constants as zlibConstants } from "node:zlib";
 import type { Dispatcher } from "undici";
@@ -8,7 +9,6 @@ import {
   recordFailure,
   recordSuccess,
 } from "@/lib/circuit-breaker";
-import { CodexInstructionsCache } from "@/lib/codex-instructions-cache";
 import { isHttp2Enabled } from "@/lib/config";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { PROVIDER_DEFAULTS, PROVIDER_LIMITS } from "@/lib/constants/provider.constants";
@@ -17,7 +17,6 @@ import { createProxyAgentForProvider } from "@/lib/proxy-agent";
 import { SessionManager } from "@/lib/session-manager";
 import { CONTEXT_1M_BETA_HEADER, shouldApplyContext1m } from "@/lib/special-attributes";
 import type { CacheTtlPreference, CacheTtlResolved } from "@/types/cache";
-import { getDefaultInstructions } from "../codex/constants/codex-instructions";
 import { isOfficialCodexClient, sanitizeCodexRequest } from "../codex/utils/request-sanitizer";
 import { defaultRegistry } from "../converters";
 import type { Format } from "../converters/types";
@@ -30,6 +29,7 @@ import {
   categorizeErrorAsync,
   EmptyResponseError,
   ErrorCategory,
+  getErrorDetectionResultAsync,
   isClientAbortError,
   isEmptyResponseError,
   isHttp2Error,
@@ -131,15 +131,15 @@ function resolveMaxAttemptsForProvider(
  * 背景：undiciRequest() 在使用非 undici 原生 dispatcher（如 SocksProxyAgent）时，
  * 不会继承全局 Agent 的超时配置，需要显式传递超时参数。
  *
- * 这个值与 proxy-agent.ts 中的 UNDICI_TIMEOUT_MS 保持一致。
+ * 这里与全局 undici Agent 使用同一套环境变量配置（FETCH_HEADERS_TIMEOUT / FETCH_BODY_TIMEOUT）。
  */
-const UNDICI_REQUEST_TIMEOUT_MS = 600_000; // 600 秒 = 10 分钟，LLM 服务最大超时时间
+// 注意：undici.request 的 headersTimeout/bodyTimeout 属于 RequestOptions；
+// connectTimeout 属于 Dispatcher/Client 配置（已在全局 Agent / ProxyAgent 里处理）。
 
 /**
  * 过滤私有参数（下划线前缀）
  *
- * 目的：防止私有参数（如 _canRetryWithOfficialInstructions）泄露到上游供应商
- * 导致 "Unsupported parameter" 错误
+ * 目的：防止私有参数（下划线前缀）泄露到上游供应商导致 "Unsupported parameter" 错误
  *
  * @param obj - 原始请求对象
  * @returns 过滤后的请求对象
@@ -351,41 +351,6 @@ export class ProxyForwarder {
           // ========== 成功分支 ==========
           recordSuccess(currentProvider.id);
 
-          // ⭐ Phase 4: 成功响应后缓存 instructions（自动学习）
-          if (
-            currentProvider.providerType === "codex" &&
-            currentProvider.codexInstructionsStrategy === "auto"
-          ) {
-            try {
-              const requestBody = session.request.message as Record<string, unknown>;
-              const instructions = requestBody.instructions;
-
-              if (instructions && typeof instructions === "string") {
-                await CodexInstructionsCache.set(
-                  currentProvider.id,
-                  session.request.model || "gpt-5-codex",
-                  instructions
-                );
-
-                logger.debug(
-                  "[ProxyForwarder] Cached successful instructions for future requests",
-                  {
-                    providerId: currentProvider.id,
-                    providerName: currentProvider.name,
-                    model: session.request.model,
-                    instructionsLength: instructions.length,
-                  }
-                );
-              }
-            } catch (error) {
-              // Fail Open: 缓存失败不影响主流程
-              logger.warn("[ProxyForwarder] Failed to cache instructions, continuing", {
-                error,
-                providerId: currentProvider.id,
-              });
-            }
-          }
-
           // ⭐ 成功后绑定 session 到供应商（智能绑定策略）
           if (session.sessionId) {
             // 使用智能绑定策略（故障转移优先 + 稳定性优化）
@@ -497,6 +462,23 @@ export class ProxyForwarder {
           if (errorCategory === ErrorCategory.NON_RETRYABLE_CLIENT_ERROR) {
             const proxyError = lastError as ProxyError;
             const statusCode = proxyError.statusCode;
+            const detectionResult = await getErrorDetectionResultAsync(lastError);
+            const matchedRule =
+              detectionResult.matched &&
+              detectionResult.ruleId !== undefined &&
+              detectionResult.pattern !== undefined &&
+              detectionResult.matchType !== undefined &&
+              detectionResult.category !== undefined
+                ? {
+                    ruleId: detectionResult.ruleId,
+                    pattern: detectionResult.pattern,
+                    matchType: detectionResult.matchType,
+                    category: detectionResult.category,
+                    description: detectionResult.description,
+                    hasOverrideResponse: detectionResult.overrideResponse !== undefined,
+                    hasOverrideStatusCode: detectionResult.overrideStatusCode !== undefined,
+                  }
+                : undefined;
 
             logger.warn("ProxyForwarder: Non-retryable client error, stopping immediately", {
               providerId: currentProvider.id,
@@ -527,6 +509,7 @@ export class ProxyForwarder {
                   upstreamParsed: proxyError.upstreamError?.parsed,
                 },
                 clientError: proxyError.getDetailedErrorMessage(),
+                matchedRule,
                 request: buildRequestDetails(session),
               },
             });
@@ -616,24 +599,20 @@ export class ProxyForwarder {
             break; // ⭐ 跳出内层循环，进入供应商切换逻辑
           }
 
-          // ⭐ 5. 上游 404 错误处理（不计入熔断器，直接切换供应商）
+          // ⭐ 5. 上游 404 错误处理（不计入熔断器，先重试当前供应商，重试耗尽后切换）
           if (errorCategory === ErrorCategory.RESOURCE_NOT_FOUND) {
             const proxyError = lastError as ProxyError;
+            const willRetry = attemptCount < maxAttemptsPerProvider;
 
-            logger.warn(
-              "ProxyForwarder: Upstream 404 error, switching provider without circuit breaker",
-              {
-                providerId: currentProvider.id,
-                providerName: currentProvider.name,
-                statusCode: 404,
-                error: errorMessage,
-                attemptNumber: attemptCount,
-                totalProvidersAttempted,
-              }
-            );
-
-            // 记录到失败列表（避免重新选择）
-            failedProviderIds.push(currentProvider.id);
+            logger.warn("ProxyForwarder: Upstream 404 error", {
+              providerId: currentProvider.id,
+              providerName: currentProvider.name,
+              statusCode: 404,
+              error: errorMessage,
+              attemptNumber: attemptCount,
+              totalProvidersAttempted,
+              willRetry,
+            });
 
             // 记录到决策链（标记为 resource_not_found，不计入熔断）
             session.addProviderToChain(currentProvider, {
@@ -657,26 +636,33 @@ export class ProxyForwarder {
 
             // 不调用 recordFailure()，不计入熔断器
 
+            // 未耗尽重试次数：等待 100ms 后继续重试当前供应商
+            if (willRetry) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              continue;
+            }
+
+            // 重试耗尽：加入失败列表并切换供应商
+            failedProviderIds.push(currentProvider.id);
             break; // ⭐ 跳出内层循环，进入供应商切换逻辑
           }
 
-          // ⭐ 6. 供应商错误处理（所有 4xx/5xx HTTP 错误 + 空响应错误，计入熔断器，直接切换）
+          // ⭐ 6. 供应商错误处理（所有 4xx/5xx HTTP 错误 + 空响应错误，计入熔断器，重试耗尽后切换）
           if (errorCategory === ErrorCategory.PROVIDER_ERROR) {
             // 🆕 空响应错误特殊处理（EmptyResponseError 不是 ProxyError）
             if (isEmptyResponseError(lastError)) {
               const emptyError = lastError as EmptyResponseError;
+              const willRetry = attemptCount < maxAttemptsPerProvider;
 
-              logger.warn("ProxyForwarder: Empty response detected, will switch provider", {
+              logger.warn("ProxyForwarder: Empty response detected", {
                 providerId: currentProvider.id,
                 providerName: currentProvider.name,
                 reason: emptyError.reason,
                 error: emptyError.message,
                 attemptNumber: attemptCount,
                 totalProvidersAttempted,
+                willRetry,
               });
-
-              // 记录到失败列表
-              failedProviderIds.push(currentProvider.id);
 
               // 获取熔断器健康信息
               const { health, config } = await getProviderHealthInfo(currentProvider.id);
@@ -701,17 +687,25 @@ export class ProxyForwarder {
                 },
               });
 
-              // 计入熔断器
+              // 未耗尽重试次数：等待 100ms 后继续重试当前供应商
+              if (willRetry) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                continue;
+              }
+
+              // 重试耗尽：计入熔断器并切换供应商
               if (!session.isProbeRequest()) {
                 await recordFailure(currentProvider.id, lastError);
               }
 
+              failedProviderIds.push(currentProvider.id);
               break; // 跳出内层循环，进入供应商切换逻辑
             }
 
             // 常规 ProxyError 处理
             const proxyError = lastError as ProxyError;
             const statusCode = proxyError.statusCode;
+            const willRetry = attemptCount < maxAttemptsPerProvider;
 
             // 🆕 count_tokens 请求特殊处理：不计入熔断，不触发供应商切换
             if (session.isCountTokensRequest()) {
@@ -728,110 +722,15 @@ export class ProxyForwarder {
               throw lastError;
             }
 
-            logger.warn("ProxyForwarder: Provider error, will switch immediately", {
+            logger.warn("ProxyForwarder: Provider error occurred", {
               providerId: currentProvider.id,
               providerName: currentProvider.name,
               statusCode: statusCode,
               error: errorMessage,
               attemptNumber: attemptCount,
               totalProvidersAttempted,
+              willRetry,
             });
-
-            // 🆕 特殊处理：400 + "Instructions are not valid" 错误智能重试
-            // 针对部分严格的 Codex 中转站（如 88code、foxcode），会验证 instructions 字段
-            // 如果检测到该错误且满足重试条件，根据策略选择重试方式
-            if (statusCode === 400 && errorMessage.includes("Instructions are not valid")) {
-              const canRetryWithOfficial = (session.request.message as Record<string, unknown>)
-                ._canRetryWithOfficialInstructions;
-              const canRetryWithCache = currentProvider.codexInstructionsStrategy === "auto";
-
-              if (canRetryWithOfficial || canRetryWithCache) {
-                logger.warn(
-                  "[ProxyForwarder] Detected 'Instructions are not valid' error, intelligent retry",
-                  {
-                    providerId: currentProvider.id,
-                    providerName: currentProvider.name,
-                    strategy: currentProvider.codexInstructionsStrategy,
-                    attemptNumber: attemptCount,
-                    totalProvidersAttempted,
-                  }
-                );
-
-                // 优先尝试使用缓存的 instructions（如果存在）
-                let retryInstructions: string | null = null;
-                let instructionsSource: "cache" | "official" = "official";
-
-                if (canRetryWithCache) {
-                  try {
-                    retryInstructions = await CodexInstructionsCache.get(
-                      currentProvider.id,
-                      session.request.model || "gpt-5-codex"
-                    );
-
-                    if (retryInstructions) {
-                      instructionsSource = "cache";
-                      logger.info("[ProxyForwarder] Retrying with cached instructions", {
-                        providerId: currentProvider.id,
-                        instructionsLength: retryInstructions.length,
-                      });
-                    }
-                  } catch (error) {
-                    logger.warn("[ProxyForwarder] Failed to fetch cached instructions", { error });
-                  }
-                }
-
-                // Fallback: 使用官方 instructions
-                if (!retryInstructions) {
-                  retryInstructions = getDefaultInstructions(
-                    session.request.model || "gpt-5-codex"
-                  );
-                  instructionsSource = "official";
-
-                  logger.info("[ProxyForwarder] Retrying with official instructions (fallback)", {
-                    providerId: currentProvider.id,
-                    instructionsLength: retryInstructions.length,
-                  });
-                }
-
-                // 替换 instructions
-                (session.request.message as Record<string, unknown>).instructions =
-                  retryInstructions;
-
-                // 删除重试标记（避免无限循环）
-                delete (session.request.message as Record<string, unknown>)
-                  ._canRetryWithOfficialInstructions;
-
-                // 记录到决策链
-                session.addProviderToChain(currentProvider, {
-                  reason:
-                    instructionsSource === "cache"
-                      ? "retry_with_cached_instructions"
-                      : "retry_with_official_instructions",
-                  circuitState: getCircuitState(currentProvider.id),
-                  attemptNumber: attemptCount,
-                  errorMessage: errorMessage,
-                  statusCode: statusCode,
-                  errorDetails: {
-                    provider: {
-                      id: currentProvider.id,
-                      name: currentProvider.name,
-                      statusCode: statusCode,
-                      statusText: proxyError.message,
-                      upstreamBody: proxyError.upstreamError?.body,
-                      upstreamParsed: proxyError.upstreamError?.parsed,
-                    },
-                    instructionsSource,
-                    request: buildRequestDetails(session),
-                  },
-                });
-
-                // 继续内层循环（重试当前供应商，不切换）
-                continue;
-              }
-            }
-
-            // 记录到失败列表（避免重新选择）
-            failedProviderIds.push(currentProvider.id);
 
             // 获取熔断器健康信息（用于决策链显示）
             const { health, config } = await getProviderHealthInfo(currentProvider.id);
@@ -858,7 +757,13 @@ export class ProxyForwarder {
               },
             });
 
-            // ⭐ 只有非探测请求才计入熔断器
+            // 未耗尽重试次数：等待 100ms 后继续重试当前供应商
+            if (willRetry) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              continue;
+            }
+
+            // ⭐ 重试耗尽：只有非探测请求才计入熔断器
             if (session.isProbeRequest()) {
               logger.debug("ProxyForwarder: Probe request error, skipping circuit breaker", {
                 providerId: currentProvider.id,
@@ -869,6 +774,8 @@ export class ProxyForwarder {
               await recordFailure(currentProvider.id, lastError);
             }
 
+            // 加入失败列表并切换供应商
+            failedProviderIds.push(currentProvider.id);
             break; // ⭐ 跳出内层循环，进入供应商切换逻辑
           }
         }
@@ -968,9 +875,12 @@ export class ProxyForwarder {
 
     // --- GEMINI HANDLING ---
     if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
-      // 1. 直接透传请求体（不转换）
-      const bodyString = JSON.stringify(session.request.message);
-      requestBody = bodyString;
+      // 1. 直接透传请求体（不转换）- 仅对有 body 的请求
+      const hasBody = session.method !== "GET" && session.method !== "HEAD";
+      if (hasBody) {
+        const bodyString = JSON.stringify(session.request.message);
+        requestBody = bodyString;
+      }
 
       // 检测流式请求：Gemini 支持两种方式
       // 1. URL 路径检测（官方 Gemini API）: /v1beta/models/xxx:streamGenerateContent?alt=sse
@@ -1016,6 +926,14 @@ export class ProxyForwarder {
 
       proxyUrl = buildProxyUrl(baseUrl, session.requestUrl);
       processedHeaders = headers;
+
+      if (session.sessionId) {
+        void SessionManager.storeSessionRequestHeaders(
+          session.sessionId,
+          processedHeaders,
+          session.requestSequence
+        ).catch((err) => logger.error("Failed to store request headers:", err));
+      }
 
       logger.debug("ProxyForwarder: Gemini request passthrough", {
         providerId: provider.id,
@@ -1085,27 +1003,20 @@ export class ProxyForwarder {
           providerId: provider.id,
           providerName: provider.name,
           officialClient: isOfficialClient,
-          codexStrategy: provider.codexInstructionsStrategy,
         });
 
-        const shouldBypassSanitizer =
-          isOfficialClient && (provider.codexInstructionsStrategy ?? "auto") === "auto";
-
-        if (shouldBypassSanitizer) {
-          logger.debug(
-            "[ProxyForwarder] Bypassing sanitizer for official Codex CLI (auto strategy)",
-            {
-              providerId: provider.id,
-              providerName: provider.name,
-            }
-          );
+        if (isOfficialClient) {
+          logger.debug("[ProxyForwarder] Bypassing sanitizer for official Codex CLI client", {
+            providerId: provider.id,
+            providerName: provider.name,
+          });
         } else {
           try {
             const sanitized = await sanitizeCodexRequest(
               session.request.message as Record<string, unknown>,
               session.request.model || "gpt-5-codex",
-              provider.codexInstructionsStrategy,
-              provider.id,
+              undefined,
+              undefined,
               { isOfficialClient }
             );
 
@@ -1113,7 +1024,7 @@ export class ProxyForwarder {
               typeof sanitized.instructions === "string" ? sanitized.instructions.length : 0;
 
             if (!instructionsLength) {
-              logger.warn("[ProxyForwarder] Codex sanitization yielded empty instructions", {
+              logger.debug("[ProxyForwarder] Codex request has no instructions (passthrough)", {
                 providerId: provider.id,
                 officialClient: isOfficialClient,
               });
@@ -1149,6 +1060,14 @@ export class ProxyForwarder {
       }
 
       processedHeaders = ProxyForwarder.buildHeaders(session, provider);
+
+      if (session.sessionId) {
+        void SessionManager.storeSessionRequestHeaders(
+          session.sessionId,
+          processedHeaders,
+          session.requestSequence
+        ).catch((err) => logger.error("Failed to store request headers:", err));
+      }
 
       if (process.env.NODE_ENV === "development") {
         logger.trace("ProxyForwarder: Final request headers", {
@@ -1404,7 +1323,13 @@ export class ProxyForwarder {
       // 原因：undici fetch 无法关闭自动解压，上游可能无视 accept-encoding: identity 返回 gzip
       // 当 gzip 流被提前终止时（如连接关闭），undici Gunzip 会抛出 "TypeError: terminated"
       response = useErrorTolerantFetch
-        ? await ProxyForwarder.fetchWithoutAutoDecode(proxyUrl, init, provider.id, provider.name)
+        ? await ProxyForwarder.fetchWithoutAutoDecode(
+            proxyUrl,
+            init,
+            provider.id,
+            provider.name,
+            session
+          )
         : await fetch(proxyUrl, init);
       // ⭐ fetch 成功：收到 HTTP 响应头，保留响应超时继续监控
       // 注意：undici 的 fetch 在收到 HTTP 响应头后就 resolve，但实际数据（SSE 首字节 / 完整 JSON）
@@ -1589,7 +1514,8 @@ export class ProxyForwarder {
                 proxyUrl,
                 http1FallbackInit,
                 provider.id,
-                provider.name
+                provider.name,
+                session
               )
             : await fetch(proxyUrl, http1FallbackInit);
 
@@ -1838,13 +1764,31 @@ export class ProxyForwarder {
       delete overrides["x-api-key"];
     }
 
-    // Codex 特殊处理：若存在原始 User-Agent 则透传，否则兜底设置
+    // Codex 特殊处理：优先使用过滤器修改的 User-Agent
     if (provider.providerType === "codex") {
+      const filteredUA = session.headers.get("user-agent");
       const originalUA = session.userAgent;
-      overrides["user-agent"] =
-        originalUA || "codex_cli_rs/0.55.0 (Mac OS 26.1.0; arm64) vscode/2.0.64";
-      logger.debug("ProxyForwarder: Codex provider detected, setting User-Agent", {
-        originalUA: session.userAgent ? "provided" : "fallback",
+      const wasModified = session.isHeaderModified("user-agent");
+
+      // 优先级说明：
+      // 1. 如果过滤器修改了 user-agent（wasModified=true），使用过滤后的值
+      // 2. 如果过滤器删除了 user-agent（wasModified=true 但 filteredUA=null），回退到原始 UA
+      // 3. 如果原始 UA 也不存在，使用硬编码兜底值
+      // 注意：使用 ?? 而非 || 以确保空字符串 UA 能被正确保留
+      let resolvedUA: string;
+      if (wasModified) {
+        resolvedUA =
+          filteredUA ?? originalUA ?? "codex_cli_rs/0.55.0 (Mac OS 26.1.0; arm64) vscode/2.0.64";
+      } else {
+        resolvedUA = originalUA ?? "codex_cli_rs/0.55.0 (Mac OS 26.1.0; arm64) vscode/2.0.64";
+      }
+      overrides["user-agent"] = resolvedUA;
+
+      logger.debug("ProxyForwarder: Codex provider User-Agent resolution", {
+        wasModified,
+        hasFilteredUA: !!filteredUA,
+        hasOriginalUA: !!originalUA,
+        finalValueLength: resolvedUA.length,
       });
     }
 
@@ -1940,8 +1884,12 @@ export class ProxyForwarder {
     url: string,
     init: RequestInit & { dispatcher?: Dispatcher },
     providerId: number,
-    providerName: string
+    providerName: string,
+    session?: ProxySession
   ): Promise<Response> {
+    const { FETCH_HEADERS_TIMEOUT: headersTimeout, FETCH_BODY_TIMEOUT: bodyTimeout } =
+      getEnvConfig();
+
     logger.debug("ProxyForwarder: Using undici.request to bypass auto-decompression", {
       providerId,
       providerName,
@@ -1968,8 +1916,8 @@ export class ProxyForwarder {
       body: init.body as string | Buffer | undefined,
       signal: init.signal,
       dispatcher: init.dispatcher,
-      bodyTimeout: UNDICI_REQUEST_TIMEOUT_MS,
-      headersTimeout: UNDICI_REQUEST_TIMEOUT_MS,
+      bodyTimeout,
+      headersTimeout,
     });
 
     // ⭐ 立即为 undici body 添加错误处理，防止 uncaughtException
@@ -1993,6 +1941,14 @@ export class ProxyForwarder {
       } else {
         responseHeaders.append(key, value);
       }
+    }
+
+    if (session?.sessionId) {
+      void SessionManager.storeSessionResponseHeaders(
+        session.sessionId,
+        responseHeaders,
+        session.requestSequence
+      ).catch((err) => logger.error("Failed to store response headers:", err));
     }
 
     // 检测响应是否为 gzip 压缩
@@ -2032,7 +1988,7 @@ export class ProxyForwarder {
       // 注意：使用前面已添加错误处理器的 rawBody
       rawBody.pipe(gunzip);
 
-      // 将 Gunzip 流转换为 Web ReadableStream（容错版本）
+      // 将 Gunzip 流转换为 Web 流（容错版本）
       bodyStream = ProxyForwarder.nodeStreamToWebStreamSafe(gunzip, providerId, providerName);
 
       // 移�� content-encoding 和 content-length（避免下游再解压或使用错误长度）
@@ -2058,7 +2014,8 @@ export class ProxyForwarder {
 
     return new Response(bodyStream, {
       status: undiciRes.statusCode,
-      statusText: String(undiciRes.statusCode),
+      // 未知/非标准状态码不应兜底为 OK（避免误导客户端日志与调试）
+      statusText: STATUS_CODES[undiciRes.statusCode] ?? "",
       headers: responseHeaders,
     });
   }

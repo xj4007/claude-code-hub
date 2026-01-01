@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Context } from "hono";
+import { logger } from "@/lib/logger";
 import { clientRequestsContext1m as clientRequestsContext1mHelper } from "@/lib/special-attributes";
 import { findLatestPriceByModel } from "@/repository/model-price";
 import type { CacheTtlResolved } from "@/types/cache";
@@ -8,6 +9,7 @@ import type { ProviderChainItem } from "@/types/message";
 import type { ModelPriceData } from "@/types/model-price";
 import type { Provider, ProviderType } from "@/types/provider";
 import type { User } from "@/types/user";
+import { ProxyError } from "./errors";
 import type { ClientFormat } from "./format-mapper";
 
 export interface AuthState {
@@ -15,6 +17,7 @@ export interface AuthState {
   key: Key | null;
   apiKey: string | null;
   success: boolean;
+  errorResponse?: Response; // 认证失败时的详细错误响应
 }
 
 export interface MessageContext {
@@ -38,6 +41,8 @@ interface RequestBodyResult {
   requestBodyLog: string;
   requestBodyLogNote?: string;
   requestBodyBuffer?: ArrayBuffer;
+  contentLength?: number | null;
+  actualBodyBytes?: number;
 }
 
 export class ProxySession {
@@ -45,6 +50,8 @@ export class ProxySession {
   readonly method: string;
   requestUrl: URL; // 非 readonly，允许模型重定向修改 Gemini URL 路径
   readonly headers: Headers;
+  // 原始 headers 的副本，用于检测过滤器修改
+  private readonly originalHeaders: Headers;
   readonly headerLog: string;
   readonly request: ProxyRequestPayload;
   readonly userAgent: string | null; // User-Agent（用于客户端类型分析）
@@ -54,6 +61,9 @@ export class ProxySession {
   authState: AuthState | null;
   provider: Provider | null;
   messageContext: MessageContext | null;
+
+  // Time To First Byte (ms). Streaming: first chunk. Non-stream: equals durationMs.
+  ttfbMs: number | null = null;
 
   // Session ID（用于会话粘性和并发限流）
   sessionId: string | null;
@@ -90,6 +100,18 @@ export class ProxySession {
   // Cached price data (lazy loaded: undefined=not loaded, null=no data)
   private cachedPriceData?: ModelPriceData | null;
 
+  // Cached billing model source config (per-request)
+  private cachedBillingModelSource?: "original" | "redirected";
+
+  /**
+   * Promise cache for billingModelSource load (concurrency safe).
+   * Ensures system settings are loaded at most once per request/session.
+   */
+  private billingModelSourcePromise?: Promise<"original" | "redirected">;
+
+  // Cached price data for billing model source (lazy loaded: undefined=not loaded, null=no data)
+  private cachedBillingPriceData?: ModelPriceData | null;
+
   private constructor(init: {
     startTime: number;
     method: string;
@@ -105,6 +127,7 @@ export class ProxySession {
     this.method = init.method;
     this.requestUrl = init.requestUrl;
     this.headers = init.headers;
+    this.originalHeaders = new Headers(init.headers); // 原始 headers 的副本，用于检测过滤器修改
     this.headerLog = init.headerLog;
     this.request = init.request;
     this.userAgent = init.userAgent;
@@ -148,6 +171,26 @@ export class ProxySession {
     const resolvedModel =
       modelFromBody ?? modelFromPath ?? (isLikelyGeminiRequest ? "gemini-2.5-flash" : null);
 
+    const isLargeRequestBody =
+      (bodyResult.contentLength !== null &&
+        bodyResult.contentLength !== undefined &&
+        bodyResult.contentLength >= LARGE_REQUEST_BODY_BYTES) ||
+      (bodyResult.actualBodyBytes !== undefined &&
+        bodyResult.actualBodyBytes >= LARGE_REQUEST_BODY_BYTES);
+
+    if (!resolvedModel && isLargeRequestBody) {
+      logger.warn("[ProxySession] Missing model for large request body", {
+        pathname: requestUrl.pathname,
+        contentLength: bodyResult.contentLength ?? undefined,
+        actualBodyBytes: bodyResult.actualBodyBytes ?? undefined,
+      });
+
+      throw new ProxyError(
+        "Missing required field 'model'. If you provided it, your large request body may have been truncated by the proxy body size limit. Please reduce context size or contact the administrator to increase the limit.",
+        400
+      );
+    }
+
     const request: ProxyRequestPayload = {
       message: bodyResult.requestMessage,
       buffer: bodyResult.requestBodyBuffer,
@@ -167,6 +210,23 @@ export class ProxySession {
       context: c,
       clientAbortSignal,
     });
+  }
+
+  /**
+   * 检查 header 是否被过滤器修改过。
+   *
+   * 通过对比原始值和当前值判断。以下情况均视为"已修改"：
+   * - 值被修改
+   * - header 被删除
+   * - header 从不存在变为存在
+   *
+   * @param key - header 名称（不区分大小写）
+   * @returns true 表示 header 被修改过，false 表示未修改
+   */
+  isHeaderModified(key: string): boolean {
+    const original = this.originalHeaders.get(key);
+    const current = this.headers.get(key);
+    return original !== current;
   }
 
   setAuthState(state: AuthState): void {
@@ -218,6 +278,22 @@ export class ProxySession {
     if (context?.user) {
       this.userName = context.user.name;
     }
+  }
+
+  /**
+   * Record Time To First Byte (TTFB) for streaming responses.
+   *
+   * Definition: first body chunk received.
+   * Non-stream responses should persist TTFB as `durationMs` at finalize time.
+   */
+  recordTtfb(): number {
+    if (this.ttfbMs !== null) {
+      return this.ttfbMs;
+    }
+
+    const value = Math.max(0, Date.now() - this.startTime);
+    this.ttfbMs = value;
+    return value;
   }
 
   /**
@@ -520,6 +596,121 @@ export class ProxySession {
     }
     return this.cachedPriceData ?? null;
   }
+
+  /**
+   * 根据系统配置的计费模型来源获取价格数据（带缓存）
+   *
+   * billingModelSource:
+   * - "original": 优先使用重定向前模型（getOriginalModel）
+   * - "redirected": 优先使用重定向后模型（request.model）
+   *
+   * Fallback：主模型无价格时尝试备选模型。
+   *
+   * @returns 价格数据；无模型或无价格时返回 null
+   */
+  async getCachedPriceDataByBillingSource(): Promise<ModelPriceData | null> {
+    if (this.cachedBillingPriceData !== undefined) {
+      return this.cachedBillingPriceData;
+    }
+
+    const originalModel = this.getOriginalModel();
+    const redirectedModel = this.request.model;
+    if (!originalModel && !redirectedModel) {
+      this.cachedBillingPriceData = null;
+      return null;
+    }
+
+    // 懒加载配置（每请求只读取一次；并发安全）
+    if (this.cachedBillingModelSource === undefined) {
+      if (!this.billingModelSourcePromise) {
+        this.billingModelSourcePromise = (async () => {
+          try {
+            const { getSystemSettings } = await import("@/repository/system-config");
+            const systemSettings = await getSystemSettings();
+            const source = systemSettings.billingModelSource;
+
+            if (source !== "original" && source !== "redirected") {
+              logger.warn(
+                `[ProxySession] Invalid billingModelSource: ${String(source)}, fallback to "redirected"`
+              );
+              return "redirected";
+            }
+
+            return source;
+          } catch (error) {
+            logger.error("[ProxySession] Failed to load billing model source", { error });
+            return "redirected";
+          }
+        })();
+      }
+
+      this.cachedBillingModelSource = await this.billingModelSourcePromise;
+    }
+
+    const useOriginal = this.cachedBillingModelSource === "original";
+    const primaryModel = useOriginal ? originalModel : redirectedModel;
+    const fallbackModel = useOriginal ? redirectedModel : originalModel;
+
+    const findValidPriceDataByModel = async (modelName: string): Promise<ModelPriceData | null> => {
+      const result = await findLatestPriceByModel(modelName);
+      const data = result?.priceData;
+      if (!data || !hasValidPriceData(data)) {
+        return null;
+      }
+      return data;
+    };
+
+    let priceData: ModelPriceData | null = null;
+    if (primaryModel) {
+      priceData = await findValidPriceDataByModel(primaryModel);
+    }
+
+    if (!priceData && fallbackModel && fallbackModel !== primaryModel) {
+      priceData = await findValidPriceDataByModel(fallbackModel);
+    }
+
+    this.cachedBillingPriceData = priceData;
+    return this.cachedBillingPriceData;
+  }
+}
+
+/**
+ * 判断价格数据是否包含至少一个可用于计费的价格字段。
+ * 避免把数据库中的 `{}` 或仅包含元信息的记录当成有效价格。
+ */
+function hasValidPriceData(priceData: ModelPriceData): boolean {
+  const numericCosts = [
+    priceData.input_cost_per_token,
+    priceData.output_cost_per_token,
+    priceData.cache_creation_input_token_cost,
+    priceData.cache_creation_input_token_cost_above_1hr,
+    priceData.cache_read_input_token_cost,
+    priceData.input_cost_per_token_above_200k_tokens,
+    priceData.output_cost_per_token_above_200k_tokens,
+    priceData.cache_creation_input_token_cost_above_200k_tokens,
+    priceData.cache_read_input_token_cost_above_200k_tokens,
+    priceData.output_cost_per_image,
+  ];
+
+  if (
+    numericCosts.some((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)
+  ) {
+    return true;
+  }
+
+  const searchCosts = priceData.search_context_cost_per_query;
+  if (searchCosts) {
+    const searchCostFields = [
+      searchCosts.search_context_size_high,
+      searchCosts.search_context_size_low,
+      searchCosts.search_context_size_medium,
+    ];
+    return searchCostFields.some(
+      (value) => typeof value === "number" && Number.isFinite(value) && value >= 0
+    );
+  }
+
+  return false;
 }
 
 function formatHeadersForLog(headers: Headers): string {
@@ -563,6 +754,21 @@ function extractModelFromPath(pathname: string): string | null {
   return null;
 }
 
+/**
+ * Large request body threshold (10MB)
+ * When request body exceeds this size and model field is missing,
+ * return a friendly error suggesting possible truncation by proxy limit.
+ * Related config: next.config.ts proxyClientMaxBodySize (100MB)
+ */
+const LARGE_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
+function parseContentLengthHeader(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
 async function parseRequestBody(c: Context): Promise<RequestBodyResult> {
   const method = c.req.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
@@ -571,8 +777,29 @@ async function parseRequestBody(c: Context): Promise<RequestBodyResult> {
     return { requestMessage: {}, requestBodyLog: "(empty)" };
   }
 
+  const contentLength = parseContentLengthHeader(c.req.header("content-length"));
   const requestBodyBuffer = await c.req.raw.clone().arrayBuffer();
+  const actualBodyBytes = requestBodyBuffer.byteLength;
   const requestBodyText = new TextDecoder().decode(requestBodyBuffer);
+
+  // Truncation detection: warn only when both conditions are met
+  // 1. Absolute difference > 1MB (avoid false positives from minor discrepancies)
+  // 2. Actual body < 80% of expected (significant truncation)
+  const MIN_TRUNCATION_DIFF_BYTES = 1024 * 1024; // 1MB
+  const TRUNCATION_RATIO_THRESHOLD = 0.8;
+  if (
+    contentLength !== null &&
+    contentLength - actualBodyBytes > MIN_TRUNCATION_DIFF_BYTES &&
+    actualBodyBytes < contentLength * TRUNCATION_RATIO_THRESHOLD
+  ) {
+    logger.warn("[parseRequestBody] Possible body truncation detected", {
+      pathname: new URL(c.req.url).pathname,
+      method,
+      contentLength,
+      actualBodyBytes,
+      ratio: (actualBodyBytes / contentLength).toFixed(2),
+    });
+  }
 
   let requestMessage: Record<string, unknown> = {};
   let requestBodyLog: string;
@@ -593,5 +820,7 @@ async function parseRequestBody(c: Context): Promise<RequestBodyResult> {
     requestBodyLog,
     requestBodyLogNote,
     requestBodyBuffer,
+    contentLength,
+    actualBodyBytes,
   };
 }

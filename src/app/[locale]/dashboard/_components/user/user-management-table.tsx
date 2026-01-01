@@ -1,6 +1,6 @@
 "use client";
 
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { renewUser } from "@/actions/users";
 import { Button } from "@/components/ui/button";
+import { useVirtualizer } from "@/hooks/use-virtualizer";
 import { cn } from "@/lib/utils";
 import type { User, UserDisplay } from "@/types/user";
 import { BatchEditToolbar } from "./batch-edit/batch-edit-toolbar";
@@ -69,6 +70,10 @@ export interface UserManagementTableProps {
       currentExpiry: string;
       neverExpires: string;
       expired: string;
+      quickExtensionLabel: string;
+      quickExtensionHint: string;
+      customDateLabel: string;
+      customDateHint: string;
       quickOptions: {
         "7days": string;
         "30days": string;
@@ -88,8 +93,12 @@ export interface UserManagementTableProps {
 
 const USER_ROW_HEIGHT = 52;
 const KEY_ROW_HEIGHT = 40;
+const KEY_ROW_BORDER_HEIGHT = 1;
+const EXPANDED_SECTION_PADDING = 24; // py-3 * 2
+const KEY_LIST_BORDER_HEIGHT = 2; // top + bottom border
+const EMPTY_KEYS_HEIGHT = 68; // py-6 * 2 + line height
 const MIN_TABLE_WIDTH_CLASS = "min-w-[980px]";
-const GRID_COLUMNS_CLASS = "grid-cols-[minmax(260px,1fr)_120px_repeat(6,90px)_60px]";
+const GRID_COLUMNS_CLASS = "grid-cols-[minmax(260px,1fr)_120px_repeat(6,90px)_80px]";
 
 export function UserManagementTable({
   users,
@@ -114,6 +123,7 @@ export function UserManagementTable({
   translations,
 }: UserManagementTableProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const tUserList = useTranslations("dashboard.userList");
   const tUserMgmt = useTranslations("dashboard.userManagement");
   const isAdmin = currentUser?.role === "admin";
@@ -134,6 +144,10 @@ export function UserManagementTable({
   // Quick renew dialog state
   const [quickRenewOpen, setQuickRenewOpen] = useState(false);
   const [quickRenewUser, setQuickRenewUser] = useState<QuickRenewUser | null>(null);
+  // 乐观更新：跟踪用户过期时间的即时更新
+  const [optimisticUserExpiries, setOptimisticUserExpiries] = useState<Map<number, Date>>(
+    () => new Map()
+  );
 
   useEffect(() => {
     setExpandedUsers((prev) => {
@@ -203,7 +217,18 @@ export function UserManagementTable({
       if (!user) return USER_ROW_HEIGHT;
       const expanded = showMultiSelect ? true : (expandedUsers.get(user.id) ?? false);
       if (!expanded) return USER_ROW_HEIGHT;
-      return USER_ROW_HEIGHT + (user.keys?.length ?? 0) * KEY_ROW_HEIGHT;
+      const keyCount = user.keys?.length ?? 0;
+      if (keyCount === 0) {
+        return USER_ROW_HEIGHT + EXPANDED_SECTION_PADDING + EMPTY_KEYS_HEIGHT;
+      }
+      const keyBorders = Math.max(0, keyCount - 1) * KEY_ROW_BORDER_HEIGHT;
+      return (
+        USER_ROW_HEIGHT +
+        EXPANDED_SECTION_PADDING +
+        KEY_LIST_BORDER_HEIGHT +
+        keyCount * KEY_ROW_HEIGHT +
+        keyBorders
+      );
     },
     [users, showMultiSelect, expandedUsers]
   );
@@ -236,7 +261,8 @@ export function UserManagementTable({
   useEffect(() => {
     if (!scrollResetKey) return;
     parentRef.current?.scrollTo({ top: 0 });
-  }, [scrollResetKey]);
+    rowVirtualizer.measure();
+  }, [scrollResetKey, rowVirtualizer]);
 
   const quickRenewTranslations = useMemo(() => {
     if (translations.quickRenew) return translations.quickRenew;
@@ -247,6 +273,10 @@ export function UserManagementTable({
       currentExpiry: tUserMgmt("quickRenew.currentExpiry"),
       neverExpires: tUserMgmt("quickRenew.neverExpires"),
       expired: tUserMgmt("quickRenew.expired"),
+      quickExtensionLabel: tUserMgmt("quickRenew.quickExtensionLabel"),
+      quickExtensionHint: tUserMgmt("quickRenew.quickExtensionHint"),
+      customDateLabel: tUserMgmt("quickRenew.customDateLabel"),
+      customDateHint: tUserMgmt("quickRenew.customDateHint"),
       quickOptions: {
         "7days": tUserMgmt("quickRenew.quickOptions.7days"),
         "30days": tUserMgmt("quickRenew.quickOptions.30days"),
@@ -317,16 +347,38 @@ export function UserManagementTable({
     expiresAt: Date,
     enableUser?: boolean
   ): Promise<{ ok: boolean }> => {
+    // 乐观更新：立即更新UI
+    setOptimisticUserExpiries((prev) => {
+      const next = new Map(prev);
+      next.set(userId, expiresAt);
+      return next;
+    });
+
     try {
       const res = await renewUser(userId, { expiresAt: expiresAt.toISOString(), enableUser });
       if (!res.ok) {
+        // 失败时回滚
+        setOptimisticUserExpiries((prev) => {
+          const next = new Map(prev);
+          next.delete(userId);
+          return next;
+        });
         toast.error(res.error || tUserMgmt("quickRenew.failed"));
         return { ok: false };
       }
       toast.success(tUserMgmt("quickRenew.success"));
+      // 刷新服务端数据（成功后乐观更新状态会在useEffect中被props覆盖）
+      // 使 React Query 缓存失效，确保数据刷新
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       router.refresh();
       return { ok: true };
     } catch (error) {
+      // 失败时回滚
+      setOptimisticUserExpiries((prev) => {
+        const next = new Map(prev);
+        next.delete(userId);
+        return next;
+      });
       console.error("[QuickRenew] failed", error);
       toast.error(tUserMgmt("quickRenew.failed"));
       return { ok: false };
@@ -508,6 +560,7 @@ export function UserManagementTable({
                           onSelectKey={showMultiSelect ? onSelectKey : undefined}
                           onEditUser={(keyId) => openEditDialog(user.id, keyId)}
                           onQuickRenew={isAdmin ? handleOpenQuickRenew : undefined}
+                          optimisticExpiresAt={optimisticUserExpiries.get(user.id)}
                           currentUser={currentUser}
                           currencyCode={currencyCode}
                           translations={rowTranslations}

@@ -4,6 +4,138 @@
 
 ---
 
+## [v0.3.39](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.39) - 2025-12-31
+
+### 新增
+
+- 新增飞书 (Feishu) Webhook 通知支持，支持飞书机器人卡片消息推送 (#490) [@Kevin Cui](https://github.com/kevin-cui-tw)
+- Webhook 平台自动检测功能，根据 URL 自动识别平台类型并显示对应徽章 (#487)
+- 请求过滤器新增供应商/分组绑定功能，支持为特定供应商或供应商分组设置独立的过滤规则 (#484)
+- 供应商管理页面新增内联编辑功能，支持直接在列表中编辑优先级、权重和成本系数 (#486) [@YangQing-Lin](https://github.com/YangQing-Lin)
+
+### 优化
+
+- 供应商权重最小值从 0 调整为 1，提升配置清晰度 (#486) [@YangQing-Lin](https://github.com/YangQing-Lin)
+- 请求过滤器表格 UI 优化，改进布局、滚动和工具提示显示 (#484)
+- 优化分组标签匹配性能，减少迭代数据集大小 (#484)
+
+### 修复
+
+- 修复代理转发器中未知 HTTP 状态码错误地兜底返回 OK 的问题 (#490)
+- 修复 HTTP statusText 处理问题以及 Gemini GET/HEAD 请求的处理逻辑 (#481) [@near](https://github.com/near)
+- 修复请求过滤器的安全性和 UX 问题，改进表单布局和错误提示 (#488)
+
+### 其他
+
+- 重构 Webhook 模块架构，统一渲染器接口和模板系统 (#490)
+- 新增多项单元测试覆盖：请求过滤器绑定、Webhook 渲染器、HTTP 状态文本等
+- 移除旧的微信机器人模块代码，改用新的 Webhook 架构 (#490)
+
+---
+
+## [v0.3.38](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.38) - 2025-12-29
+
+### 新增
+
+- Session 详情页新增请求/响应头日志展示，支持 Tab 切换查看 (#469)
+- 排行榜新增排序和供应商类型筛选功能 (#448) [@YewFence](https://github.com/YewFence)
+- 虚拟化表格组件 (use-virtualizer hook) 用于大数据量列表性能优化 (#467) [@NightYuYyy](https://github.com/NightYuYyy)
+- 新增 `FETCH_CONNECT_TIMEOUT` 环境变量，统一配置 Undici 连接超时（默认 30 秒）(#479, #480)
+
+### 优化
+
+- 供应商管理页面 UX 改进，优化交互体验 (#446) [@miraserver](https://github.com/miraserver)
+- 用户筛选与排序体验优化，移除使用日志用户筛选限制 (#462, #449) [@NightYu](https://github.com/NightYuYyy)
+- 缓存 tooltip 显示改进，当 5m/1h breakdown 不可用时提供友好提示 (#445) [@Hwwwww](https://github.com/Hwwwww-dev)
+- TagInput 组件和虚拟化表格稳定性增强 (#467) [@NightYuYyy](https://github.com/NightYuYyy)
+- SSE 解析工具增强，添加错误处理和测试 (#469)
+- Session 消息客户端 SSE 性能和 matchMedia 回退优化 (#469)
+
+### 修复
+
+- 修复计费模型来源配置不生效问题 (#464)
+- Codex instructions 一律透传，移除缓存与策略 (#475)
+- 修复 Session 详情页中的 tool_use_id 验证问题 (#473, #472)
+- 修复日志表格中供应商名称溢出问题 (#478) [@YangQing-Lin](https://github.com/YangQing-Lin)
+- 请求过滤器 header 修改追踪修复，确保在 Session 详情中正确显示 (#465)
+- 数据导入组件优化，移除重复描述文本 (#458) [@Abner](https://github.com)
+
+### 其他
+
+- 新增多项单元测试：undici 超时、proxy forwarder、session 等 (#469, #479)
+- 移除 codex-instructions-cache.ts 模块，简化代码结构 (#475)
+---
+
+## [v0.3.37](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.37) - 2025-12-24
+
+### 新增
+
+- Session 详情页新增请求/响应头日志展示，支持 Tab 切换查看 (#417)
+- 新增 TTFB（首字节时间）和输出速率性能指标追踪 (#421)
+- Codex 并发请求 Session 隔离功能，提升多请求场景稳定性 (#430)
+- 非管理员用户新增个人配额页面 (my-quota) (#412)
+- 用户页面供应商分组选择增强 (#424) [@Hwwwww-dev](https://github.com/Hwwwww-dev)
+- 认证错误和用户/密钥状态显示优化 (#425) [@NightYu](https://github.com/NightYuYyy)
+- 错误规则决策链记录匹配规则详情 (#416)
+
+### 优化
+
+- 使用日志表格列宽优化，采用全 flex 布局提升显示效果 (#437)
+- 供应商列宽度调整，防止内容重叠 (#443)
+- 支持缓存 5m/1h token 顶层扁平格式解析 (#443)
+- 排行榜视图时区和性能优化 (#436)
+- 移除 CANNOT_DISABLE_LAST_KEY 硬编码中文回退 [@NightYu](https://github.com/NightYuYyy)
+- 提取 normalizeRequestSequence 为共享工具函数并增强 JSON 解析日志
+
+### 修复
+
+- 修复删除密钥的两个问题 (#431, #438) [@NightYu](https://github.com/NightYuYyy)
+- 修复快捷续期到期时间计算和刷新问题 [@NightYu](https://github.com/NightYuYyy)
+- 修复创建新密钥时 isEnabled 状态未正确保存的问题 [@NightYu](https://github.com/NightYuYyy)
+- 修复编辑对话框中禁用所有密钥的问题 [@NightYu](https://github.com/NightYuYyy)
+- 修复 i18n 命名空间、翻译和图表高度问题 (#426)
+- 修复筛选器下拉和分页 Bug (#428, #429)
+- 修复空消息内容验证错误规则
+- 修复错误规则测试页面的误报警告 [@sususu](https://github.com/sususu98)
+- 修复分页时区和性能问题
+- 添加缺失的 rateLimits 和 userStatus 翻译
+- 修复 matchedRule 字段的 undefined 检查
+- 修复密钥重定向目标并增强错误处理
+
+### 其他
+
+- 新增 Session 管理辅助函数单元测试 (#420)
+- 新增 requestSequence 工具函数测试
+- 新增 usage metrics 提取测试
+
+---
+
+## [v0.3.36](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.36) - 2025-12-23
+
+### 新增
+
+- 用户和密钥快速续期功能，支持快速选择 7天/30天/90天/1年 或自定义日期续期 (#414) [@NightYu](https://github.com/NightYuYyy)
+- 用户和密钥状态翻译支持（多语言）(#414) [@NightYu](https://github.com/NightYuYyy)
+- 供应商分组新增默认值处理，优化数据库和 UI 逻辑 (#411)
+
+### 优化
+
+- 更新错误消息描述，提升用户体验 (#411)
+- 移除 docker-compose 中的外部卷配置，简化部署流程 (#411)
+- 增强代理请求处理和错误管理机制 (#411)
+- 恢复 Claude 工作流作为 Codex 的备用选项
+
+### 修复
+
+- 修复用户本地过期状态更新时的 user.id 依赖问题 (#414) [@NightYu](https://github.com/NightYuYyy)
+- 修复 maxAttemptsPerProvider 配置在供应商重试逻辑中未生效的问题 (#403, #415)
+- 修复统计组件中按钮元素缺少 cursor pointer 的问题，改善用户体验 (#401) [@Hwwwww](https://github.com/Hwwwww-dev)
+- 修复健康检查命令和错误规则插入逻辑 (#411) [@NightYu](https://github.com/NightYuYyy)
+- 修复 readLocalVersionFile 中的错误处理 (#411) [@NightYu](https://github.com/NightYuYyy)
+- 修复 releaseUrl 使用通用 releases 页面 (#411)
+
+---
+
 ## [v0.3.34](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.34) - 2025-12-22
 
 ### 新增

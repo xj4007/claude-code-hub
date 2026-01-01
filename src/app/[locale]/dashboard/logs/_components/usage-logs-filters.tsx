@@ -1,16 +1,26 @@
 "use client";
 
 import { addDays, format, parse } from "date-fns";
-import { Download } from "lucide-react";
+import { Check, ChevronsUpDown, Download } from "lucide-react";
 import { useTranslations } from "next-intl";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getKeys } from "@/actions/keys";
 import { exportUsageLogs } from "@/actions/usage-logs";
+import { searchUsersForFilter } from "@/actions/users";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -18,9 +28,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useDebounce } from "@/lib/hooks/use-debounce";
 import type { Key } from "@/types/key";
 import type { ProviderDisplay } from "@/types/provider";
-import type { UserDisplay } from "@/types/user";
 import {
   useLazyEndpoints,
   useLazyModels,
@@ -33,10 +43,8 @@ const COMMON_STATUS_CODES: number[] = [200, 400, 401, 429, 500];
 
 interface UsageLogsFiltersProps {
   isAdmin: boolean;
-  users: UserDisplay[];
   providers: ProviderDisplay[];
   initialKeys: Key[];
-  isUsersLoading?: boolean;
   isProvidersLoading?: boolean;
   isKeysLoading?: boolean;
   filters: {
@@ -59,10 +67,8 @@ interface UsageLogsFiltersProps {
 
 export function UsageLogsFilters({
   isAdmin,
-  users,
   providers,
   initialKeys,
-  isUsersLoading = false,
   isProvidersLoading = false,
   isKeysLoading = false,
   filters,
@@ -70,6 +76,14 @@ export function UsageLogsFilters({
   onReset,
 }: UsageLogsFiltersProps) {
   const t = useTranslations("dashboard");
+
+  const [isUsersLoading, setIsUsersLoading] = useState(false);
+  const [userSearchTerm, setUserSearchTerm] = useState("");
+  const debouncedUserSearchTerm = useDebounce(userSearchTerm, 300);
+  const [availableUsers, setAvailableUsers] = useState<Array<{ id: number; name: string }>>([]);
+  const userSearchRequestIdRef = useRef(0);
+  const lastLoadedUserSearchTermRef = useRef<string | undefined>(undefined);
+  const isMountedRef = useRef(true);
 
   // 惰性加载 hooks - 下拉展开时才加载数据
   const {
@@ -96,9 +110,76 @@ export function UsageLogsFilters({
     return dynamicOnly;
   }, [dynamicStatusCodes]);
 
+  const userMap = useMemo(
+    () => new Map(availableUsers.map((user) => [user.id, user.name])),
+    [availableUsers]
+  );
+
+  const providerMap = useMemo(
+    () => new Map(providers.map((provider) => [provider.id, provider.name])),
+    [providers]
+  );
+
   const [keys, setKeys] = useState<Key[]>(initialKeys);
   const [localFilters, setLocalFilters] = useState(filters);
   const [isExporting, setIsExporting] = useState(false);
+  const [userPopoverOpen, setUserPopoverOpen] = useState(false);
+  const [providerPopoverOpen, setProviderPopoverOpen] = useState(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const loadUsersForFilter = useCallback(async (term?: string) => {
+    const requestId = ++userSearchRequestIdRef.current;
+    setIsUsersLoading(true);
+    lastLoadedUserSearchTermRef.current = term;
+
+    try {
+      const result = await searchUsersForFilter(term);
+      if (!isMountedRef.current || requestId !== userSearchRequestIdRef.current) return;
+
+      if (result.ok) {
+        setAvailableUsers(result.data);
+      } else {
+        console.error("Failed to load users for filter:", result.error);
+        setAvailableUsers([]);
+      }
+    } catch (error) {
+      if (!isMountedRef.current || requestId !== userSearchRequestIdRef.current) return;
+
+      console.error("Failed to load users for filter:", error);
+      setAvailableUsers([]);
+    } finally {
+      if (isMountedRef.current && requestId === userSearchRequestIdRef.current) {
+        setIsUsersLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadUsersForFilter(undefined);
+  }, [isAdmin, loadUsersForFilter]);
+
+  useEffect(() => {
+    if (!isAdmin || !userPopoverOpen) return;
+
+    const term = debouncedUserSearchTerm.trim() || undefined;
+    if (term === lastLoadedUserSearchTermRef.current) return;
+
+    void loadUsersForFilter(term);
+  }, [isAdmin, userPopoverOpen, debouncedUserSearchTerm, loadUsersForFilter]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (!userPopoverOpen) {
+      setUserSearchTerm("");
+    }
+  }, [isAdmin, userPopoverOpen]);
 
   useEffect(() => {
     if (initialKeys.length > 0) {
@@ -263,26 +344,74 @@ export function UsageLogsFilters({
         {isAdmin && (
           <div className="space-y-2 lg:col-span-4">
             <Label>{t("logs.filters.user")}</Label>
-            <Select
-              value={localFilters.userId?.toString() || ""}
-              onValueChange={handleUserChange}
-              disabled={isUsersLoading}
-            >
-              <SelectTrigger>
-                <SelectValue
-                  placeholder={
-                    isUsersLoading ? t("logs.stats.loading") : t("logs.filters.allUsers")
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {users.map((user) => (
-                  <SelectItem key={user.id} value={user.id.toString()}>
-                    {user.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={userPopoverOpen} onOpenChange={setUserPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={userPopoverOpen}
+                  type="button"
+                  className="w-full justify-between"
+                >
+                  {localFilters.userId ? (
+                    (userMap.get(localFilters.userId) ?? localFilters.userId.toString())
+                  ) : (
+                    <span className="text-muted-foreground">
+                      {isUsersLoading ? t("logs.stats.loading") : t("logs.filters.allUsers")}
+                    </span>
+                  )}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-[320px] p-0"
+                align="start"
+                onWheel={(e) => e.stopPropagation()}
+                onTouchMove={(e) => e.stopPropagation()}
+              >
+                <Command shouldFilter={false}>
+                  <CommandInput
+                    placeholder={t("logs.filters.searchUser")}
+                    value={userSearchTerm}
+                    onValueChange={(value) => setUserSearchTerm(value)}
+                  />
+                  <CommandList className="max-h-[250px] overflow-y-auto">
+                    <CommandEmpty>
+                      {isUsersLoading ? t("logs.stats.loading") : t("logs.filters.noUserFound")}
+                    </CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value={t("logs.filters.allUsers")}
+                        onSelect={() => {
+                          void handleUserChange("");
+                          setUserPopoverOpen(false);
+                        }}
+                        className="cursor-pointer"
+                      >
+                        <span className="flex-1">{t("logs.filters.allUsers")}</span>
+                        {!localFilters.userId && <Check className="h-4 w-4 text-primary" />}
+                      </CommandItem>
+                      {availableUsers.map((user) => (
+                        <CommandItem
+                          key={user.id}
+                          value={user.name}
+                          onSelect={() => {
+                            void handleUserChange(user.id.toString());
+                            setUserPopoverOpen(false);
+                          }}
+                          className="cursor-pointer"
+                        >
+                          <span className="flex-1">{user.name}</span>
+                          {localFilters.userId === user.id && (
+                            <Check className="h-4 w-4 text-primary" />
+                          )}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
         )}
 
@@ -324,31 +453,81 @@ export function UsageLogsFilters({
         {isAdmin && (
           <div className="space-y-2 lg:col-span-4">
             <Label>{t("logs.filters.provider")}</Label>
-            <Select
-              value={localFilters.providerId?.toString() || ""}
-              onValueChange={(value: string) =>
-                setLocalFilters({
-                  ...localFilters,
-                  providerId: value ? parseInt(value, 10) : undefined,
-                })
-              }
-              disabled={isProvidersLoading}
-            >
-              <SelectTrigger>
-                <SelectValue
-                  placeholder={
-                    isProvidersLoading ? t("logs.stats.loading") : t("logs.filters.allProviders")
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {providers.map((provider) => (
-                  <SelectItem key={provider.id} value={provider.id.toString()}>
-                    {provider.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={providerPopoverOpen} onOpenChange={setProviderPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={providerPopoverOpen}
+                  disabled={isProvidersLoading}
+                  type="button"
+                  className="w-full justify-between"
+                >
+                  {localFilters.providerId ? (
+                    (providerMap.get(localFilters.providerId) ?? localFilters.providerId.toString())
+                  ) : (
+                    <span className="text-muted-foreground">
+                      {isProvidersLoading
+                        ? t("logs.stats.loading")
+                        : t("logs.filters.allProviders")}
+                    </span>
+                  )}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-[320px] p-0"
+                align="start"
+                onWheel={(e) => e.stopPropagation()}
+                onTouchMove={(e) => e.stopPropagation()}
+              >
+                <Command shouldFilter={true}>
+                  <CommandInput placeholder={t("logs.filters.searchProvider")} />
+                  <CommandList className="max-h-[250px] overflow-y-auto">
+                    <CommandEmpty>
+                      {isProvidersLoading
+                        ? t("logs.stats.loading")
+                        : t("logs.filters.noProviderFound")}
+                    </CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value={t("logs.filters.allProviders")}
+                        onSelect={() => {
+                          setLocalFilters({
+                            ...localFilters,
+                            providerId: undefined,
+                          });
+                          setProviderPopoverOpen(false);
+                        }}
+                        className="cursor-pointer"
+                      >
+                        <span className="flex-1">{t("logs.filters.allProviders")}</span>
+                        {!localFilters.providerId && <Check className="h-4 w-4 text-primary" />}
+                      </CommandItem>
+                      {providers.map((provider) => (
+                        <CommandItem
+                          key={provider.id}
+                          value={provider.name}
+                          onSelect={() => {
+                            setLocalFilters({
+                              ...localFilters,
+                              providerId: provider.id,
+                            });
+                            setProviderPopoverOpen(false);
+                          }}
+                          className="cursor-pointer"
+                        >
+                          <span className="flex-1">{provider.name}</span>
+                          {localFilters.providerId === provider.id && (
+                            <Check className="h-4 w-4 text-primary" />
+                          )}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
         )}
 

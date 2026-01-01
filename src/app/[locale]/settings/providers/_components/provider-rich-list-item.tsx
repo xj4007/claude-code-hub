@@ -42,13 +42,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { PROVIDER_GROUP, PROVIDER_LIMITS } from "@/lib/constants/provider.constants";
 import { getProviderTypeConfig, getProviderTypeTranslationKey } from "@/lib/provider-type-utils";
 import { copyToClipboard, isClipboardSupported } from "@/lib/utils/clipboard";
+import { getContrastTextColor, getGroupColor } from "@/lib/utils/color";
 import type { CurrencyCode } from "@/lib/utils/currency";
 import { formatCurrency } from "@/lib/utils/currency";
 import type { ProviderDisplay } from "@/types/provider";
 import type { User } from "@/types/user";
 import { ProviderForm } from "./forms/provider-form";
+import { InlineEditPopover } from "./inline-edit-popover";
 
 interface ProviderRichListItemProps {
   provider: ProviderDisplay;
@@ -93,6 +96,35 @@ export function ProviderRichListItem({
   const tTypes = useTranslations("settings.providers.types");
   const tList = useTranslations("settings.providers.list");
   const tTimeout = useTranslations("settings.providers.form.sections.timeout");
+  const tInline = useTranslations("settings.providers.inlineEdit");
+
+  const validatePriority = (raw: string) => {
+    if (raw.length === 0) return tInline("priorityInvalid");
+    const value = Number(raw);
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > 2147483647)
+      return tInline("priorityInvalid");
+    return null;
+  };
+
+  const validateWeight = (raw: string) => {
+    if (raw.length === 0) return tInline("weightInvalid");
+    const value = Number(raw);
+    if (
+      !Number.isFinite(value) ||
+      !Number.isInteger(value) ||
+      value < PROVIDER_LIMITS.WEIGHT.MIN ||
+      value > PROVIDER_LIMITS.WEIGHT.MAX
+    )
+      return tInline("weightInvalid");
+    return null;
+  };
+
+  const validateCostMultiplier = (raw: string) => {
+    if (raw.length === 0) return tInline("costMultiplierInvalid");
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) return tInline("costMultiplierInvalid");
+    return null;
+  };
 
   // 获取供应商类型配置
   const typeConfig = getProviderTypeConfig(provider.providerType);
@@ -252,6 +284,32 @@ export function ProviderRichListItem({
     });
   };
 
+  const createSaveHandler = (fieldName: "priority" | "weight" | "cost_multiplier") => {
+    return async (value: number) => {
+      try {
+        const res = await editProvider(provider.id, { [fieldName]: value } as Parameters<
+          typeof editProvider
+        >[1]);
+        if (res.ok) {
+          toast.success(tInline("saveSuccess"));
+          queryClient.invalidateQueries({ queryKey: ["providers"] });
+          router.refresh();
+          return true;
+        }
+        toast.error(tInline("saveFailed"), { description: res.error || tList("unknownError") });
+        return false;
+      } catch (error) {
+        console.error(`更新 ${fieldName} 失败:`, error);
+        toast.error(tInline("saveFailed"), { description: tList("unknownError") });
+        return false;
+      }
+    };
+  };
+
+  const handleSavePriority = createSaveHandler("priority");
+  const handleSaveWeight = createSaveHandler("weight");
+  const handleSaveCostMultiplier = createSaveHandler("cost_multiplier");
+
   return (
     <>
       <div className="flex items-center gap-4 py-3 px-4 border-b hover:bg-muted/50 transition-colors">
@@ -294,15 +352,37 @@ export function ProviderRichListItem({
             <span className="font-semibold truncate">{provider.name}</span>
 
             {/* Group Tags (supports comma-separated values) */}
-            {provider.groupTag
-              ?.split(",")
-              .map((t) => t.trim())
-              .filter(Boolean)
-              .map((tag, index) => (
-                <Badge key={`${tag}-${index}`} variant="outline" className="flex-shrink-0">
-                  {tag}
-                </Badge>
-              ))}
+            {(provider.groupTag
+              ? provider.groupTag
+                  .split(",")
+                  .map((t) => t.trim())
+                  .filter(Boolean)
+              : []
+            ).length > 0 ? (
+              provider.groupTag
+                ?.split(",")
+                .map((t) => t.trim())
+                .filter(Boolean)
+                .map((tag, index) => {
+                  const bgColor = getGroupColor(tag);
+                  return (
+                    <Badge
+                      key={`${tag}-${index}`}
+                      className="flex-shrink-0 text-xs"
+                      style={{
+                        backgroundColor: bgColor,
+                        color: getContrastTextColor(bgColor),
+                      }}
+                    >
+                      {tag}
+                    </Badge>
+                  );
+                })
+            ) : (
+              <Badge variant="outline" className="flex-shrink-0">
+                {PROVIDER_GROUP.DEFAULT}
+              </Badge>
+            )}
 
             {/* 熔断器警告 */}
             {healthStatus && healthStatus.circuitState === "open" && (
@@ -369,15 +449,52 @@ export function ProviderRichListItem({
         <div className="hidden md:grid grid-cols-3 gap-4 text-center flex-shrink-0">
           <div>
             <div className="text-xs text-muted-foreground">{tList("priority")}</div>
-            <div className="font-medium">{provider.priority}</div>
+            <div className="font-medium">
+              {canEdit ? (
+                <InlineEditPopover
+                  value={provider.priority}
+                  label={tInline("priorityLabel")}
+                  type="integer"
+                  validator={validatePriority}
+                  onSave={handleSavePriority}
+                />
+              ) : (
+                <span>{provider.priority}</span>
+              )}
+            </div>
           </div>
           <div>
             <div className="text-xs text-muted-foreground">{tList("weight")}</div>
-            <div className="font-medium">{provider.weight}</div>
+            <div className="font-medium">
+              {canEdit ? (
+                <InlineEditPopover
+                  value={provider.weight}
+                  label={tInline("weightLabel")}
+                  type="integer"
+                  validator={validateWeight}
+                  onSave={handleSaveWeight}
+                />
+              ) : (
+                <span>{provider.weight}</span>
+              )}
+            </div>
           </div>
           <div>
             <div className="text-xs text-muted-foreground">{tList("costMultiplier")}</div>
-            <div className="font-medium">{provider.costMultiplier}x</div>
+            <div className="font-medium">
+              {canEdit ? (
+                <InlineEditPopover
+                  value={provider.costMultiplier}
+                  label={tInline("costMultiplierLabel")}
+                  validator={validateCostMultiplier}
+                  onSave={handleSaveCostMultiplier}
+                  suffix="x"
+                  type="number"
+                />
+              ) : (
+                <span>{provider.costMultiplier}x</span>
+              )}
+            </div>
           </div>
         </div>
 

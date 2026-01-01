@@ -437,6 +437,23 @@ const DEFAULT_ERROR_RULES = [
       },
     },
   },
+  // Issue #432: Empty message content validation error (non-retryable)
+  {
+    pattern: "all messages must have non-empty content",
+    category: "validation_error",
+    description: "Message content is empty (client error)",
+    matchType: "contains" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 89,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "validation_error",
+        message: "消息内容不能为空，请确保所有消息都有有效内容（最后一条 assistant 消息除外）",
+      },
+    },
+  },
   // Issue #366: Tool names must be unique (MCP server configuration error)
   {
     pattern: "Tool names must be unique",
@@ -452,6 +469,41 @@ const DEFAULT_ERROR_RULES = [
       error: {
         type: "validation_error",
         message: "工具名称重复，请检查 MCP 服务器配置确保工具名称唯一",
+      },
+    },
+  },
+  // Issue #470: server_tool_use.id format validation error (non-retryable)
+  {
+    pattern: "String should match pattern.*srvtoolu_|server_tool_use.*id.*should.*match",
+    category: "validation_error",
+    description: "server_tool_use.id format validation error (client error)",
+    matchType: "regex" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 89,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "validation_error",
+        message: "server_tool_use.id 格式错误，必须以 srvtoolu_ 开头且仅包含字母、数字和下划线",
+      },
+    },
+  },
+  // Issue #471: tool_use_id found in tool_result blocks (non-retryable client error)
+  {
+    pattern:
+      "unexpected.*['\"]tool_use_id['\"].*found in.*['\"]tool_result['\"]|messages\\..*\\.content\\..*: unexpected ['\"]tool_use_id['\"].*['\"]tool_result['\"]",
+    category: "validation_error",
+    description: "tool_use_id field incorrectly placed in tool_result blocks (client error)",
+    matchType: "regex" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 89,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "validation_error",
+        message: "tool_result 块中不应包含 tool_use_id 字段，请检查消息格式",
       },
     },
   },
@@ -692,8 +744,16 @@ export async function syncDefaultErrorRules(): Promise<{
 
       if (existingIsDefault === undefined) {
         // pattern 不存在，直接插入
-        await tx.insert(errorRules).values(rule);
-        counters.inserted += 1;
+        const inserted = await tx
+          .insert(errorRules)
+          .values(rule)
+          .onConflictDoNothing({ target: errorRules.pattern })
+          .returning({ id: errorRules.id });
+        if (inserted.length > 0) {
+          counters.inserted += 1;
+        } else {
+          counters.skipped += 1;
+        }
         continue;
       }
 

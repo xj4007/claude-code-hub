@@ -331,9 +331,9 @@ export const CreateProviderSchema = z.object({
   is_enabled: z.boolean().optional().default(PROVIDER_DEFAULTS.IS_ENABLED),
   weight: z
     .number()
-    .int()
-    .min(PROVIDER_LIMITS.WEIGHT.MIN)
-    .max(PROVIDER_LIMITS.WEIGHT.MAX)
+    .int("权重必须是整数")
+    .min(PROVIDER_LIMITS.WEIGHT.MIN, "权重不能小于 1")
+    .max(PROVIDER_LIMITS.WEIGHT.MAX, "权重不能超过 100")
     .optional()
     .default(PROVIDER_DEFAULTS.WEIGHT),
   priority: z
@@ -354,11 +354,6 @@ export const CreateProviderSchema = z.object({
   model_redirects: z.record(z.string(), z.string()).nullable().optional(),
   allowed_models: z.array(z.string()).nullable().optional(),
   join_claude_pool: z.boolean().optional().default(false),
-  // Codex Instructions 策略
-  codex_instructions_strategy: z
-    .enum(["auto", "force_official", "keep_original"])
-    .optional()
-    .default("auto"),
   // MCP 透传配置
   mcp_passthrough_type: z.enum(["none", "minimax", "glm", "custom"]).optional().default("none"),
   mcp_passthrough_url: z
@@ -537,9 +532,9 @@ export const UpdateProviderSchema = z
     is_enabled: z.boolean().optional(),
     weight: z
       .number()
-      .int()
-      .min(PROVIDER_LIMITS.WEIGHT.MIN)
-      .max(PROVIDER_LIMITS.WEIGHT.MAX)
+      .int("权重必须是整数")
+      .min(PROVIDER_LIMITS.WEIGHT.MIN, "权重不能小于 1")
+      .max(PROVIDER_LIMITS.WEIGHT.MAX, "权重不能超过 100")
       .optional(),
     priority: z
       .number()
@@ -557,7 +552,6 @@ export const UpdateProviderSchema = z
     model_redirects: z.record(z.string(), z.string()).nullable().optional(),
     allowed_models: z.array(z.string()).nullable().optional(),
     join_claude_pool: z.boolean().optional(),
-    codex_instructions_strategy: z.enum(["auto", "force_official", "keep_original"]).optional(),
     // MCP 透传配置
     mcp_passthrough_type: z.enum(["none", "minimax", "glm", "custom"]).optional(),
     mcp_passthrough_url: z
