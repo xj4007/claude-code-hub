@@ -108,6 +108,162 @@ function applyCacheTtlOverrideToMessage(
   return applied;
 }
 
+/**
+ * 为非 Claude Code 请求添加 Claude Code 特征
+ *
+ * 伪装内容：
+ * 1. messages 第一个元素的 content 数组开头插入 <system-reminder>
+ * 2. system 数组开头插入 Claude Code 标识
+ * 3. 添加 metadata.user_id（使用统一客户端标识或固定值）
+ */
+function disguiseAsClaudeCodeRequest(
+  body: Record<string, unknown>,
+  provider: ProxySession["provider"]
+): void {
+  if (!provider) return;
+
+  try {
+    // 1. 处理 messages - 在第一个 content 数组开头插入 <system-reminder>
+    const messages = body.messages as Array<Record<string, unknown>>;
+    if (messages && Array.isArray(messages) && messages.length > 0) {
+      const firstMessage = messages[0];
+      let content = firstMessage.content;
+
+      // 如果 content 是字符串，转换为数组格式
+      if (typeof content === "string") {
+        content = [
+          {
+            type: "text",
+            text: content,
+          },
+        ];
+        firstMessage.content = content;
+      }
+
+      // 确保 content 是数组
+      if (Array.isArray(content)) {
+        // 检查是否已经有 <system-reminder>
+        const hasSystemReminder = content.some(
+          (item) =>
+            typeof item === "object" &&
+            item !== null &&
+            "type" in item &&
+            item.type === "text" &&
+            "text" in item &&
+            String(item.text || "").includes("<system-reminder>")
+        );
+
+        if (!hasSystemReminder) {
+          // 在开头插入 <system-reminder>
+          content.unshift({
+            type: "text",
+            text: "<system-reminder></system-reminder>",
+          });
+
+          logger.debug("ProxyForwarder: Added <system-reminder> to messages", {
+            providerId: provider.id,
+          });
+        }
+      }
+    }
+
+    // 2. 处理 system - 在开头插入 Claude Code 标识
+    let system = body.system;
+
+    // 如果 system 是字符串，转换为数组格式
+    if (typeof system === "string") {
+      system = [
+        {
+          type: "text",
+          text: system,
+        },
+      ];
+      body.system = system;
+    }
+
+    // 如果 system 不存在，创建数组
+    if (!system) {
+      system = [];
+      body.system = system;
+    }
+
+    // 确保 system 是数组
+    if (Array.isArray(system)) {
+      // 检查是否已经有 Claude Code 标识
+      const hasClaudeCodeIdentity = system.some(
+        (item) =>
+          typeof item === "object" &&
+          item !== null &&
+          "type" in item &&
+          item.type === "text" &&
+          "text" in item &&
+          String(item.text || "").includes(
+            "You are Claude Code, Anthropic's official CLI for Claude."
+          )
+      );
+
+      if (!hasClaudeCodeIdentity) {
+        // 在开头插入 Claude Code 标识
+        system.unshift({
+          type: "text",
+          text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        });
+
+        logger.debug("ProxyForwarder: Added Claude Code identity to system", {
+          providerId: provider.id,
+        });
+      }
+    }
+
+    // 3. 处理 metadata.user_id
+    let metadata = body.metadata as Record<string, unknown> | undefined;
+    if (!metadata) {
+      metadata = {};
+      body.metadata = metadata;
+    }
+
+    if (!metadata.user_id) {
+      // 生成 user_id：优先使用供应商的统一客户端标识
+      let clientId: string;
+
+      if (provider.useUnifiedClientId && provider.unifiedClientId) {
+        clientId = provider.unifiedClientId;
+        logger.debug("ProxyForwarder: Using provider unified client ID", {
+          providerId: provider.id,
+          clientIdPrefix: clientId.substring(0, 16) + "...",
+        });
+      } else {
+        // 使用固定默认值
+        clientId = "161cf9dec4f981e08a0d7971fa065ca51550a8eb87be857651ae40a20dd9a5ed";
+        logger.debug("ProxyForwarder: Using default client ID", {
+          providerId: provider.id,
+        });
+      }
+
+      // 生成随机 session UUID
+      const sessionUuid = crypto.randomUUID();
+
+      metadata.user_id = `user_${clientId}_account__session_${sessionUuid}`;
+
+      logger.info("ProxyForwarder: Added metadata.user_id for disguise", {
+        providerId: provider.id,
+        userIdPrefix: String(metadata.user_id).substring(0, 30) + "...",
+      });
+    }
+
+    logger.info("ProxyForwarder: Successfully disguised request as Claude Code", {
+      providerId: provider.id,
+      providerName: provider.name,
+    });
+  } catch (error) {
+    logger.error("ProxyForwarder: Failed to disguise request as Claude Code", {
+      providerId: provider.id,
+      error,
+    });
+    // 伪装失败不影响请求继续
+  }
+}
+
 function clampRetryAttempts(value: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return RETRY_LIMITS.MIN;
@@ -977,6 +1133,14 @@ export class ProxyForwarder {
           });
           // 转换失败时继续使用原始请求
         }
+      }
+
+      // ⭐ Claude Code 请求伪装（针对 2api 分组的非 Claude Code 请求）
+      if (
+        session.needsClaudeCodeDisguise &&
+        (provider.providerType === "claude" || provider.providerType === "claude-auth")
+      ) {
+        disguiseAsClaudeCodeRequest(session.request.message, provider);
       }
 
       if (
