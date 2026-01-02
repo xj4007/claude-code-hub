@@ -79,6 +79,9 @@ export class ProxySession {
   // Set by guards (e.g., ProxyClientGuard) to override user/key group constraints
   forcedProviderGroup?: string;
 
+  // 标记此请求是否需要 Claude Code 伪装（用于 2api 分组）
+  needsClaudeCodeDisguise?: boolean;
+
   // 模型重定向追踪：保存原始模型名（重定向前）
   private originalModelName: string | null = null;
 
