@@ -1,3 +1,89 @@
+你需要重新构建 Next.js 应用，然后再构建 Docker 镜像：
+
+# 1. 重新构建 Next.js（这会更新 .next/standalone 中的文件）
+bun run build
+
+# 2. 重新构建并启动 Docker
+docker compose down
+docker compose up -d --build
+
+🔍 为什么这次需要 IF NOT EXISTS？
+这次出现问题的原因是：
+你的数据库字段已经存在（之前可能手动执行过 SQL 或部分迁移成功了）
+但迁移记录表 __drizzle_migrations 中没有记录（迁移 37、38、39 未被标记为已执行）
+所以 Drizzle 认为这些迁移还没执行，会再次尝试添加已存在的字段
+✅ 正常情况下的流程
+正常的迁移流程应该是这样的：
+
+# 1. 从 main 合并代码（包含新的迁移文件）
+git pull origin main
+
+# 2. 重启应用，Drizzle 自动执行新迁移
+docker compose restart app
+
+# 3. 迁移成功后，__drizzle_migrations 表会记录已执行的迁移
+# 4. 下次启动时，Drizzle 会跳过已执行的迁移
+只要迁移执行成功并被记录，就不会重复执行，也就不需要 IF NOT EXISTS。
+🎯 未来你应该这样做
+场景 1：从 main 合并新迁移（常规情况）
+
+# 合并 main 分支
+git checkout dev
+git merge main
+
+# 如果有新的迁移文件，直接重启应用
+docker compose restart app
+
+# 查看日志确认迁移成功
+docker compose logs -f app
+✅ 不需要修改迁移文件，Drizzle 会自动执行并记录。
+场景 2：在 dev 分支添加新字段
+
+# 1. 修改 schema 文件（如 src/drizzle/schema.ts）
+# 2. 生成迁移
+bun run db:generate
+
+# 3. 查看生成的迁移文件，确认无误
+cat drizzle/00XX_xxx.sql
+
+# 4. 重启应用测试
+docker compose restart app
+✅ 新生成的迁移文件也不需要 IF NOT EXISTS，因为是全新的字段。
+场景 3：遇到迁移冲突（像这次一样）
+只有在以下情况才需要手动添加 IF NOT EXISTS：
+数据库状态和迁移记录不一致
+手动执行过 SQL 导致字段已存在
+迁移中途失败但部分 SQL 已执行
+这种情况下才需要：
+
+ALTER TABLE xxx ADD COLUMN IF NOT EXISTS yyy ...
+📝 预防未来出现同样问题
+为了避免再次出现迁移记录不一致的问题：
+不要手动在数据库执行 DDL 语句（除非紧急修复）
+迁移失败时先查看日志，确认失败原因
+使用 bun run db:migrate 手动执行迁移，而不是直接在数据库运行 SQL
+定期检查迁移状态：
+
+-- 查看已执行的迁移
+SELECT * FROM drizzle.__drizzle_migrations ORDER BY id DESC LIMIT 10;
+总结
+❌ 不需要每次都加 IF NOT EXISTS
+✅ 只在数据库状态异常时才需要
+✅ 正常流程下 Drizzle 会自动管理迁移记录，不会重复执行 这次是个特例，未来按照正常的 Git 工作流程就不会遇到这个问题了！
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 现在看到冲突了。main 分支已经有了 0028-0033 共 6 个迁移，而你的 0028 和它们冲突了。
 解决步骤
 1. 接受 main 的 _journal.json
