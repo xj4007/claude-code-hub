@@ -192,9 +192,7 @@ export class ProxyClientGuard {
     }
 
     // ========== Claude Code 校验逻辑 ==========
-    const hasClaudeCodeRestriction = allowedClients.some(
-      (c) => c.toLowerCase() === "claude-cli"
-    );
+    const hasClaudeCodeRestriction = allowedClients.some((c) => c.toLowerCase() === "claude-cli");
 
     if (hasClaudeCodeRestriction) {
       const isClaudeCode = ProxyClientGuard.isClaudeCodeRequest(session.request.message);
@@ -242,9 +240,7 @@ export class ProxyClientGuard {
     }
 
     // ========== Codex CLI 校验逻辑 ==========
-    const hasCodexRestriction = allowedClients.some(
-      (c) => c.toLowerCase() === "codex-cli"
-    );
+    const hasCodexRestriction = allowedClients.some((c) => c.toLowerCase() === "codex-cli");
 
     logger.info("ProxyClientGuard: Codex CLI restriction check", {
       hasCodexRestriction,
@@ -252,10 +248,7 @@ export class ProxyClientGuard {
     });
 
     if (hasCodexRestriction) {
-      const isCodexCli = ProxyClientGuard.isCodexCliRequest(
-        session.request.message,
-        session
-      );
+      const isCodexCli = ProxyClientGuard.isCodexCliRequest(session.request.message, session);
 
       logger.debug("ProxyClientGuard: Codex CLI validation", {
         userName: user.name,
@@ -268,9 +261,10 @@ export class ProxyClientGuard {
         logger.info("ProxyClientGuard: Non-Codex CLI request detected, routing to 2apiCodex", {
           userName: user.name,
           hasInstructions: !!session.request.message.instructions,
-          instructionsPreview: typeof session.request.message.instructions === "string"
-            ? session.request.message.instructions.substring(0, 100)
-            : "N/A",
+          instructionsPreview:
+            typeof session.request.message.instructions === "string"
+              ? session.request.message.instructions.substring(0, 100)
+              : "N/A",
         });
 
         session.forcedProviderGroup = "2apiCodex";
