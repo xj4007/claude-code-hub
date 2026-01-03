@@ -268,10 +268,7 @@ function ensureClaudeRequestDefaults(
  * 1. instructions 与模型匹配（缺失或不一致时替换为官方 prompt）
  * 2. session_id / conversation_id 头部存在（缺失时填充 UUID）
  */
-function ensureCodexRequestDefaults(
-  body: Record<string, unknown>,
-  session: ProxySession
-): void {
+function ensureCodexRequestDefaults(body: Record<string, unknown>, session: ProxySession): void {
   const modelName = session.request.model || "gpt-5.2-codex";
   const targetInstructions = getInstructionsForModel(modelName);
   const currentInstructions = body.instructions as string | undefined;
