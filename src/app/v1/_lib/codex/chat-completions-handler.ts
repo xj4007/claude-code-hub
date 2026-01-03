@@ -10,6 +10,7 @@ import type { Context } from "hono";
 import { logger } from "@/lib/logger";
 import { ProxyStatusTracker } from "@/lib/proxy-status-tracker";
 import { ProxyAuthenticator } from "../proxy/auth-guard";
+import { ProxyClientGuard } from "../proxy/client-guard";
 import { ProxyErrorHandler } from "../proxy/error-handler";
 import { ProxyError } from "../proxy/errors";
 import { ProxyForwarder } from "../proxy/forwarder";
@@ -148,6 +149,18 @@ export async function handleChatCompletions(c: Context): Promise<Response> {
       // 标记为 Response API 格式（响应也用 Response API 格式）
       session.setOriginalFormat("response");
 
+      // ⚠️ IMPORTANT: 确保 session.request.message 包含完整请求（用于 Client Guard 和 Disguise）
+      session.request.message = request;
+      session.request.model = (typeof request.model === "string" ? request.model : "") || "";
+
+      logger.debug("[ChatCompletions] Response API request structure", {
+        hasInstructions: "instructions" in request,
+        hasInput: "input" in request,
+        hasModel: "model" in request,
+        topLevelKeys: Object.keys(request),
+        instructionsType: typeof request.instructions,
+      });
+
       // 验证必需字段
       if (!request.model) {
         return new Response(
@@ -170,19 +183,25 @@ export async function handleChatCompletions(c: Context): Promise<Response> {
       return unauthorized;
     }
 
-    // 2. Session 分配（用于会话粘性）
+    // 2. 客户端校验（支持 Claude Code / Codex CLI 伪装）
+    const clientRestricted = await ProxyClientGuard.ensure(session);
+    if (clientRestricted) {
+      return clientRestricted;
+    }
+
+    // 3. Session 分配（用于会话粘性）
     await ProxySessionGuard.ensure(session);
 
-    // 3. 敏感词检查（在计费之前）
+    // 4. 敏感词检查（在计费之前）
     const blockedBySensitiveWord = await ProxySensitiveWordGuard.ensure(session);
     if (blockedBySensitiveWord) {
       return blockedBySensitiveWord;
     }
 
-    // 4. 限流检查
+    // 5. 限流检查
     await ProxyRateLimitGuard.ensure(session);
 
-    // 5. 供应商选择（根据模型自动匹配）
+    // 6. 供应商选择（根据模型自动匹配）
     const providerUnavailable = await ProxyProviderResolver.ensure(session);
     if (providerUnavailable) {
       // 创建失败记录（供应商不可用）

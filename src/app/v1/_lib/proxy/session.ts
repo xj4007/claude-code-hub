@@ -82,6 +82,9 @@ export class ProxySession {
   // 标记此请求是否需要 Claude Code 伪装（用于 2api 分组）
   needsClaudeCodeDisguise?: boolean;
 
+  // 标记此请求是否需要 Codex CLI 伪装（用于 2apiCodex 分组）
+  needsCodexCliDisguise?: boolean;
+
   // 模型重定向追踪：保存原始模型名（重定向前）
   private originalModelName: string | null = null;
 

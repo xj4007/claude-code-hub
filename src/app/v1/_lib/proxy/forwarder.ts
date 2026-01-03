@@ -18,6 +18,7 @@ import { SessionManager } from "@/lib/session-manager";
 import { CONTEXT_1M_BETA_HEADER, shouldApplyContext1m } from "@/lib/special-attributes";
 import type { CacheTtlPreference, CacheTtlResolved } from "@/types/cache";
 import { isOfficialCodexClient, sanitizeCodexRequest } from "../codex/utils/request-sanitizer";
+import { getInstructionsForModel } from "../codex/constants/codex-instructions";
 import { defaultRegistry } from "../converters";
 import type { Format } from "../converters/types";
 import { GeminiAuth } from "../gemini/auth";
@@ -257,6 +258,97 @@ function disguiseAsClaudeCodeRequest(
     });
   } catch (error) {
     logger.error("ProxyForwarder: Failed to disguise request as Claude Code", {
+      providerId: provider.id,
+      error,
+    });
+    // 伪装失败不影响请求继续
+  }
+}
+
+/**
+ * 为非 Codex CLI 请求添加 Codex CLI 特征
+ *
+ * 伪装内容：
+ * 1. 注入完整的 Codex CLI instructions（根据模型名称选择对应版本）
+ * 2. 添加 session_id 和 conversation_id headers
+ *
+ * 注意：不修改 User-Agent 和 originator，这些已经在客户端层面处理
+ */
+function disguiseAsCodexCliRequest(
+  body: Record<string, unknown>,
+  session: ProxySession,
+  provider: ProxySession["provider"]
+): void {
+  if (!provider) return;
+
+  try {
+    // 获取模型名称（用于选择对应的 instructions）
+    const modelName = session.request.model || "gpt-5.2-codex"; // 默认使用 gpt-5.2-codex
+    const targetInstructions = getInstructionsForModel(modelName);
+
+    logger.info("ProxyForwarder: Starting Codex CLI disguise", {
+      providerId: provider.id,
+      modelName,
+      hasInstructions: !!body.instructions,
+      instructionsType: typeof body.instructions,
+      instructionsLength: typeof body.instructions === "string" ? body.instructions.length : 0,
+      targetInstructionsLength: targetInstructions.length,
+    });
+
+    // 1. 处理 instructions - 全匹配检查并填充/替换
+    const currentInstructions = body.instructions as string | undefined;
+    const isOfficial = currentInstructions === targetInstructions;
+
+    logger.info("ProxyForwarder: Checking instructions", {
+      providerId: provider.id,
+      modelName,
+      hasInstructions: !!currentInstructions,
+      isOfficial,
+      instructionsPreview: currentInstructions?.substring(0, 100),
+    });
+
+    // 如果缺少或不匹配，填充/替换
+    if (!isOfficial) {
+      body.instructions = targetInstructions;
+
+      logger.info("ProxyForwarder: Filled/replaced Codex CLI instructions for disguise", {
+        providerId: provider.id,
+        modelName,
+        instructionsLength: targetInstructions.length,
+        action: !currentInstructions ? "filled" : "replaced",
+      });
+    } else {
+      logger.info("ProxyForwarder: Instructions already match official prompt, skipping", {
+        providerId: provider.id,
+        modelName,
+      });
+    }
+
+    // 2. 处理 session headers - 添加 Codex CLI 必需的会话管理 headers
+    const sessionUuid = crypto.randomUUID();
+
+    if (!session.headers.has("session_id")) {
+      session.headers.set("session_id", sessionUuid);
+      logger.debug("ProxyForwarder: Added session_id header", {
+        providerId: provider.id,
+        sessionId: sessionUuid,
+      });
+    }
+
+    if (!session.headers.has("conversation_id")) {
+      session.headers.set("conversation_id", sessionUuid);
+      logger.debug("ProxyForwarder: Added conversation_id header", {
+        providerId: provider.id,
+        conversationId: sessionUuid,
+      });
+    }
+
+    logger.info("ProxyForwarder: Successfully disguised request as Codex CLI", {
+      providerId: provider.id,
+      providerName: provider.name,
+    });
+  } catch (error) {
+    logger.error("ProxyForwarder: Failed to disguise request as Codex CLI", {
       providerId: provider.id,
       error,
     });
@@ -1141,6 +1233,24 @@ export class ProxyForwarder {
         (provider.providerType === "claude" || provider.providerType === "claude-auth")
       ) {
         disguiseAsClaudeCodeRequest(session.request.message, provider);
+      }
+
+      // ⭐ Codex CLI 请求伪装（针对 2apiCodex 分组的非 Codex CLI 请求）
+      if (session.needsCodexCliDisguise && provider.providerType === "codex") {
+        logger.info("ProxyForwarder: Codex CLI disguise triggered", {
+          providerId: provider.id,
+          providerName: provider.name,
+          needsCodexCliDisguise: session.needsCodexCliDisguise,
+          providerType: provider.providerType,
+        });
+        disguiseAsCodexCliRequest(session.request.message, session, provider);
+      } else if (session.needsCodexCliDisguise) {
+        logger.warn("ProxyForwarder: needsCodexCliDisguise set but provider type mismatch", {
+          providerId: provider.id,
+          providerName: provider.name,
+          providerType: provider.providerType,
+          needsCodexCliDisguise: session.needsCodexCliDisguise,
+        });
       }
 
       if (
