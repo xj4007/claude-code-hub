@@ -9,7 +9,6 @@ import type { ProxySession } from "./session";
  * Field normalization is handled by ProxyForwarder layer.
  */
 export class ProxyClientGuard {
-
   static async ensure(session: ProxySession): Promise<Response | null> {
     const user = session.authState?.user;
     if (!user) {
