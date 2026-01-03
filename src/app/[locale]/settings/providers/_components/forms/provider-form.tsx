@@ -10,6 +10,7 @@ import {
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
+  AlertDialogFooter,
   AlertDialogTrigger,
   AlertDialogHeader as AlertHeader,
   AlertDialogTitle as AlertTitle,
@@ -207,6 +208,9 @@ export function ProviderForm({
     mcpPassthrough: false,
   });
 
+  // failureThreshold 确认对话框状态
+  const [showFailureThresholdConfirm, setShowFailureThresholdConfirm] = useState(false);
+
   // 从 localStorage 加载折叠偏好
   useEffect(() => {
     const saved = localStorage.getItem("provider-form-sections");
@@ -292,6 +296,19 @@ export function ProviderForm({
       return;
     }
 
+    // 检查 failureThreshold 是否为特殊值（0 或大于 100）
+    const threshold = failureThreshold ?? 5;
+    if (threshold === 0 || threshold > 100) {
+      setShowFailureThresholdConfirm(true);
+      return;
+    }
+
+    // 正常提交
+    performSubmit();
+  };
+
+  // 实际提交逻辑
+  const performSubmit = () => {
     // 处理模型重定向（空对象转为 null）
     const parsedModelRedirects = Object.keys(modelRedirects).length > 0 ? modelRedirects : null;
 
@@ -822,6 +839,7 @@ export function ProviderForm({
                   providerType={
                     providerType as
                       | "claude"
+                      | "claude-auth"
                       | "codex"
                       | "gemini"
                       | "gemini-cli"
@@ -830,6 +848,11 @@ export function ProviderForm({
                   selectedModels={allowedModels}
                   onChange={setAllowedModels}
                   disabled={isPending}
+                  providerUrl={url}
+                  apiKey={key}
+                  proxyUrl={proxyUrl}
+                  proxyFallbackToDirect={proxyFallbackToDirect}
+                  providerId={isEdit ? provider?.id : undefined}
                 />
 
                 {allowedModels.length > 0 && (
@@ -1260,8 +1283,7 @@ export function ProviderForm({
                     }}
                     placeholder={t("sections.circuitBreaker.failureThreshold.placeholder")}
                     disabled={isPending}
-                    min="1"
-                    max="100"
+                    min="0"
                     step="1"
                   />
                   <p className="text-xs text-muted-foreground">
@@ -1747,6 +1769,51 @@ export function ProviderForm({
           </CollapsibleContent>
         </Collapsible>
 
+        {/* failureThreshold 特殊值确认对话框 */}
+        <AlertDialog
+          open={showFailureThresholdConfirm}
+          onOpenChange={setShowFailureThresholdConfirm}
+        >
+          <AlertDialogContent>
+            <AlertHeader>
+              <AlertTitle>{t("failureThresholdConfirmDialog.title")}</AlertTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3">
+                  {failureThreshold === 0 ? (
+                    <p>
+                      {t("failureThresholdConfirmDialog.descriptionDisabledPrefix")}
+                      <strong>{t("failureThresholdConfirmDialog.descriptionDisabledValue")}</strong>
+                      {t("failureThresholdConfirmDialog.descriptionDisabledMiddle")}
+                      <strong>
+                        {t("failureThresholdConfirmDialog.descriptionDisabledAction")}
+                      </strong>
+                      {t("failureThresholdConfirmDialog.descriptionDisabledSuffix")}
+                    </p>
+                  ) : (
+                    <p>
+                      {t("failureThresholdConfirmDialog.descriptionHighValuePrefix")}
+                      <strong>{failureThreshold}</strong>
+                      {t("failureThresholdConfirmDialog.descriptionHighValueSuffix")}
+                    </p>
+                  )}
+                  <p>{t("failureThresholdConfirmDialog.confirmQuestion")}</p>
+                </div>
+              </AlertDialogDescription>
+            </AlertHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("failureThresholdConfirmDialog.cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setShowFailureThresholdConfirm(false);
+                  performSubmit();
+                }}
+              >
+                {t("failureThresholdConfirmDialog.confirm")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {isEdit ? (
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4">
             <AlertDialog>
@@ -1764,7 +1831,7 @@ export function ProviderForm({
                     })}
                   </AlertDialogDescription>
                 </AlertHeader>
-                <div className="flex flex-col-reverse sm:flex-row gap-2 justify-end">
+                <AlertDialogFooter>
                   <AlertDialogCancel>{t("deleteDialog.cancel")}</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={() => {
@@ -1786,7 +1853,7 @@ export function ProviderForm({
                   >
                     {t("deleteDialog.confirm")}
                   </AlertDialogAction>
-                </div>
+                </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
 
