@@ -417,16 +417,7 @@ export class ProxyProviderResolver {
     let message = "No available providers";
     let errorType = "no_available_providers";
 
-    // Special handling for forced group routing failure
-    if (session.forcedProviderGroup) {
-      message = `Service temporarily unavailable: No providers available in required group "${session.forcedProviderGroup}"`;
-      errorType = "forced_group_unavailable";
-      logger.error("ProviderSelector: Forced provider group has no available providers", {
-        forcedGroup: session.forcedProviderGroup,
-        excludedProviders,
-        totalAttempts: attemptCount,
-      });
-    } else if (excludedProviders.length > 0) {
+    if (excludedProviders.length > 0) {
       message = `All providers unavailable (tried ${excludedProviders.length} providers)`;
       errorType = "all_providers_failed";
     } else {
@@ -625,20 +616,6 @@ export class ProxyProviderResolver {
     let effectiveGroupPick = getEffectiveProviderGroup(session);
     const keyGroupPick = session?.authState?.key?.providerGroup;
 
-    // Check for forced provider group (highest priority)
-    // Set by guards (e.g., ProxyClientGuard) when client restriction is triggered
-    const forcedGroup = session?.forcedProviderGroup;
-    if (forcedGroup) {
-      logger.info("ProviderSelector: Forced provider group detected (highest priority)", {
-        forcedGroup,
-        originalGroup: effectiveGroupPick,
-        userName: session?.userName,
-      });
-
-      // Override effective group to forced group
-      effectiveGroupPick = forcedGroup;
-    }
-
     let visibleProviders = allProviders;
 
     // 原始请求格式映射到目标供应商类型；缺省为 claude 以兼容历史请求
@@ -674,19 +651,9 @@ export class ProxyProviderResolver {
         });
       } else {
         // 严格分组隔离：用户分组内没有供应商
-        if (forcedGroup) {
-          // Forced group has no available providers - this is critical
-          logger.error("ProviderSelector: Forced provider group has no providers", {
-            forcedGroup,
-            originalGroup:
-              session?.authState?.key?.providerGroup || session?.authState?.user?.providerGroup,
-            userName: session?.userName,
-          });
-        } else {
-          logger.error("ProviderSelector: User group has no providers", {
-            effectiveGroup: effectiveGroupPick,
-          });
-        }
+        logger.error("ProviderSelector: User group has no providers", {
+          effectiveGroup: effectiveGroupPick,
+        });
         return {
           provider: null,
           context: {

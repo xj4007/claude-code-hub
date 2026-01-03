@@ -1,5 +1,6 @@
 import { STATUS_CODES } from "node:http";
 import type { Readable } from "node:stream";
+import crypto from "node:crypto";
 import { createGunzip, constants as zlibConstants } from "node:zlib";
 import type { Dispatcher } from "undici";
 import { Agent, request as undiciRequest } from "undici";
@@ -18,7 +19,6 @@ import { SessionManager } from "@/lib/session-manager";
 import { CONTEXT_1M_BETA_HEADER, shouldApplyContext1m } from "@/lib/special-attributes";
 import type { CacheTtlPreference, CacheTtlResolved } from "@/types/cache";
 import { isOfficialCodexClient, sanitizeCodexRequest } from "../codex/utils/request-sanitizer";
-import { getInstructionsForModel } from "../codex/constants/codex-instructions";
 import { defaultRegistry } from "../converters";
 import type { Format } from "../converters/types";
 import { GeminiAuth } from "../gemini/auth";
@@ -40,6 +40,7 @@ import { mapClientFormatToTransformer, mapProviderTypeToTransformer } from "./fo
 import { ModelRedirector } from "./model-redirector";
 import { ProxyProviderResolver } from "./provider-selector";
 import type { ProxySession } from "./session";
+import { getInstructionsForModel } from "../codex/constants/codex-instructions";
 
 const STANDARD_ENDPOINTS = [
   "/v1/messages",
@@ -110,14 +111,14 @@ function applyCacheTtlOverrideToMessage(
 }
 
 /**
- * 为非 Claude Code 请求添加 Claude Code 特征
+ * 确保 Claude 风格请求具备必要的默认字段。
  *
- * 伪装内容：
+ * 补全内容：
  * 1. messages 第一个元素的 content 数组开头插入 <system-reminder>
  * 2. system 数组开头插入 Claude Code 标识
  * 3. 添加 metadata.user_id（使用统一客户端标识或固定值）
  */
-function disguiseAsClaudeCodeRequest(
+function ensureClaudeRequestDefaults(
   body: Record<string, unknown>,
   provider: ProxySession["provider"]
 ): void {
@@ -161,7 +162,7 @@ function disguiseAsClaudeCodeRequest(
             text: "<system-reminder></system-reminder>",
           });
 
-          logger.debug("ProxyForwarder: Added <system-reminder> to messages", {
+          logger.debug("ProxyForwarder: Added <system-reminder> to messages (normalization)", {
             providerId: provider.id,
           });
         }
@@ -210,7 +211,7 @@ function disguiseAsClaudeCodeRequest(
           text: "You are Claude Code, Anthropic's official CLI for Claude.",
         });
 
-        logger.debug("ProxyForwarder: Added Claude Code identity to system", {
+        logger.debug("ProxyForwarder: Added Claude Code identity to system (normalization)", {
           providerId: provider.id,
         });
       }
@@ -218,46 +219,43 @@ function disguiseAsClaudeCodeRequest(
 
     // 3. 处理 metadata.user_id
     let metadata = body.metadata as Record<string, unknown> | undefined;
-    if (!metadata) {
+    if (!metadata || typeof metadata !== "object") {
       metadata = {};
       body.metadata = metadata;
     }
 
-    if (!metadata.user_id) {
-      // 生成 user_id：优先使用供应商的统一客户端标识
-      let clientId: string;
+    const defaultClientId = "161cf9dec4f981e08a0d7971fa065ca51550a8eb87be857651ae40a20dd9a5ed";
+    const hasDefaultUserId =
+      typeof metadata.user_id === "string" &&
+      String(metadata.user_id).startsWith(`user_${defaultClientId}_account__session_`);
 
-      if (provider.useUnifiedClientId && provider.unifiedClientId) {
-        clientId = provider.unifiedClientId;
-        logger.debug("ProxyForwarder: Using provider unified client ID", {
-          providerId: provider.id,
-          clientIdPrefix: clientId.substring(0, 16) + "...",
-        });
-      } else {
-        // 使用固定默认值
-        clientId = "161cf9dec4f981e08a0d7971fa065ca51550a8eb87be857651ae40a20dd9a5ed";
-        logger.debug("ProxyForwarder: Using default client ID", {
-          providerId: provider.id,
-        });
-      }
+    const shouldUseUnified =
+      provider.useUnifiedClientId &&
+      !!provider.unifiedClientId &&
+      (!metadata.user_id || hasDefaultUserId);
 
-      // 生成随机 session UUID
+    if (shouldUseUnified) {
       const sessionUuid = crypto.randomUUID();
-
-      metadata.user_id = `user_${clientId}_account__session_${sessionUuid}`;
-
-      logger.info("ProxyForwarder: Added metadata.user_id for disguise", {
+      metadata.user_id = `user_${provider.unifiedClientId}_account__session_${sessionUuid}`;
+      logger.info("ProxyForwarder: Applied provider unified client ID to metadata.user_id", {
+        providerId: provider.id,
+        userIdPrefix: String(metadata.user_id).substring(0, 30) + "...",
+      });
+    } else if (!metadata.user_id) {
+      const sessionUuid = crypto.randomUUID();
+      metadata.user_id = `user_${defaultClientId}_account__session_${sessionUuid}`;
+      logger.info("ProxyForwarder: Added metadata.user_id for normalization", {
         providerId: provider.id,
         userIdPrefix: String(metadata.user_id).substring(0, 30) + "...",
       });
     }
 
-    logger.info("ProxyForwarder: Successfully disguised request as Claude Code", {
+    logger.info("ProxyForwarder: Normalized Claude request defaults", {
       providerId: provider.id,
       providerName: provider.name,
     });
   } catch (error) {
-    logger.error("ProxyForwarder: Failed to disguise request as Claude Code", {
+    logger.error("ProxyForwarder: Failed to normalize Claude request defaults", {
       providerId: provider.id,
       error,
     });
@@ -266,93 +264,36 @@ function disguiseAsClaudeCodeRequest(
 }
 
 /**
- * 为非 Codex CLI 请求添加 Codex CLI 特征
- *
- * 伪装内容：
- * 1. 注入完整的 Codex CLI instructions（根据模型名称选择对应版本）
- * 2. 添加 session_id 和 conversation_id headers
- *
- * 注意：不修改 User-Agent 和 originator，这些已经在客户端层面处理
+ * 确保 Codex 请求具备官方必需字段：
+ * 1. instructions 与模型匹配（缺失或不一致时替换为官方 prompt）
+ * 2. session_id / conversation_id 头部存在（缺失时填充 UUID）
  */
-function disguiseAsCodexCliRequest(
+function ensureCodexRequestDefaults(
   body: Record<string, unknown>,
-  session: ProxySession,
-  provider: ProxySession["provider"]
+  session: ProxySession
 ): void {
-  if (!provider) return;
+  const modelName = session.request.model || "gpt-5.2-codex";
+  const targetInstructions = getInstructionsForModel(modelName);
+  const currentInstructions = body.instructions as string | undefined;
 
-  try {
-    // 获取模型名称（用于选择对应的 instructions）
-    const modelName = session.request.model || "gpt-5.2-codex"; // 默认使用 gpt-5.2-codex
-    const targetInstructions = getInstructionsForModel(modelName);
-
-    logger.info("ProxyForwarder: Starting Codex CLI disguise", {
-      providerId: provider.id,
+  if (currentInstructions !== targetInstructions) {
+    body.instructions = targetInstructions;
+    logger.info("ProxyForwarder: Codex instructions normalized", {
       modelName,
-      hasInstructions: !!body.instructions,
-      instructionsType: typeof body.instructions,
-      instructionsLength: typeof body.instructions === "string" ? body.instructions.length : 0,
-      targetInstructionsLength: targetInstructions.length,
+      replaced: !!currentInstructions,
     });
+  }
 
-    // 1. 处理 instructions - 全匹配检查并填充/替换
-    const currentInstructions = body.instructions as string | undefined;
-    const isOfficial = currentInstructions === targetInstructions;
-
-    logger.info("ProxyForwarder: Checking instructions", {
-      providerId: provider.id,
-      modelName,
-      hasInstructions: !!currentInstructions,
-      isOfficial,
-      instructionsPreview: currentInstructions?.substring(0, 100),
+  const sessionUuid = crypto.randomUUID();
+  if (!session.headers.has("session_id")) {
+    session.headers.set("session_id", sessionUuid);
+    logger.debug("ProxyForwarder: Added session_id header (Codex)", { sessionId: sessionUuid });
+  }
+  if (!session.headers.has("conversation_id")) {
+    session.headers.set("conversation_id", sessionUuid);
+    logger.debug("ProxyForwarder: Added conversation_id header (Codex)", {
+      conversationId: sessionUuid,
     });
-
-    // 如果缺少或不匹配，填充/替换
-    if (!isOfficial) {
-      body.instructions = targetInstructions;
-
-      logger.info("ProxyForwarder: Filled/replaced Codex CLI instructions for disguise", {
-        providerId: provider.id,
-        modelName,
-        instructionsLength: targetInstructions.length,
-        action: !currentInstructions ? "filled" : "replaced",
-      });
-    } else {
-      logger.info("ProxyForwarder: Instructions already match official prompt, skipping", {
-        providerId: provider.id,
-        modelName,
-      });
-    }
-
-    // 2. 处理 session headers - 添加 Codex CLI 必需的会话管理 headers
-    const sessionUuid = crypto.randomUUID();
-
-    if (!session.headers.has("session_id")) {
-      session.headers.set("session_id", sessionUuid);
-      logger.debug("ProxyForwarder: Added session_id header", {
-        providerId: provider.id,
-        sessionId: sessionUuid,
-      });
-    }
-
-    if (!session.headers.has("conversation_id")) {
-      session.headers.set("conversation_id", sessionUuid);
-      logger.debug("ProxyForwarder: Added conversation_id header", {
-        providerId: provider.id,
-        conversationId: sessionUuid,
-      });
-    }
-
-    logger.info("ProxyForwarder: Successfully disguised request as Codex CLI", {
-      providerId: provider.id,
-      providerName: provider.name,
-    });
-  } catch (error) {
-    logger.error("ProxyForwarder: Failed to disguise request as Codex CLI", {
-      providerId: provider.id,
-      error,
-    });
-    // 伪装失败不影响请求继续
   }
 }
 
@@ -1227,30 +1168,9 @@ export class ProxyForwarder {
         }
       }
 
-      // ⭐ Claude Code 请求伪装（针对 2api 分组的非 Claude Code 请求）
-      if (
-        session.needsClaudeCodeDisguise &&
-        (provider.providerType === "claude" || provider.providerType === "claude-auth")
-      ) {
-        disguiseAsClaudeCodeRequest(session.request.message, provider);
-      }
-
-      // ⭐ Codex CLI 请求伪装（针对 2apiCodex 分组的非 Codex CLI 请求）
-      if (session.needsCodexCliDisguise && provider.providerType === "codex") {
-        logger.info("ProxyForwarder: Codex CLI disguise triggered", {
-          providerId: provider.id,
-          providerName: provider.name,
-          needsCodexCliDisguise: session.needsCodexCliDisguise,
-          providerType: provider.providerType,
-        });
-        disguiseAsCodexCliRequest(session.request.message, session, provider);
-      } else if (session.needsCodexCliDisguise) {
-        logger.warn("ProxyForwarder: needsCodexCliDisguise set but provider type mismatch", {
-          providerId: provider.id,
-          providerName: provider.name,
-          providerType: provider.providerType,
-          needsCodexCliDisguise: session.needsCodexCliDisguise,
-        });
+      // ⭐ Claude 请求默认字段补全（缺失时才添加）
+      if (provider.providerType === "claude" || provider.providerType === "claude-auth") {
+        ensureClaudeRequestDefaults(session.request.message, provider);
       }
 
       if (
@@ -1271,6 +1191,9 @@ export class ProxyForwarder {
       if (toFormat === "codex") {
         const isOfficialClient = isOfficialCodexClient(session.userAgent);
         const log = isOfficialClient ? logger.debug.bind(logger) : logger.info.bind(logger);
+
+        // 填充 Codex 必需字段（instructions + headers）
+        ensureCodexRequestDefaults(session.request.message as Record<string, unknown>, session);
 
         log("[ProxyForwarder] Normalizing Codex request for upstream compatibility", {
           userAgent: session.userAgent || "N/A",
