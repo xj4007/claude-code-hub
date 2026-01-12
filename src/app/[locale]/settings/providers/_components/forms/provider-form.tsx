@@ -909,6 +909,60 @@ export function ProviderForm({
                     );
                   })()}
 
+                {/* 统一客户端标识配置 - 仅 Claude/Claude-Auth 供应商显示 */}
+                {(providerType === "claude" || providerType === "claude-auth") && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label
+                          htmlFor={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
+                        >
+                          {t("sections.routing.unifiedClientId.label")}
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          {t("sections.routing.unifiedClientId.desc")}
+                        </p>
+                      </div>
+                      <Switch
+                        id={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
+                        checked={useUnifiedClientId}
+                        onCheckedChange={(checked) => {
+                          setUseUnifiedClientId(checked);
+                          if (checked && !unifiedClientId) {
+                            setUnifiedClientId(generateUnifiedClientId());
+                          }
+                        }}
+                        disabled={isPending}
+                      />
+                    </div>
+
+                    {useUnifiedClientId && (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50">
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                            {t("sections.routing.unifiedClientId.idLabel")}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setUnifiedClientId(generateUnifiedClientId())}
+                            disabled={isPending}
+                          >
+                            {t("sections.routing.unifiedClientId.regenerate")}
+                          </Button>
+                        </div>
+                        <code className="block w-full select-all break-all rounded bg-gray-100 px-3 py-2 font-mono text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                          {unifiedClientId}
+                        </code>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {t("sections.routing.unifiedClientId.help")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* 模型白名单配置 */}
                 <div className="space-y-1">
                   <div className="text-sm font-medium">
