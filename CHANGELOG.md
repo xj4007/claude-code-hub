@@ -4,6 +4,112 @@
 
 ---
 
+## [v0.4.1](https://github.com/ding113/claude-code-hub/releases/tag/v0.4.1) - 2026-01-11
+
+### 新增
+
+- 价格表 UI 支持自定义模型价格和缓存价格配置 (#583) [@NieiR](https://github.com/NieiR)
+- 手动模型价格管理功能，支持添加/编辑/删除自定义模型定价 (#573) [@NieiR](https://github.com/NieiR)
+- 按成本倍数自动排序供应商优先级功能 (#555, #569) [@YangQing-Lin](https://github.com/YangQing-Lin)
+- 个人使用页面统计摘要卡片，支持自动刷新和可折叠日志 (#559) [@miraserver](https://github.com/miraserver)
+- Thinking signature 整流器，自动处理跨渠道 thinking block 签名兼容问题 (#576)
+- FluxFix 响应修复器，修复上游返回的截断 JSON、异常编码和 SSE 格式问题 (#570)
+- 新增 "Too much media" 错误规则，识别媒体内容超限错误 (#572)
+- TOML 云端价格表支持，计费查询失败时采用 fail-open 策略 (#580)
+- OpenCode 使用指南文档 (#582, #586)
+- 稳定版本发布工作流支持 (v0.4.0+)
+
+### 优化
+
+- 统一请求特殊设置命中的展示方式，改进日志可读性 (#574)
+- 移除本地 seed 价格表，强制使用云端同步确保价格数据实时性 (#584)
+
+### 修复
+
+- 修复 thinking 启用时 tool_use 作为首个 block 导致请求失败的问题 (#577)
+- 修复日志页面供应商链徽章溢出显示问题 (#581) [@YangQing-Lin](https://github.com/YangQing-Lin)
+- 修复 Drizzle 数据库迁移幂等性问题 (#578) [@YangQing-Lin](https://github.com/YangQing-Lin)
+- 修复密钥表单供应商分组选择时 default 未自动移除的问题 [@NieiR](https://github.com/NieiR)
+
+---
+
+## [v0.3.42](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.42) - 2026-01-07
+
+### 新增
+
+- Session 详情页重设计，改进布局和用户体验 (f52a2651)
+- 供应商级别参数覆写审计功能，支持 Codex reasoning/text/parallel_tool_calls 覆写 (#557, #536)
+- 供应商查询缓存功能，支持缓存开关配置，默认启用 (#554, #556) [@hank9999](https://github.com/hank9999)
+- Gemini 非流式错误规则 (#547) [@Kevin Cui](https://github.com/kevin-cui-tw)
+- Anthropic Warmup 请求拦截功能 (#525)
+- tool_use missing tool_result 错误规则 (#550, #551)
+- Codex reasoning effort mismatch 错误规则 (#544)
+
+### 优化
+
+- 供应商保存异步架构重构，提升保存性能 (54bada89)
+- 拆分 unified-edit-dialog 为专用对话框组件，改善代码结构 (#539) [@NieiR](https://github.com/NieiR)
+- Session Messages 提升内容阈值并支持导出完整请求 (#537)
+- 管理后台 UI 改进 (#538) [@miraserver](https://github.com/miraserver)
+
+### 修复
+
+- 修复 SessionStats 组件日期类型问题 (57ac4d6d)
+- 修复 CodeDisplay 组件缺少 className prop (c622705b)
+- 修复 /v1/responses 和 /v1/chat/completions 未使用 GuardPipeline 的问题 (#552)
+- 修复添加新供应商后列表未刷新的问题 (#546) [@NieiR](https://github.com/NieiR)
+- 补齐 system_settings 缺失列 (17014402)
+- 修复供应商总限额编辑、生效和重置逻辑 (#535)
+- 修复 Key 清除到期时间使用空字符串传参问题 (#534)
+- 修复 my-usage 今日统计与只读 API 自助查询 (#532)
+- 修复清除用户/Key 到期时间后保存不生效的问题 (#533)
+- 修复用户限额未设置时 Key 限额仍生效的问题 (#531)
+- 修复供应商搜索框重复清除按钮 (af17948d)
+- 修复 CodeRabbit webhook 反馈问题 (#527)
+
+### 其他
+
+- 为 available-models 工具函数添加单元测试 (#528) [@NieiR](https://github.com/NieiR)
+- 更新使用文档中 Codex 模型配置 (#545)
+- 更新 AGENT 指导文档 (cc32b47b)
+- 重新生成 blocked_by 索引迁移 (3250f210)
+
+---
+
+## [v0.3.41](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.41) - 2026-01-03
+
+### 新增
+
+- 新增 `/v1/models` 端点，聚合返回用户可用模型列表 (#517) [@NieiR](https://github.com/NieiR)
+- Webhook 系统重构：支持多目标管理、自定义模板、统一渲染架构 (#506)
+- Webhook 引导系统：旧配置迁移向导，一键升级到新架构
+- 通知系统增强：支持多类型通知绑定和全局配置 (#506)
+
+### 优化
+
+- 数据库连接池优化：采用 lazy connection 降低资源占用 (#503)
+- 请求日志写入优化：实现异步批量写入缓冲区，减少数据库压力 (#503)
+- Webhook 模板系统：支持占位符变量替换和多平台适配（钉钉、Telegram、企业微信）
+- 限额时区判断统一：修复用户层级和 Key 层级每日限额时区不一致问题 (#507)
+- 管理后台 UX 改进：优化对话框体验和 i18n 问题修复 (#514)
+- 内部 URL 白名单验证：允许配置内部地址避免 SSRF 误报 (#516)
+
+### 修复
+
+- 修复 Gemini 供应商 User-Agent 透传问题 (a4797187)
+- 修复 Codex Session 提取：优先使用 `prompt_cache_key` 作为会话标识 (#521)
+- 修复 `/v1/models` 分组隔离：确保用户只能看到授权的供应商模型 (#522)
+- 修复 Webhook 处理逻辑：加固多目标通知的并发安全性 (#522)
+- 添加 "Invalid signature in thinking block" 错误规则 (#519)
+- 请求过滤器改进：修复 SOCKS 代理问题 (#501)
+
+### 其他
+
+- 新增数据库迁移：notification_bindings, webhook_targets 表 (0043)
+- 更新 LiteLLM 模型价格数据
+
+---
+
 ## [v0.3.40](https://github.com/ding113/claude-code-hub/releases/tag/v0.3.40) - 2026-01-01
 
 ### 新增

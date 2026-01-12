@@ -100,6 +100,18 @@
       "allowGlobalViewDesc": "無効にすると、一般ユーザーはダッシュボードで自分のキーの使用統計のみを表示できます。",
       "verboseProviderError": "詳細なプロバイダーエラー",
       "verboseProviderErrorDesc": "有効にすると、すべてのプロバイダーが利用不可の場合に詳細なエラーメッセージ（プロバイダー数、レート制限の理由など）を返します。無効の場合は簡潔なエラーコードのみを返します。",
+      "interceptAnthropicWarmupRequests": "Warmup リクエストを遮断（Anthropic）",
+      "interceptAnthropicWarmupRequestsDesc": "有効にすると、Claude Code の Warmup プローブ要求は CCH が直接短い応答を返し、上流プロバイダーへのリクエストを回避します。ログには残りますが、課金/レート制限/統計には含まれません。",
+      "enableThinkingSignatureRectifier": "thinking 署名整流を有効化",
+      "enableThinkingSignatureRectifierDesc": "Anthropic プロバイダーで thinking 署名の不整合や不正なリクエストエラーが発生した場合、thinking 関連ブロックを削除して同一プロバイダーへ1回だけ再試行します（既定で有効）。",
+      "enableResponseFixer": "レスポンス整流を有効化",
+      "enableResponseFixerDesc": "上流応答の一般的な形式問題（エンコーディング、SSE、途切れた JSON）を自動修復します（既定で有効）。",
+      "responseFixerFixEncoding": "エンコーディングを修復",
+      "responseFixerFixEncodingDesc": "BOM/NULL バイトを除去し、無効な UTF-8 を正規化します。",
+      "responseFixerFixSseFormat": "SSE 形式を修復",
+      "responseFixerFixSseFormatDesc": "不足している data: 前置きを補い、改行を正規化し、よくあるフィールド形式を修正します。",
+      "responseFixerFixTruncatedJson": "途切れた JSON を修復",
+      "responseFixerFixTruncatedJsonDesc": "未閉じの括弧/引用符を補い、末尾カンマを除去し、必要に応じて null を補完します。",
       "cleanupSchedule": "クリーンアップスケジュール",
       "cleanupScheduleDesc": "自動クリーンアップの実行スケジュールを選択します",
       "configUpdated": "システム設定が更新されました。ページが更新され、通貨表示の変更が適用されます。",
@@ -371,13 +383,100 @@
   "notifications": {
     "title": "プッシュ通知",
     "description": "Webhook プッシュ通知を設定",
-    "global": {
-      "title": "通知マスタースイッチ",
-      "description": "すべてのプッシュ通知機能を有効または無効にする",
-      "enable": "プッシュ通知を有効にする"
+  "global": {
+    "title": "通知マスタースイッチ",
+    "description": "すべてのプッシュ通知機能を有効または無効にする",
+    "enable": "プッシュ通知を有効にする",
+    "legacyModeTitle": "互換モード",
+    "legacyModeDescription": "現在は旧来の単一URL通知設定を使用しています。プッシュ先を作成するとマルチターゲットモードに切り替わります。"
+  },
+  "targets": {
+    "title": "プッシュ先",
+    "description": "プッシュ先を管理します。WeCom、Feishu、DingTalk、Telegram、カスタムWebhookに対応。",
+    "add": "追加",
+    "update": "保存",
+    "edit": "編集",
+    "delete": "削除",
+    "deleteConfirmTitle": "プッシュ先を削除",
+    "deleteConfirm": "このプッシュ先を削除しますか？関連するバインドも削除されます。",
+    "enable": "有効化",
+    "statusEnabled": "有効",
+    "statusDisabled": "無効",
+    "lastTestAt": "最終テスト",
+    "lastTestNever": "未テスト",
+    "lastTestSuccess": "テスト成功",
+    "lastTestFailed": "テスト失敗",
+    "test": "テスト",
+    "testSelectType": "テスト種類を選択",
+    "emptyHint": "プッシュ先がありません。「追加」で作成してください。",
+    "created": "プッシュ先を作成しました",
+    "updated": "プッシュ先を更新しました",
+    "deleted": "プッシュ先を削除しました",
+    "bindingsSaved": "バインドを保存しました"
+  },
+  "targetDialog": {
+    "createTitle": "プッシュ先を追加",
+    "editTitle": "プッシュ先を編集",
+    "name": "名前",
+    "namePlaceholder": "例: Ops グループ",
+    "type": "プラットフォーム",
+    "selectType": "プラットフォームを選択",
+    "enable": "有効化",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlPlaceholder": "https://example.com/webhook",
+    "telegramBotToken": "Telegram Bot Token",
+    "telegramBotTokenPlaceholder": "例: 123456:ABCDEF...",
+    "telegramChatId": "Telegram Chat ID",
+    "telegramChatIdPlaceholder": "例: -1001234567890",
+    "dingtalkSecret": "DingTalk シークレット",
+    "dingtalkSecretPlaceholder": "任意（署名用）",
+    "customHeaders": "カスタムヘッダー（JSON）",
+    "customHeadersPlaceholder": "{\"X-Token\":\"...\"}",
+    "errors": {
+      "headersInvalidJson": "Headers は有効な JSON である必要があります",
+      "headersMustBeObject": "Headers は JSON オブジェクトである必要があります",
+      "headersValueMustBeString": "Headers の値は文字列である必要があります"
     },
-    "circuitBreaker": {
-      "title": "サーキットブレーカーアラート",
+    "types": {
+      "wechat": "WeCom",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "telegram": "Telegram",
+      "custom": "カスタムWebhook"
+    },
+    "proxy": {
+      "title": "プロキシ",
+      "toggle": "プロキシ設定を切り替え",
+      "url": "プロキシURL",
+      "urlPlaceholder": "http://127.0.0.1:7890",
+      "fallbackToDirect": "プロキシ失敗時に直結へフォールバック"
+    }
+  },
+  "bindings": {
+    "title": "バインド",
+    "noTargets": "プッシュ先がありません",
+    "bindTarget": "プッシュ先をバインド",
+    "enable": "有効",
+    "enableType": "この通知を有効化",
+    "advanced": "詳細",
+    "scheduleCron": "Cron",
+    "scheduleCronPlaceholder": "例: 0 9 * * *",
+    "scheduleTimezone": "タイムゾーン",
+    "templateOverride": "テンプレート上書き",
+    "editTemplateOverride": "上書きを編集",
+    "templateOverrideTitle": "テンプレート上書きを編集",
+    "boundCount": "バインド: {count}",
+    "enabledCount": "有効: {count}"
+  },
+  "templateEditor": {
+    "title": "テンプレート（JSON）",
+    "placeholder": "JSON テンプレートを入力...",
+    "jsonInvalid": "JSON が不正です",
+    "placeholders": "プレースホルダー",
+    "insert": "挿入"
+  },
+  "circuitBreaker": {
+    "title": "サーキットブレーカーアラート",
       "description": "プロバイダーが完全に遮断された時に即座にアラートを送信",
       "enable": "サーキットブレーカーアラートを有効にする",
       "webhook": "Webhook URL",
@@ -402,9 +501,9 @@
       "enable": "コストアラートを有効にする",
       "webhook": "Webhook URL",
       "webhookPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
-      "webhookTypeWeCom": "企業微信",
-      "webhookTypeFeishu": "飛書",
-      "webhookTypeUnknown": "不明なプラットフォーム。企業微信または飛書のWebhook URLを使用してください",
+      "webhookTypeWeCom": "WeCom",
+      "webhookTypeFeishu": "Feishu",
+      "webhookTypeUnknown": "不明なプラットフォームです。WeComまたはFeishuのWebhook URLを使用してください",
       "threshold": "アラートしきい値",
       "thresholdLabel": "アラートしきい値: {percent}%",
       "thresholdHelp": "消費がクォータの{percent}%に達した時にアラート",
@@ -435,24 +534,92 @@
       "description": "AIモデルの価格設定を管理します"
     },
     "searchPlaceholder": "モデル名を検索...",
+    "filters": {
+      "all": "すべて",
+      "local": "ローカル",
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "vertex": "Vertex"
+    },
+    "badges": {
+      "local": "ローカル"
+    },
+    "capabilities": {
+      "assistantPrefill": "アシスタント事前入力",
+      "computerUse": "コンピューター利用",
+      "functionCalling": "関数呼び出し",
+      "pdfInput": "PDF入力",
+      "promptCaching": "プロンプトキャッシュ",
+      "reasoning": "推論",
+      "responseSchema": "レスポンススキーマ",
+      "toolChoice": "ツール選択",
+      "vision": "ビジョン",
+      "statusSupported": "対応",
+      "statusUnsupported": "未対応",
+      "tooltip": "{label}: {status}"
+    },
     "sync": {
-      "button": "LiteLLM価格を同期",
+      "button": "クラウド価格表を同期",
       "syncing": "同期中...",
+      "checking": "競合を確認中...",
       "successWithChanges": "価格表を更新: {added}件追加、{updated}件更新、{unchanged}件変化なし",
       "successNoChanges": "価格表は最新です。更新の必要はありません",
       "failed": "同期に失敗しました",
       "failedError": "同期に失敗しました: {error}",
       "failedNoResult": "価格表は更新されましたが結果が返されていません",
       "noModels": "モデル価格が見つかりません",
-      "partialFailure": "一部更新が成功しましたが、{failed}件のモデルが失敗しました"
+      "partialFailure": "一部更新が成功しましたが、{failed}件のモデルが失敗しました",
+      "failedModels": "失敗モデル: {models}",
+      "skippedConflicts": "{count}件の手動モデルをスキップしました"
+    },
+    "conflict": {
+      "title": "上書きする項目を選択",
+      "description": "以下のモデルには手動で設定された価格があります。チェックした項目はLiteLLM価格で上書きされ、チェックしない項目は現在のままです",
+      "searchPlaceholder": "モデルを検索...",
+      "table": {
+        "modelName": "モデル",
+        "manualPrice": "手動価格",
+        "litellmPrice": "LiteLLM価格",
+        "action": "操作"
+      },
+      "viewDiff": "差異を表示",
+      "diffTitle": "価格差異",
+      "diff": {
+        "field": "フィールド",
+        "manual": "手動",
+        "litellm": "LiteLLM",
+        "inputPrice": "入力価格",
+        "outputPrice": "出力価格",
+        "imagePrice": "画像価格",
+        "provider": "プロバイダー",
+        "mode": "タイプ"
+      },
+      "pagination": {
+        "showing": "{from}〜{to}件を表示（全{total}件）"
+      },
+      "selectedCount": "{count}/{total}件のモデルを選択",
+      "noMatch": "一致するモデルが見つかりません",
+      "noConflicts": "競合なし",
+      "applyOverwrite": "上書きを適用",
+      "applying": "適用中..."
     },
     "table": {
       "modelName": "モデル名",
-      "type": "タイプ",
       "provider": "プロバイダー",
+      "capabilities": "機能",
+      "price": "価格",
       "inputPrice": "入力価格 ($/M)",
       "outputPrice": "出力価格 ($/M)",
+      "priceInput": "入力",
+      "priceOutput": "出力",
+      "pricePerRequest": "回",
+      "cacheReadPrice": "キャッシュ読み取り ($/M)",
+      "cacheCreationPrice": "キャッシュ作成 ($/M)",
+      "cache5m": "5m",
+      "cache1h": "1h+",
+      "copyModelId": "モデルIDをコピー",
       "updatedAt": "更新日時",
+      "actions": "操作",
       "typeChat": "チャット",
       "typeImage": "画像生成",
       "typeCompletion": "補完",
@@ -466,6 +633,7 @@
       "showing": "{from}〜{to}件を表示（全{total}件）",
       "previous": "前へ",
       "next": "次へ",
+      "perPageLabel": "1ページあたり",
       "perPage": "1ページあたり{size}件"
     },
     "stats": {
@@ -475,23 +643,25 @@
     },
     "dialog": {
       "title": "モデル価格表を更新",
-      "description": "モデル価格データを含むJSONファイルを選択してアップロード",
-      "selectFile": "JSONファイルをクリックして選択、またはドラッグしてください",
+      "description": "モデル価格データを含むJSONまたはTOMLファイルを選択してアップロード",
+      "selectFile": "JSON/TOMLファイルをクリックして選択、またはドラッグしてください",
       "fileSizeLimit": "ファイルサイズは10MBを超えることはできません",
       "fileSizeLimitSmall": "ファイルサイズは10MB以下です",
-      "invalidFileType": "JSON形式のファイルを選択してください",
+      "invalidFileType": "JSONまたはTOML形式のファイルを選択してください",
       "fileTooLarge": "ファイルサイズが10MBを超えています",
       "upload": "アップロードして更新",
       "uploading": "アップロード中...",
       "updatePriceTable": "価格表を更新",
       "updating": "更新中...",
-      "selectJson": "JSONファイルを選択",
+      "selectJson": "ファイルを選択",
       "updateSuccess": "価格表が正常に更新されました。{count}個のモデルを更新しました",
       "updateFailed": "更新に失敗しました",
       "systemHasBuiltIn": "システムは組み込み価格表を持っています",
       "manualDownload": "手動でダウンロードすることもできます",
-      "latestPriceTable": "最新価格表",
+      "latestPriceTable": "クラウド価格表",
       "andUploadViaButton": "、上のボタンでアップロードしてください",
+      "cloudModelCountLoading": "クラウドモデル数を読み込み中...",
+      "cloudModelCountFailed": "クラウドモデル数の読み込みに失敗しました",
       "supportedModels": "現在{count}個のモデルをサポート",
       "results": {
         "title": "更新結果",
@@ -499,9 +669,52 @@
         "success": "成功: {success}",
         "failed": "失敗: {failed}",
         "skipped": "スキップ: {skipped}",
+        "more": " (+{count})",
         "details": "詳細",
         "viewDetails": "詳細ログを表示"
       }
+    },
+    "addModel": "モデルを追加",
+    "editModel": "モデルを編集",
+    "deleteModel": "モデルを削除",
+    "addModelDescription": "新しいモデル価格設定を手動で追加します",
+    "editModelDescription": "モデルの価格設定を編集します",
+    "deleteConfirm": "モデル {name} を削除してもよろしいですか？この操作は元に戻せません。",
+    "form": {
+      "modelName": "モデルID",
+      "modelNamePlaceholder": "例: gpt-5.2-codex",
+      "modelNameRequired": "モデルIDは必須です",
+      "displayName": "表示名（任意）",
+      "displayNamePlaceholder": "例: GPT-5.2 Codex",
+      "type": "タイプ",
+      "provider": "プロバイダー",
+      "providerPlaceholder": "例: openai",
+      "requestPrice": "呼び出し単価 ($/request)",
+      "inputPrice": "入力価格 ($/M tokens)",
+      "outputPrice": "出力価格 ($/M tokens)",
+      "outputPriceImage": "出力価格 ($/image)",
+      "cacheReadPrice": "キャッシュ読み取り価格 ($/M tokens)",
+      "cacheCreationPrice5m": "キャッシュ作成価格（5m，$/M tokens）",
+      "cacheCreationPrice1h": "キャッシュ作成価格（1h+，$/M tokens）"
+    },
+    "drawer": {
+      "prefillLabel": "既存モデルを検索してプリフィル",
+      "prefillEmpty": "一致するモデルが見つかりません",
+      "prefillFailed": "検索に失敗しました",
+      "promptCachingHint": "モデルがキャッシュに対応している場合のみ有効化し、下のキャッシュ価格を設定してください",
+      "cachePricingTitle": "キャッシュ価格"
+    },
+    "actions": {
+      "edit": "編集",
+      "more": "その他の操作",
+      "delete": "削除"
+    },
+    "toast": {
+      "createSuccess": "モデルを追加しました",
+      "updateSuccess": "モデルを更新しました",
+      "deleteSuccess": "モデルを削除しました",
+      "saveFailed": "保存に失敗しました",
+      "deleteFailed": "削除に失敗しました"
     }
   },
   "providers": {
@@ -509,6 +722,22 @@
     "addFailed": "プロバイダーの追加に失敗しました",
     "addProvider": "プロバイダーを追加",
     "addSuccess": "プロバイダーが正常に追加されました",
+    "autoSort": {
+      "button": "優先度を自動ソート",
+      "dialogTitle": "プロバイダー優先度の自動ソート",
+      "dialogDescription": "コスト倍率に基づいて優先度を自動割り当て（低コスト = 高優先度）",
+      "changeCount": "{count} 件のプロバイダーが更新されます",
+      "noChanges": "変更不要（ソート済み）",
+      "costMultiplierHeader": "コスト倍率",
+      "priorityHeader": "優先度",
+      "providersHeader": "プロバイダー",
+      "changesTitle": "変更詳細",
+      "providerHeader": "プロバイダー",
+      "priorityChangeHeader": "優先度変更",
+      "confirm": "変更を適用",
+      "success": "{count} 件のプロバイダーの優先度を更新しました",
+      "error": "優先度の更新に失敗しました"
+    },
     "circuitBroken": "サーキットブレーカー作動中",
     "clone": "プロバイダーを複製",
     "cloneFailed": "コピーに失敗しました",
@@ -598,6 +827,15 @@
         "chunksCount": "{count} チャンク受信 ({format})",
         "truncatedPreview": "先頭 {length} 文字を表示、全文はコピーして確認",
         "truncatedBrief": "先頭 {length} 文字を表示、全文は「詳細を見る」をクリック",
+        "timeout": {
+          "label": "タイムアウト（秒）",
+          "desc": "テストリクエストの最大待機時間（5〜120秒）",
+          "geminiHint": "、Gemini Thinkingモデルは60秒以上を推奨"
+        },
+        "geminiAuthFallback": {
+          "warning": "ヘッダー認証に失敗し、URLパラメータ認証を使用しました",
+          "desc": "実際のプロキシ転送はヘッダー認証のみを使用するため、リクエストが失敗する可能性があります"
+        },
         "copyFormat": {
           "testResult": "テスト結果",
           "message": "メッセージ",
@@ -954,6 +1192,7 @@
         "create": "プロバイダーを追加",
         "edit": "プロバイダーを編集"
       },
+      "dialogDescription": "プロバイダーの詳細と高度な設定を構成します。",
       "url": {
         "label": "API アドレス *",
         "placeholder": "例: https://open.bigmodel.cn/api/anthropic"
@@ -1045,6 +1284,15 @@
               "desc": "グループタグ。ユーザーの providerGroup が一致する場合のみ利用可能。例: \"premium\" に設定すると providerGroup=\"premium\" のユーザーのみ対象"
             }
           },
+          "cacheTtl": {
+            "label": "キャッシュTTLオーバーライド",
+            "options": {
+              "inherit": "オーバーライドしない（クライアントに従う）",
+              "5m": "5分",
+              "1h": "1時間"
+            },
+            "desc": "プロンプトキャッシュのTTLを強制設定。cache_controlを含むリクエストにのみ適用されます。"
+          },
           "context1m": {
             "label": "1M コンテキストウィンドウ",
             "options": {
@@ -1053,6 +1301,49 @@
               "disabled": "無効"
             },
             "desc": "1M コンテキストウィンドウのサポートを設定します。Sonnet モデル（claude-sonnet-4-5、claude-sonnet-4）にのみ適用されます。有効時は段階的料金が適用されます。"
+          },
+          "codexOverrides": {
+            "reasoningEffort": {
+              "label": "推論強度オーバーライド",
+              "help": "回答前にモデルが使う推論の強度（推論トークン量）を制御します。「クライアントに従う」はリクエストを変更しません。その他の値は reasoning.effort を強制します。注意: none は GPT-5.1 のみ、xhigh は GPT-5.1-Codex-Max のみ対応で、未対応モデルではエラーになります。",
+              "options": {
+                "inherit": "オーバーライドしない（クライアントに従う）",
+                "minimal": "minimal",
+                "low": "low",
+                "medium": "medium（デフォルト）",
+                "high": "high",
+                "xhigh": "xhigh（GPT-5.1-Codex-Max のみ）",
+                "none": "none（GPT-5.1 のみ）"
+              }
+            },
+            "reasoningSummary": {
+              "label": "推論サマリーオーバーライド",
+              "help": "推論サマリーを返すかどうかを制御します。auto は簡潔、detailed は詳細です。「クライアントに従う」は reasoning.summary を変更しません。",
+              "options": {
+                "inherit": "オーバーライドしない（クライアントに従う）",
+                "auto": "auto",
+                "detailed": "detailed"
+              }
+            },
+            "textVerbosity": {
+              "label": "出力の詳細度オーバーライド",
+              "help": "モデル出力の冗長さを制御します。low は簡潔、high は詳細です。「クライアントに従う」は text.verbosity を変更しません。",
+              "options": {
+                "inherit": "オーバーライドしない（クライアントに従う）",
+                "low": "low",
+                "medium": "medium（デフォルト）",
+                "high": "high"
+              }
+            },
+            "parallelToolCalls": {
+              "label": "並列ツール呼び出しオーバーライド",
+              "help": "並列の tool calls を許可するかどうかを制御します。「クライアントに従う」は parallel_tool_calls を変更しません。無効化すると並列度が下がる可能性があります。",
+              "options": {
+                "inherit": "オーバーライドしない（クライアントに従う）",
+                "true": "強制有効",
+                "false": "強制無効"
+              }
+            }
           }
         },
         "rateLimit": {
@@ -1061,6 +1352,7 @@
             "fiveHour": "5h: ${amount}",
             "weekly": "週: ${amount}",
             "monthly": "月: ${amount}",
+            "total": "総: ${amount}",
             "concurrent": "同時: {count}",
             "none": "無制限"
           },
@@ -1074,6 +1366,10 @@
           },
           "limitMonthly": {
             "label": "月の上限 (USD)",
+            "placeholder": "空欄で無制限"
+          },
+          "limitTotal": {
+            "label": "総消費上限 (USD)",
             "placeholder": "空欄で無制限"
           },
           "limitConcurrent": {
@@ -1247,6 +1543,7 @@
       "errors": {
         "invalidUrl": "有効な API アドレスを入力してください",
         "invalidWebsiteUrl": "有効な公式サイト URL を入力してください",
+        "groupTagTooLong": "プロバイダーグループが長すぎます（合計{max}文字まで）",
         "addFailed": "プロバイダーの追加に失敗しました",
         "updateFailed": "プロバイダーの更新に失敗しました",
         "deleteFailed": "プロバイダーの削除に失敗しました"
@@ -1393,7 +1690,6 @@
       "leaderboard": "プロバイダーランキング",
       "title": "服务商管理"
     },
-    "addProvider": "プロバイダーを追加",
     "filter": {
       "status": {
         "all": "すべてのステータス",
@@ -1404,7 +1700,8 @@
         "label": "グループ:",
         "all": "すべて",
         "default": "default"
-      }
+      },
+      "circuitBroken": "サーキットブレーカー"
     },
     "subtitle": "プロバイダー管理",
     "subtitleDesc": "上流プロバイダーの支出制限とセッション並行制限を設定します。空のままにすると無制限です。",
@@ -1470,6 +1767,10 @@
       "resetCircuitSuccess": "サーキットブレーカーがリセットされました",
       "resetCircuitSuccessDesc": "プロバイダー \"{name}\" のサーキットブレーカーステータスがクリアされました",
       "resetCircuitFailed": "サーキットブレーカーのリセットに失敗しました",
+      "resetUsageTitle": "総用量をリセット",
+      "resetUsageSuccess": "総用量をリセットしました",
+      "resetUsageSuccessDesc": "プロバイダー \"{name}\" の総用量をリセットしました",
+      "resetUsageFailed": "総用量のリセットに失敗しました",
       "toggleSuccess": "プロバイダーが{status}になりました",
       "toggleSuccessDesc": "プロバイダー \"{name}\" のステータスが更新されました",
       "toggleFailed": "切り替えに失敗しました",

@@ -10,14 +10,17 @@ import {
   recordFailure,
   recordSuccess,
 } from "@/lib/circuit-breaker";
-import { isHttp2Enabled } from "@/lib/config";
+import { applyCodexProviderOverridesWithAudit } from "@/lib/codex/provider-overrides";
+import { getCachedSystemSettings, isHttp2Enabled } from "@/lib/config";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { PROVIDER_DEFAULTS, PROVIDER_LIMITS } from "@/lib/constants/provider.constants";
 import { logger } from "@/lib/logger";
 import { createProxyAgentForProvider } from "@/lib/proxy-agent";
 import { SessionManager } from "@/lib/session-manager";
 import { CONTEXT_1M_BETA_HEADER, shouldApplyContext1m } from "@/lib/special-attributes";
+import { updateMessageRequestDetails } from "@/repository/message";
 import type { CacheTtlPreference, CacheTtlResolved } from "@/types/cache";
+import { getInstructionsForModel } from "../codex/constants/codex-instructions";
 import { isOfficialCodexClient, sanitizeCodexRequest } from "../codex/utils/request-sanitizer";
 import { defaultRegistry } from "../converters";
 import type { Format } from "../converters/types";
@@ -40,7 +43,10 @@ import { mapClientFormatToTransformer, mapProviderTypeToTransformer } from "./fo
 import { ModelRedirector } from "./model-redirector";
 import { ProxyProviderResolver } from "./provider-selector";
 import type { ProxySession } from "./session";
-import { getInstructionsForModel } from "../codex/constants/codex-instructions";
+import {
+  detectThinkingSignatureRectifierTrigger,
+  rectifyAnthropicRequestMessage,
+} from "./thinking-signature-rectifier";
 
 const STANDARD_ENDPOINTS = [
   "/v1/messages",
@@ -314,7 +320,7 @@ function resolveMaxAttemptsForProvider(
 /**
  * undici request 超时配置（毫秒）
  *
- * 背景：undiciRequest() 在使用非 undici 原生 dispatcher（如 SocksProxyAgent）时，
+ * 背景：undiciRequest() 在使用自定义 dispatcher（如 SOCKS 代理）时，
  * 不会继承全局 Agent 的超时配置，需要显式传递超时参数。
  *
  * 这里与全局 undici Agent 使用同一套环境变量配置（FETCH_HEADERS_TIMEOUT / FETCH_BODY_TIMEOUT）。
@@ -434,10 +440,11 @@ export class ProxyForwarder {
       totalProvidersAttempted++;
       let attemptCount = 0; // 当前供应商的尝试次数
 
-      const maxAttemptsPerProvider = resolveMaxAttemptsForProvider(
+      let maxAttemptsPerProvider = resolveMaxAttemptsForProvider(
         currentProvider,
         envDefaultMaxAttempts
       );
+      let thinkingSignatureRectifierRetried = false;
 
       logger.info("ProxyForwarder: Trying provider", {
         providerId: currentProvider.id,
@@ -607,7 +614,7 @@ export class ProxyForwarder {
 
           // ⭐ 1. 分类错误（供应商错误 vs 系统错误 vs 客户端中断）
           // 使用异步版本确保错误规则已加载
-          const errorCategory = await categorizeErrorAsync(lastError);
+          let errorCategory = await categorizeErrorAsync(lastError);
           const errorMessage =
             lastError instanceof ProxyError
               ? lastError.getDetailedErrorMessage()
@@ -642,6 +649,148 @@ export class ProxyForwarder {
 
             // 立即抛出错误，不重试
             throw lastError;
+          }
+
+          // 2.5 Thinking signature 整流器：命中后对同供应商“整流 + 重试一次”
+          // 目标：解决 Anthropic 与非 Anthropic 渠道切换导致的 thinking 签名不兼容问题
+          // 约束：
+          // - 仅对 Anthropic 类型供应商生效
+          // - 不依赖 error rules 开关（用户可能关闭规则，但仍希望整流生效）
+          // - 不计入熔断器、不触发供应商切换
+          const isAnthropicProvider =
+            currentProvider.providerType === "claude" ||
+            currentProvider.providerType === "claude-auth";
+          const rectifierTrigger = isAnthropicProvider
+            ? detectThinkingSignatureRectifierTrigger(errorMessage)
+            : null;
+
+          if (rectifierTrigger) {
+            const settings = await getCachedSystemSettings();
+            const enabled = settings.enableThinkingSignatureRectifier ?? true;
+
+            if (enabled) {
+              // 已重试过仍失败：强制按“不可重试的客户端错误”处理，避免污染熔断器/触发供应商切换
+              if (thinkingSignatureRectifierRetried) {
+                errorCategory = ErrorCategory.NON_RETRYABLE_CLIENT_ERROR;
+              } else {
+                const requestDetailsBeforeRectify = buildRequestDetails(session);
+
+                // 整流请求体（原地修改 session.request.message）
+                const rectified = rectifyAnthropicRequestMessage(
+                  session.request.message as Record<string, unknown>
+                );
+
+                // 写入审计字段（specialSettings）
+                session.addSpecialSetting({
+                  type: "thinking_signature_rectifier",
+                  scope: "request",
+                  hit: rectified.applied,
+                  providerId: currentProvider.id,
+                  providerName: currentProvider.name,
+                  trigger: rectifierTrigger,
+                  attemptNumber: attemptCount,
+                  retryAttemptNumber: attemptCount + 1,
+                  removedThinkingBlocks: rectified.removedThinkingBlocks,
+                  removedRedactedThinkingBlocks: rectified.removedRedactedThinkingBlocks,
+                  removedSignatureFields: rectified.removedSignatureFields,
+                });
+
+                const specialSettings = session.getSpecialSettings();
+                if (specialSettings && session.sessionId) {
+                  try {
+                    await SessionManager.storeSessionSpecialSettings(
+                      session.sessionId,
+                      specialSettings,
+                      session.requestSequence
+                    );
+                  } catch (persistError) {
+                    logger.error("[ProxyForwarder] Failed to store special settings", {
+                      error: persistError,
+                      sessionId: session.sessionId,
+                    });
+                  }
+                }
+
+                if (specialSettings && session.messageContext?.id) {
+                  try {
+                    await updateMessageRequestDetails(session.messageContext.id, {
+                      specialSettings,
+                    });
+                  } catch (persistError) {
+                    logger.error("[ProxyForwarder] Failed to persist special settings", {
+                      error: persistError,
+                      messageRequestId: session.messageContext.id,
+                    });
+                  }
+                }
+
+                // 无任何可整流内容：不做无意义重试，直接走既有“不可重试客户端错误”分支
+                if (!rectified.applied) {
+                  logger.info(
+                    "ProxyForwarder: Thinking signature rectifier not applicable, skipping retry",
+                    {
+                      providerId: currentProvider.id,
+                      providerName: currentProvider.name,
+                      trigger: rectifierTrigger,
+                      attemptNumber: attemptCount,
+                    }
+                  );
+                  errorCategory = ErrorCategory.NON_RETRYABLE_CLIENT_ERROR;
+                } else {
+                  logger.info("ProxyForwarder: Thinking signature rectifier applied, retrying", {
+                    providerId: currentProvider.id,
+                    providerName: currentProvider.name,
+                    trigger: rectifierTrigger,
+                    attemptNumber: attemptCount,
+                    willRetryAttemptNumber: attemptCount + 1,
+                  });
+
+                  thinkingSignatureRectifierRetried = true;
+
+                  // 记录失败的第一次请求（以 retry_failed 体现“发生过一次重试”）
+                  if (lastError instanceof ProxyError) {
+                    session.addProviderToChain(currentProvider, {
+                      reason: "retry_failed",
+                      circuitState: getCircuitState(currentProvider.id),
+                      attemptNumber: attemptCount,
+                      errorMessage,
+                      statusCode: lastError.statusCode,
+                      errorDetails: {
+                        provider: {
+                          id: currentProvider.id,
+                          name: currentProvider.name,
+                          statusCode: lastError.statusCode,
+                          statusText: lastError.message,
+                          upstreamBody: lastError.upstreamError?.body,
+                          upstreamParsed: lastError.upstreamError?.parsed,
+                        },
+                        request: requestDetailsBeforeRectify,
+                      },
+                    });
+                  } else {
+                    session.addProviderToChain(currentProvider, {
+                      reason: "retry_failed",
+                      circuitState: getCircuitState(currentProvider.id),
+                      attemptNumber: attemptCount,
+                      errorMessage,
+                      errorDetails: {
+                        system: {
+                          errorType: lastError.constructor.name,
+                          errorName: lastError.name,
+                          errorMessage: lastError.message || lastError.name || "Unknown error",
+                          errorStack: lastError.stack?.split("\n").slice(0, 3).join("\n"),
+                        },
+                        request: requestDetailsBeforeRectify,
+                      },
+                    });
+                  }
+
+                  // 确保即使 maxAttemptsPerProvider=1 也能完成一次额外重试
+                  maxAttemptsPerProvider = Math.max(maxAttemptsPerProvider, attemptCount + 1);
+                  continue;
+                }
+              }
+            }
           }
 
           // ⭐ 3. 不可重试的客户端输入错误处理（不计入熔断器，不重试，立即返回）
@@ -1083,26 +1232,6 @@ export class ProxyForwarder {
       const accessToken = await GeminiAuth.getAccessToken(provider.key);
       const isApiKey = GeminiAuth.isApiKey(provider.key);
 
-      const headers = new Headers();
-      headers.set("Content-Type", "application/json");
-
-      // ⭐ 统一禁用 gzip 压缩（不仅限于流式请求）
-      // 原因：undici（Node.js fetch）在连接提前关闭时会对不完整的 gzip 流抛出 "TypeError: terminated"
-      // Bun 的 fetch 实现更宽松，不会报错，这导致 bun dev 正常但 Docker 构建后失败
-      // 参考：Gunzip.emit → emitErrorNT → emitErrorCloseNT 错误链
-      headers.set("accept-encoding", "identity");
-
-      if (isApiKey) {
-        headers.set(GEMINI_PROTOCOL.HEADERS.API_KEY, accessToken);
-      } else {
-        headers.set("Authorization", `Bearer ${accessToken}`);
-      }
-
-      // CLI specific headers
-      if (provider.providerType === "gemini-cli") {
-        headers.set(GEMINI_PROTOCOL.HEADERS.API_CLIENT, "GeminiCLI/1.0");
-      }
-
       // 3. 直接透传：使用 buildProxyUrl() 拼接原始路径和查询参数
       const baseUrl =
         provider.url ||
@@ -1111,7 +1240,16 @@ export class ProxyForwarder {
           : GEMINI_PROTOCOL.CLI_ENDPOINT);
 
       proxyUrl = buildProxyUrl(baseUrl, session.requestUrl);
-      processedHeaders = headers;
+
+      // 4. Headers 处理：默认透传 session.headers（含请求过滤器修改），但移除代理认证头并覆盖上游鉴权
+      // 说明：之前 Gemini 分支使用 new Headers() 重建 headers，会导致 user-agent 丢失且过滤器不生效
+      processedHeaders = ProxyForwarder.buildGeminiHeaders(
+        session,
+        provider,
+        baseUrl,
+        accessToken,
+        isApiKey
+      );
 
       if (session.sessionId) {
         void SessionManager.storeSessionUpstreamRequestMeta(
@@ -1241,6 +1379,45 @@ export class ProxyForwarder {
             logger.error("[ProxyForwarder] Failed to sanitize Codex request, using original", {
               error,
               providerId: provider.id,
+            });
+          }
+        }
+
+        // Codex 供应商级参数覆写（默认 inherit=遵循客户端）
+        // 说明：即使官方客户端跳过清洗，也允许管理员在供应商层面强制覆写关键参数
+        const { request: overridden, audit } = applyCodexProviderOverridesWithAudit(
+          provider,
+          session.request.message as Record<string, unknown>
+        );
+        session.request.message = overridden;
+
+        if (audit) {
+          session.addSpecialSetting(audit);
+          const specialSettings = session.getSpecialSettings();
+
+          if (session.sessionId) {
+            // 这里用 await：避免后续响应侧写入（ResponseFixer 等）先完成后，被本次旧快照覆写
+            await SessionManager.storeSessionSpecialSettings(
+              session.sessionId,
+              specialSettings,
+              session.requestSequence
+            ).catch((err) => {
+              logger.error("[ProxyForwarder] Failed to store special settings", {
+                error: err,
+                sessionId: session.sessionId,
+              });
+            });
+          }
+
+          if (session.messageContext?.id) {
+            // 同上：确保 special_settings 的“旧值”不会在并发下覆盖“新值”
+            await updateMessageRequestDetails(session.messageContext.id, {
+              specialSettings,
+            }).catch((err) => {
+              logger.error("[ProxyForwarder] Failed to persist special settings", {
+                error: err,
+                messageRequestId: session.messageContext?.id,
+              });
             });
           }
         }
@@ -2053,6 +2230,51 @@ export class ProxyForwarder {
     return headerProcessor.process(session.headers);
   }
 
+  private static buildGeminiHeaders(
+    session: ProxySession,
+    provider: NonNullable<typeof session.provider>,
+    baseUrl: string,
+    accessToken: string,
+    isApiKey: boolean
+  ): Headers {
+    const preserveClientIp = provider.preserveClientIp ?? false;
+    const { clientIp, xForwardedFor } = ProxyForwarder.resolveClientIp(session.headers);
+
+    const overrides: Record<string, string> = {
+      host: HeaderProcessor.extractHost(baseUrl),
+      "content-type": "application/json",
+      "accept-encoding": "identity",
+      "user-agent": session.headers.get("user-agent") ?? session.userAgent ?? "claude-code-hub",
+    };
+
+    if (isApiKey) {
+      overrides[GEMINI_PROTOCOL.HEADERS.API_KEY] = accessToken;
+    } else {
+      overrides.authorization = `Bearer ${accessToken}`;
+    }
+
+    if (provider.providerType === "gemini-cli") {
+      overrides[GEMINI_PROTOCOL.HEADERS.API_CLIENT] = "GeminiCLI/1.0";
+    }
+
+    if (preserveClientIp) {
+      if (xForwardedFor) {
+        overrides["x-forwarded-for"] = xForwardedFor;
+      }
+      if (clientIp) {
+        overrides["x-real-ip"] = clientIp;
+      }
+    }
+
+    const headerProcessor = HeaderProcessor.createForProxy({
+      blacklist: ["content-length", "connection", "x-api-key", GEMINI_PROTOCOL.HEADERS.API_KEY],
+      preserveClientIpHeaders: preserveClientIp,
+      overrides,
+    });
+
+    return headerProcessor.process(session.headers);
+  }
+
   private static resolveClientIp(headers: Headers): {
     clientIp: string | null;
     xForwardedFor: string | null;
@@ -2117,7 +2339,7 @@ export class ProxyForwarder {
     }
 
     // 使用 undici.request 获取未自动解压的响应
-    // ⭐ 显式配置超时：确保使用非 undici 原生 dispatcher（如 SocksProxyAgent）时也能正确应用超时
+    // ⭐ 显式配置超时：确保使用自定义 dispatcher（如 SOCKS 代理）时也能正确应用超时
     const undiciRes = await undiciRequest(url, {
       method: init.method as string,
       headers: headersObj,

@@ -83,6 +83,18 @@
       "verboseProviderErrorDesc": "开启后，当所有供应商不可用时返回详细错误信息（包含供应商数量、限流原因等）；关闭后仅返回简洁错误码。",
       "enableHttp2": "启用 HTTP/2",
       "enableHttp2Desc": "启用后，代理请求将优先使用 HTTP/2 协议。如果 HTTP/2 失败，将自动降级到 HTTP/1.1。",
+      "interceptAnthropicWarmupRequests": "拦截 Warmup 请求（Anthropic）",
+      "interceptAnthropicWarmupRequestsDesc": "开启后，识别到 Claude Code 的 Warmup 探测请求将由 CCH 直接抢答短响应，避免访问上游供应商；该请求会记录在日志中，但不计费、不限流、不计入统计。",
+      "enableThinkingSignatureRectifier": "启用 thinking 签名整流器",
+      "enableThinkingSignatureRectifierDesc": "当 Anthropic 类型供应商返回 thinking 签名不兼容或非法请求等错误时，自动移除不兼容的 thinking 相关块并对同一供应商重试一次（默认开启）。",
+      "enableResponseFixer": "启用响应整流",
+      "enableResponseFixerDesc": "自动修复上游响应中常见的编码、SSE 与 JSON 格式问题（默认开启）。",
+      "responseFixerFixEncoding": "修复编码问题",
+      "responseFixerFixEncodingDesc": "移除 BOM 与空字节，并对无效 UTF-8 做兼容处理。",
+      "responseFixerFixSseFormat": "修复 SSE 格式",
+      "responseFixerFixSseFormatDesc": "补齐 data: 前缀、统一换行符，并修复常见字段格式。",
+      "responseFixerFixTruncatedJson": "修复截断的 JSON",
+      "responseFixerFixTruncatedJsonDesc": "补齐未闭合的括号/引号，移除尾随逗号，必要时补 null。",
       "saveSettings": "保存设置",
       "keepDays": "保留天数",
       "keepDaysDesc": "清理超过此天数的历史日志",
@@ -128,6 +140,22 @@
     "subtitle": "服务商管理",
     "subtitleDesc": "配置上游服务商的金额限流和并发限制，留空表示无限制。",
     "add": "添加供应商",
+    "autoSort": {
+      "button": "自动排序优先级",
+      "dialogTitle": "自动排序供应商优先级",
+      "dialogDescription": "根据成本倍率自动分配优先级（低成本 = 高优先级）",
+      "changeCount": "{count} 个供应商将被更新",
+      "noChanges": "无需更改（已排序）",
+      "costMultiplierHeader": "成本倍率",
+      "priorityHeader": "优先级",
+      "providersHeader": "供应商",
+      "changesTitle": "变更详情",
+      "providerHeader": "供应商",
+      "priorityChangeHeader": "优先级变更",
+      "confirm": "应用变更",
+      "success": "已更新 {count} 个供应商的优先级",
+      "error": "更新优先级失败"
+    },
     "types": {
       "claude": {
         "label": "Claude",
@@ -181,6 +209,10 @@
       "resetCircuitSuccess": "熔断器已重置",
       "resetCircuitSuccessDesc": "供应商 \"{name}\" 的熔断状态已解除",
       "resetCircuitFailed": "重置熔断器失败",
+      "resetUsageTitle": "重置总用量",
+      "resetUsageSuccess": "总用量已重置",
+      "resetUsageSuccessDesc": "供应商 \"{name}\" 的总用量已重置",
+      "resetUsageFailed": "重置总用量失败",
       "toggleSuccess": "供应商已{status}",
       "toggleSuccessDesc": "供应商 \"{name}\" 状态已更新",
       "toggleFailed": "状态切换失败",
@@ -289,6 +321,15 @@
         "chunksCount": "接收 {count} 个数据块 ({format})",
         "truncatedPreview": "显示前 {length} 字符，完整内容请复制查看",
         "truncatedBrief": "显示前 {length} 字符，完整内容请点击「查看详情」",
+        "timeout": {
+          "label": "超时时间（秒）",
+          "desc": "测试请求的最大等待时间（5-120 秒）",
+          "geminiHint": "，Gemini Thinking 模型建议 60 秒以上"
+        },
+        "geminiAuthFallback": {
+          "warning": "Header 认证失败，使用了 URL 参数认证",
+          "desc": "实际代理转发仅使用 Header 认证，可能导致请求失败"
+        },
         "copyFormat": {
           "testResult": "测试结果",
           "message": "消息",
@@ -650,6 +691,7 @@
         "create": "新增服务商",
         "edit": "编辑服务商"
       },
+      "dialogDescription": "配置供应商信息及高级设置。",
       "url": {
         "label": "API 地址 *",
         "placeholder": "例如: https://open.bigmodel.cn/api/anthropic"
@@ -741,6 +783,15 @@
               "desc": "供应商分组标签（支持多个，逗号分隔）。只有用户的 providerGroup 与此值匹配时，该用户才能使用此供应商。留空=对所有用户开放"
             }
           },
+          "cacheTtl": {
+            "label": "Cache TTL 覆写",
+            "options": {
+              "inherit": "不覆写（跟随客户端）",
+              "5m": "5 分钟",
+              "1h": "1 小时"
+            },
+            "desc": "强制设置 prompt cache TTL；仅影响包含 cache_control 的请求。"
+          },
           "context1m": {
             "label": "1M 上下文窗口",
             "options": {
@@ -749,6 +800,49 @@
               "disabled": "禁用"
             },
             "desc": "配置 1M 上下文窗口支持。仅对 Sonnet 模型生效（claude-sonnet-4-5、claude-sonnet-4）。启用后将应用阶梯定价。"
+          },
+          "codexOverrides": {
+            "reasoningEffort": {
+              "label": "推理等级覆写",
+              "help": "控制模型在输出前用于推理的强度（推理 token 数量）。选择“跟随客户端”表示不改写请求；选择其他值则强制覆写 reasoning.effort。注意：none 仅 GPT-5.1 系列支持；xhigh 仅 GPT-5.1-Codex-Max 支持，模型不支持会返回错误。",
+              "options": {
+                "inherit": "不覆写（跟随客户端）",
+                "minimal": "minimal（更省、更快）",
+                "low": "low",
+                "medium": "medium（默认）",
+                "high": "high（更强推理）",
+                "xhigh": "xhigh（仅 GPT-5.1-Codex-Max）",
+                "none": "none（仅 GPT-5.1）"
+              }
+            },
+            "reasoningSummary": {
+              "label": "推理摘要覆写",
+              "help": "控制是否返回推理摘要。auto 返回精简摘要，detailed 返回更详细摘要；“跟随客户端”不改写 reasoning.summary。",
+              "options": {
+                "inherit": "不覆写（跟随客户端）",
+                "auto": "auto（精简）",
+                "detailed": "detailed（更详细）"
+              }
+            },
+            "textVerbosity": {
+              "label": "输出冗长度覆写",
+              "help": "控制模型输出的详细程度。low 更简洁，high 更详细；“跟随客户端”不改写 text.verbosity。",
+              "options": {
+                "inherit": "不覆写（跟随客户端）",
+                "low": "low（简洁）",
+                "medium": "medium（默认）",
+                "high": "high（更详细）"
+              }
+            },
+            "parallelToolCalls": {
+              "label": "并行工具调用覆写",
+              "help": "控制是否允许并行 tool calls。关闭可能降低工具调用并发能力；“跟随客户端”不改写 parallel_tool_calls。",
+              "options": {
+                "inherit": "不覆写（跟随客户端）",
+                "true": "强制开启",
+                "false": "强制关闭"
+              }
+            }
           }
         },
         "rateLimit": {
@@ -758,6 +852,7 @@
             "daily": "日: {amount} (重置 {resetTime})",
             "weekly": "周: {amount}",
             "monthly": "月: {amount}",
+            "total": "总: {amount}",
             "concurrent": "并发: {count}",
             "none": "无限制"
           },
@@ -789,6 +884,10 @@
           },
           "limitMonthly": {
             "label": "月消费上限 (USD)",
+            "placeholder": "留空表示无限制"
+          },
+          "limitTotal": {
+            "label": "总消费上限 (USD)",
             "placeholder": "留空表示无限制"
           },
           "limitConcurrent": {
@@ -968,6 +1067,7 @@
       "errors": {
         "invalidUrl": "请输入有效的 API 地址",
         "invalidWebsiteUrl": "请输入有效的供应商官网地址",
+        "groupTagTooLong": "分组标签总长度不能超过 {max} 个字符",
         "addFailed": "添加服务商失败",
         "updateFailed": "更新服务商失败",
         "deleteFailed": "删除服务商失败"
@@ -1115,7 +1215,8 @@
         "label": "分组:",
         "all": "全部",
         "default": "default"
-      }
+      },
+      "circuitBroken": "熔断"
     },
     "editProvider": "编辑服务商",
     "createProvider": "新增服务商",
@@ -1168,24 +1269,92 @@
       "description": "管理 AI 模型的价格配置"
     },
     "searchPlaceholder": "搜索模型名称...",
+    "filters": {
+      "all": "全部",
+      "local": "本地",
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "vertex": "Vertex"
+    },
+    "badges": {
+      "local": "本地"
+    },
+    "capabilities": {
+      "assistantPrefill": "助手预填充",
+      "computerUse": "电脑使用",
+      "functionCalling": "函数调用",
+      "pdfInput": "PDF 输入",
+      "promptCaching": "Prompt 缓存",
+      "reasoning": "推理",
+      "responseSchema": "响应 Schema",
+      "toolChoice": "工具选择",
+      "vision": "视觉",
+      "statusSupported": "支持",
+      "statusUnsupported": "不支持",
+      "tooltip": "{label}: {status}"
+    },
     "sync": {
-      "button": "同步 LiteLLM 价格",
+      "button": "同步云端价格表",
       "syncing": "同步中...",
+      "checking": "检查冲突...",
       "successWithChanges": "价格表更新: 新增 {added} 个，更新 {updated} 个，未变化 {unchanged} 个",
       "successNoChanges": "价格表已是最新，无需更新",
       "failed": "同步失败",
       "failedError": "同步失败: {error}",
       "failedNoResult": "价格表更新成功但未返回处理结果",
       "noModels": "未找到支持的模型价格",
-      "partialFailure": "部分更新成功，但有 {failed} 个模型失败"
+      "partialFailure": "部分更新成功，但有 {failed} 个模型失败",
+      "failedModels": "失败模型: {models}",
+      "skippedConflicts": "跳过 {count} 个手动模型"
+    },
+    "conflict": {
+      "title": "选择要覆盖的冲突项",
+      "description": "以下模型存在手动维护的价格，勾选后将用 LiteLLM 价格覆盖，未勾选的保持本地不变",
+      "searchPlaceholder": "搜索模型...",
+      "table": {
+        "modelName": "模型",
+        "manualPrice": "手动价格",
+        "litellmPrice": "LiteLLM 价格",
+        "action": "操作"
+      },
+      "viewDiff": "查看差异",
+      "diffTitle": "价格差异对比",
+      "diff": {
+        "field": "字段",
+        "manual": "手动",
+        "litellm": "LiteLLM",
+        "inputPrice": "输入价格",
+        "outputPrice": "输出价格",
+        "imagePrice": "图片价格",
+        "provider": "供应商",
+        "mode": "类型"
+      },
+      "pagination": {
+        "showing": "显示 {from}-{to} 条，共 {total} 条"
+      },
+      "selectedCount": "已选择 {count}/{total} 个模型",
+      "noMatch": "未找到匹配的模型",
+      "noConflicts": "无冲突项",
+      "applyOverwrite": "应用覆盖",
+      "applying": "应用中..."
     },
     "table": {
       "modelName": "模型名称",
-      "type": "类型",
       "provider": "提供商",
+      "capabilities": "能力",
+      "price": "价格",
       "inputPrice": "输入价格 ($/M)",
       "outputPrice": "输出价格 ($/M)",
+      "priceInput": "输入",
+      "priceOutput": "输出",
+      "pricePerRequest": "按次",
+      "cacheReadPrice": "缓存读取 ($/M)",
+      "cacheCreationPrice": "缓存创建 ($/M)",
+      "cache5m": "5m",
+      "cache1h": "1h+",
+      "copyModelId": "复制模型 ID",
       "updatedAt": "更新时间",
+      "actions": "操作",
       "typeChat": "对话",
       "typeImage": "图像生成",
       "typeCompletion": "补全",
@@ -1199,6 +1368,7 @@
       "showing": "显示 {from}-{to} 条，共 {total} 条",
       "previous": "上一页",
       "next": "下一页",
+      "perPageLabel": "每页",
       "perPage": "每页 {size} 条"
     },
     "stats": {
@@ -1208,23 +1378,25 @@
     },
     "dialog": {
       "title": "更新模型价格表",
-      "description": "选择包含模型价格数据的 JSON 文件并上传",
-      "selectFile": "点击选择 JSON 文件或拖拽到此处",
+      "description": "选择包含模型价格数据的 JSON 或 TOML 文件并上传",
+      "selectFile": "点击选择 JSON/TOML 文件或拖拽到此处",
       "fileSizeLimit": "文件大小不能超过 10MB",
       "fileSizeLimitSmall": "文件大小不超过 10MB",
-      "invalidFileType": "请选择 JSON 格式的文件",
+      "invalidFileType": "请选择 JSON 或 TOML 格式的文件",
       "fileTooLarge": "文件大小超过 10MB 限制",
       "upload": "上传并更新",
       "uploading": "上传中...",
       "updatePriceTable": "更新价格表",
       "updating": "更新中...",
-      "selectJson": "选择 JSON 文件",
+      "selectJson": "选择文件",
       "updateSuccess": "价格表更新成功，共更新 {count} 个模型",
       "updateFailed": "更新失败",
       "systemHasBuiltIn": "系统已内置价格表",
       "manualDownload": "你也可以手动下载",
-      "latestPriceTable": "最新价格表",
+      "latestPriceTable": "云端价格表",
       "andUploadViaButton": "，并通过上方按钮上传",
+      "cloudModelCountLoading": "云端模型数量加载中...",
+      "cloudModelCountFailed": "云端模型数量加载失败",
       "supportedModels": "当前支持 {count} 个模型",
       "results": {
         "title": "更新结果",
@@ -1232,9 +1404,52 @@
         "success": "成功: {success}",
         "failed": "失败: {failed}",
         "skipped": "跳过: {skipped}",
+        "more": " (+{count})",
         "details": "详细信息",
         "viewDetails": "查看详细日志"
       }
+    },
+    "addModel": "添加模型",
+    "editModel": "编辑模型",
+    "deleteModel": "删除模型",
+    "addModelDescription": "手动添加新的模型价格配置",
+    "editModelDescription": "编辑模型的价格配置",
+    "deleteConfirm": "确定要删除模型 {name} 吗？此操作不可撤销。",
+    "form": {
+      "modelName": "模型 ID",
+      "modelNamePlaceholder": "例如: gpt-5.2-codex",
+      "modelNameRequired": "模型 ID 不能为空",
+      "displayName": "展示名称（可选）",
+      "displayNamePlaceholder": "例如: GPT-5.2 Codex",
+      "type": "类型",
+      "provider": "供应商",
+      "providerPlaceholder": "例如: openai",
+      "requestPrice": "按次调用价格 ($/request)",
+      "inputPrice": "输入价格 ($/M tokens)",
+      "outputPrice": "输出价格 ($/M tokens)",
+      "outputPriceImage": "输出价格 ($/image)",
+      "cacheReadPrice": "缓存读取价格 ($/M tokens)",
+      "cacheCreationPrice5m": "缓存创建价格（5m，$/M tokens）",
+      "cacheCreationPrice1h": "缓存创建价格（1h+，$/M tokens）"
+    },
+    "drawer": {
+      "prefillLabel": "搜索现有模型并预填充",
+      "prefillEmpty": "未找到匹配的模型",
+      "prefillFailed": "搜索失败",
+      "promptCachingHint": "仅当模型支持缓存时开启，并配置下方缓存价格",
+      "cachePricingTitle": "缓存价格"
+    },
+    "actions": {
+      "edit": "编辑",
+      "more": "更多操作",
+      "delete": "删除"
+    },
+    "toast": {
+      "createSuccess": "模型已添加",
+      "updateSuccess": "模型已更新",
+      "deleteSuccess": "模型已删除",
+      "saveFailed": "保存失败",
+      "deleteFailed": "删除失败"
     }
   },
   "sensitiveWords": {
@@ -1617,14 +1832,101 @@
   "notifications": {
     "title": "消息推送",
     "description": "配置 Webhook 消息推送",
-    "global": {
-      "title": "通知总开关",
-      "description": "启用或禁用所有消息推送功能",
-      "enable": "启用消息推送"
+  "global": {
+    "title": "通知总开关",
+    "description": "启用或禁用所有消息推送功能",
+    "enable": "启用消息推送",
+    "legacyModeTitle": "兼容模式",
+    "legacyModeDescription": "当前使用旧版单 URL 推送配置。创建推送目标后将自动切换到多目标模式。"
+  },
+  "targets": {
+    "title": "推送目标",
+    "description": "管理推送目标，支持企业微信、飞书、钉钉、Telegram、自定义 Webhook",
+    "add": "添加目标",
+    "update": "保存目标",
+    "edit": "编辑",
+    "delete": "删除",
+    "deleteConfirmTitle": "删除推送目标",
+    "deleteConfirm": "确定要删除该目标吗？相关绑定也会被移除。",
+    "enable": "启用目标",
+    "statusEnabled": "已启用",
+    "statusDisabled": "已禁用",
+    "lastTestAt": "上次测试",
+    "lastTestNever": "从未测试",
+    "lastTestSuccess": "测试成功",
+    "lastTestFailed": "测试失败",
+    "test": "测试",
+    "testSelectType": "选择测试类型",
+    "emptyHint": "暂无推送目标，点击“添加目标”创建。",
+    "created": "目标已创建",
+    "updated": "目标已更新",
+    "deleted": "目标已删除",
+    "bindingsSaved": "绑定已保存"
+  },
+  "targetDialog": {
+    "createTitle": "添加推送目标",
+    "editTitle": "编辑推送目标",
+    "name": "目标名称",
+    "namePlaceholder": "例如：运维群",
+    "type": "平台类型",
+    "selectType": "请选择平台类型",
+    "enable": "启用",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlPlaceholder": "https://example.com/webhook",
+    "telegramBotToken": "Telegram Bot Token",
+    "telegramBotTokenPlaceholder": "例如：123456:ABCDEF...",
+    "telegramChatId": "Telegram Chat ID",
+    "telegramChatIdPlaceholder": "例如：-1001234567890",
+    "dingtalkSecret": "钉钉签名密钥",
+    "dingtalkSecretPlaceholder": "可选，用于签名",
+    "customHeaders": "自定义 Headers（JSON）",
+    "customHeadersPlaceholder": "{\"X-Token\":\"...\"}",
+    "errors": {
+      "headersInvalidJson": "Headers 不是有效 JSON",
+      "headersMustBeObject": "Headers 必须是 JSON 对象",
+      "headersValueMustBeString": "Headers 的值必须为字符串"
     },
-    "circuitBreaker": {
-      "title": "熔断器告警",
-      "description": "供应商完全熔断时立即推送告警消息",
+    "types": {
+      "wechat": "企业微信",
+      "feishu": "飞书",
+      "dingtalk": "钉钉",
+      "telegram": "Telegram",
+      "custom": "自定义 Webhook"
+    },
+    "proxy": {
+      "title": "代理设置",
+      "toggle": "展开/收起代理设置",
+      "url": "代理地址",
+      "urlPlaceholder": "http://127.0.0.1:7890",
+      "fallbackToDirect": "代理失败时回退直连"
+    }
+  },
+  "bindings": {
+    "title": "绑定",
+    "noTargets": "暂无可用推送目标",
+    "bindTarget": "绑定目标",
+    "enable": "启用",
+    "enableType": "启用该通知",
+    "advanced": "高级",
+    "scheduleCron": "Cron 表达式",
+    "scheduleCronPlaceholder": "例如：0 9 * * *",
+    "scheduleTimezone": "时区",
+    "templateOverride": "模板覆盖",
+    "editTemplateOverride": "编辑覆盖",
+    "templateOverrideTitle": "编辑模板覆盖",
+    "boundCount": "已绑定：{count}",
+    "enabledCount": "已启用：{count}"
+  },
+  "templateEditor": {
+    "title": "模板（JSON）",
+    "placeholder": "请输入 JSON 模板...",
+    "jsonInvalid": "JSON 格式不正确",
+    "placeholders": "占位符",
+    "insert": "插入"
+  },
+  "circuitBreaker": {
+    "title": "熔断器告警",
+    "description": "供应商完全熔断时立即推送告警消息",
       "enable": "启用熔断器告警",
       "webhook": "Webhook URL",
       "webhookPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",

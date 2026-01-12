@@ -1,9 +1,9 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { GeminiAuth } from "@/app/v1/_lib/gemini/auth";
 import { isClientAbortError } from "@/app/v1/_lib/proxy/errors";
 import { getSession } from "@/lib/auth";
+import { publishProviderCacheInvalidation } from "@/lib/cache/provider-cache";
 import {
   clearConfigCache,
   clearProviderState,
@@ -30,18 +30,51 @@ import {
 } from "@/lib/redis/circuit-breaker-config";
 import type { Context1mPreference } from "@/lib/special-attributes";
 import { maskKey } from "@/lib/utils/validation";
+import { validateProviderUrlForConnectivity } from "@/lib/validation/provider-url";
 import { CreateProviderSchema, UpdateProviderSchema } from "@/lib/validation/schemas";
 import {
   createProvider,
   deleteProvider,
   findAllProviders,
+  findAllProvidersFresh,
   findProviderById,
   getProviderStatistics,
+  resetProviderTotalCostResetAt,
   updateProvider,
+  updateProviderPrioritiesBatch,
 } from "@/repository/provider";
 import type { CacheTtlPreference } from "@/types/cache";
-import type { ProviderDisplay, ProviderType } from "@/types/provider";
+import type {
+  CodexParallelToolCallsPreference,
+  CodexReasoningEffortPreference,
+  CodexReasoningSummaryPreference,
+  CodexTextVerbosityPreference,
+  ProviderDisplay,
+  ProviderStatisticsMap,
+  ProviderType,
+} from "@/types/provider";
 import type { ActionResult } from "./types";
+
+type AutoSortResult = {
+  groups: Array<{
+    costMultiplier: number;
+    priority: number;
+    providers: Array<{ id: number; name: string }>;
+  }>;
+  changes: Array<{
+    providerId: number;
+    name: string;
+    oldPriority: number;
+    newPriority: number;
+    costMultiplier: number;
+  }>;
+  summary: {
+    totalProviders: number;
+    changedCount: number;
+    groupCount: number;
+  };
+  applied: boolean;
+};
 
 const API_TEST_TIMEOUT_LIMITS = {
   DEFAULT: 15000,
@@ -93,6 +126,29 @@ const API_TEST_CONFIG = {
 const PROXY_RETRY_STATUS_CODES = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
 const CLOUDFLARE_ERROR_STATUS_CODES = new Set([520, 521, 522, 523, 524, 525, 526, 527, 530]);
 
+/**
+ * 广播 Provider 缓存失效通知（跨实例）
+ *
+ * CRUD 操作后调用，通知所有实例清除缓存。
+ * 失败时不影响主流程，其他实例将依赖 TTL 过期后刷新。
+ */
+async function broadcastProviderCacheInvalidation(context: {
+  operation: "add" | "edit" | "remove";
+  providerId: number;
+}): Promise<void> {
+  try {
+    await publishProviderCacheInvalidation();
+    logger.debug(`${context.operation} Provider:cache_invalidation_success`, {
+      providerId: context.providerId,
+    });
+  } catch (error) {
+    logger.warn(`${context.operation} Provider:cache_invalidation_failed`, {
+      providerId: context.providerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 // 获取服务商数据
 export async function getProviders(): Promise<ProviderDisplay[]> {
   try {
@@ -110,19 +166,10 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
       return [];
     }
 
-    // 并行获取供应商列表和统计数据
-    const [providers, statistics] = await Promise.all([
-      findAllProviders(),
-      getProviderStatistics().catch((error) => {
-        logger.trace("getProviders:statistics_error", {
-          message: error.message,
-          stack: error.stack,
-          name: error.name,
-        });
-        logger.error("获取供应商统计数据失败:", error);
-        return []; // 统计查询失败时返回空数组，不影响供应商列表显示
-      }),
-    ]);
+    // 仅获取供应商列表，统计数据由前端异步获取
+    const providers = await findAllProvidersFresh();
+    // 空统计数组，保持后续合并逻辑兼容
+    const statistics: Awaited<ReturnType<typeof getProviderStatistics>> = [];
 
     logger.trace("getProviders:raw_data", {
       providerCount: providers.length,
@@ -204,6 +251,7 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         dailyResetTime: provider.dailyResetTime,
         limitWeeklyUsd: provider.limitWeeklyUsd,
         limitMonthlyUsd: provider.limitMonthlyUsd,
+        limitTotalUsd: provider.limitTotalUsd,
         limitConcurrentSessions: provider.limitConcurrentSessions,
         maxRetryAttempts: provider.maxRetryAttempts,
         circuitBreakerFailureThreshold: provider.circuitBreakerFailureThreshold,
@@ -218,6 +266,10 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         faviconUrl: provider.faviconUrl,
         cacheTtlPreference: provider.cacheTtlPreference,
         context1mPreference: provider.context1mPreference,
+        codexReasoningEffortPreference: provider.codexReasoningEffortPreference,
+        codexReasoningSummaryPreference: provider.codexReasoningSummaryPreference,
+        codexTextVerbosityPreference: provider.codexTextVerbosityPreference,
+        codexParallelToolCallsPreference: provider.codexParallelToolCallsPreference,
         tpm: provider.tpm,
         rpm: provider.rpm,
         rpd: provider.rpd,
@@ -241,6 +293,50 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
     });
     logger.error("获取服务商数据失败:", error);
     return [];
+  }
+}
+
+/**
+ * Async get provider statistics data (today cost, call count, last call info)
+ * Called independently by frontend, does not block main list loading
+ */
+export async function getProviderStatisticsAsync(): Promise<ProviderStatisticsMap> {
+  try {
+    const session = await getSession();
+    if (!session || session.user.role !== "admin") return {};
+
+    const statistics = await getProviderStatistics();
+
+    // Transform to Record<providerId, stats> format
+    const result: ProviderStatisticsMap = {};
+
+    for (const s of statistics) {
+      let lastCallTimeStr: string | null = null;
+      if (s.last_call_time) {
+        if (s.last_call_time instanceof Date) {
+          lastCallTimeStr = s.last_call_time.toISOString();
+        } else if (typeof s.last_call_time === "string") {
+          lastCallTimeStr = s.last_call_time;
+        } else {
+          const date = new Date(s.last_call_time as string | number);
+          if (!Number.isNaN(date.getTime())) {
+            lastCallTimeStr = date.toISOString();
+          }
+        }
+      }
+
+      result[s.id] = {
+        todayCost: s.today_cost,
+        todayCalls: s.today_calls,
+        lastCallTime: lastCallTimeStr,
+        lastCallModel: s.last_call_model,
+      };
+    }
+
+    return result;
+  } catch (error) {
+    logger.error("Failed to get provider statistics async:", error);
+    return {};
   }
 }
 
@@ -297,7 +393,7 @@ export async function getProviderGroupsWithCount(): Promise<
   ActionResult<Array<{ group: string; providerCount: number }>>
 > {
   try {
-    const providers = await findAllProviders();
+    const providers = await findAllProvidersFresh();
     const groupCounts = new Map<string, number>();
 
     for (const provider of providers) {
@@ -353,9 +449,14 @@ export async function addProvider(data: {
   daily_reset_time?: string;
   limit_weekly_usd?: number | null;
   limit_monthly_usd?: number | null;
+  limit_total_usd?: number | null;
   limit_concurrent_sessions?: number | null;
   cache_ttl_preference?: CacheTtlPreference | null;
   context_1m_preference?: Context1mPreference | null;
+  codex_reasoning_effort_preference?: CodexReasoningEffortPreference | null;
+  codex_reasoning_summary_preference?: CodexReasoningSummaryPreference | null;
+  codex_text_verbosity_preference?: CodexTextVerbosityPreference | null;
+  codex_parallel_tool_calls_preference?: CodexParallelToolCallsPreference | null;
   max_retry_attempts?: number | null;
   circuit_breaker_failure_threshold?: number;
   circuit_breaker_open_duration?: number;
@@ -424,6 +525,7 @@ export async function addProvider(data: {
       daily_reset_time: validated.daily_reset_time ?? "00:00",
       limit_weekly_usd: validated.limit_weekly_usd ?? null,
       limit_monthly_usd: validated.limit_monthly_usd ?? null,
+      limit_total_usd: validated.limit_total_usd ?? null,
       limit_concurrent_sessions: validated.limit_concurrent_sessions ?? 0,
       max_retry_attempts: validated.max_retry_attempts ?? null,
       circuit_breaker_failure_threshold: validated.circuit_breaker_failure_threshold ?? 5,
@@ -441,6 +543,12 @@ export async function addProvider(data: {
         validated.request_timeout_non_streaming_ms ??
         PROVIDER_TIMEOUT_DEFAULTS.REQUEST_TIMEOUT_NON_STREAMING_MS,
       cache_ttl_preference: validated.cache_ttl_preference ?? "inherit",
+      context_1m_preference: validated.context_1m_preference ?? "inherit",
+      codex_reasoning_effort_preference: validated.codex_reasoning_effort_preference ?? "inherit",
+      codex_reasoning_summary_preference: validated.codex_reasoning_summary_preference ?? "inherit",
+      codex_text_verbosity_preference: validated.codex_text_verbosity_preference ?? "inherit",
+      codex_parallel_tool_calls_preference:
+        validated.codex_parallel_tool_calls_preference ?? "inherit",
       website_url: validated.website_url ?? null,
       favicon_url: faviconUrl,
       tpm: validated.tpm ?? null,
@@ -473,8 +581,8 @@ export async function addProvider(data: {
       // 不影响主流程，仅记录警告
     }
 
-    revalidatePath("/settings/providers");
-    logger.trace("addProvider:revalidated", { path: "/settings/providers" });
+    // 广播缓存更新（跨实例即时生效）
+    await broadcastProviderCacheInvalidation({ operation: "add", providerId: provider.id });
 
     return { ok: true };
   } catch (error) {
@@ -510,9 +618,14 @@ export async function editProvider(
     daily_reset_time?: string;
     limit_weekly_usd?: number | null;
     limit_monthly_usd?: number | null;
+    limit_total_usd?: number | null;
     limit_concurrent_sessions?: number | null;
     cache_ttl_preference?: "inherit" | "5m" | "1h";
     context_1m_preference?: Context1mPreference | null;
+    codex_reasoning_effort_preference?: CodexReasoningEffortPreference | null;
+    codex_reasoning_summary_preference?: CodexReasoningSummaryPreference | null;
+    codex_text_verbosity_preference?: CodexTextVerbosityPreference | null;
+    codex_parallel_tool_calls_preference?: CodexParallelToolCallsPreference | null;
     max_retry_attempts?: number | null;
     circuit_breaker_failure_threshold?: number;
     circuit_breaker_open_duration?: number;
@@ -608,7 +721,9 @@ export async function editProvider(
       }
     }
 
-    revalidatePath("/settings/providers");
+    // 广播缓存更新（跨实例即时生效）
+    await broadcastProviderCacheInvalidation({ operation: "edit", providerId });
+
     return { ok: true };
   } catch (error) {
     logger.error("更新服务商失败:", error);
@@ -642,11 +757,139 @@ export async function removeProvider(providerId: number): Promise<ActionResult> 
       });
     }
 
-    revalidatePath("/settings/providers");
+    // 广播缓存更新（跨实例即时生效）
+    await broadcastProviderCacheInvalidation({ operation: "remove", providerId });
+
     return { ok: true };
   } catch (error) {
     logger.error("删除服务商失败:", error);
     const message = error instanceof Error ? error.message : "删除服务商失败";
+    return { ok: false, error: message };
+  }
+}
+
+export async function autoSortProviderPriority(args: {
+  confirm: boolean;
+}): Promise<ActionResult<AutoSortResult>> {
+  try {
+    const session = await getSession();
+    if (!session || session.user.role !== "admin") {
+      return { ok: false, error: "无权限执行此操作" };
+    }
+
+    const providers = await findAllProvidersFresh();
+    if (providers.length === 0) {
+      return {
+        ok: true,
+        data: {
+          groups: [],
+          changes: [],
+          summary: {
+            totalProviders: 0,
+            changedCount: 0,
+            groupCount: 0,
+          },
+          applied: args.confirm,
+        },
+      };
+    }
+
+    const groupsByCostMultiplier = new Map<number, typeof providers>();
+    for (const provider of providers) {
+      const rawCostMultiplier = Number(provider.costMultiplier);
+      const costMultiplier = Number.isFinite(rawCostMultiplier) ? rawCostMultiplier : 0;
+
+      if (!Number.isFinite(rawCostMultiplier)) {
+        logger.warn("autoSortProviderPriority:invalid_cost_multiplier", {
+          providerId: provider.id,
+          providerName: provider.name,
+          costMultiplier: provider.costMultiplier,
+          fallback: costMultiplier,
+        });
+      }
+
+      const bucket = groupsByCostMultiplier.get(costMultiplier);
+      if (bucket) {
+        bucket.push(provider);
+      } else {
+        groupsByCostMultiplier.set(costMultiplier, [provider]);
+      }
+    }
+
+    const sortedCostMultipliers = Array.from(groupsByCostMultiplier.keys()).sort((a, b) => a - b);
+    const groups: AutoSortResult["groups"] = [];
+    const changes: AutoSortResult["changes"] = [];
+
+    for (const [priority, costMultiplier] of sortedCostMultipliers.entries()) {
+      const groupProviders = groupsByCostMultiplier.get(costMultiplier) ?? [];
+      groups.push({
+        costMultiplier,
+        priority,
+        providers: groupProviders
+          .slice()
+          .sort((a, b) => a.id - b.id)
+          .map((provider) => ({ id: provider.id, name: provider.name })),
+      });
+
+      for (const provider of groupProviders) {
+        const oldPriority = provider.priority ?? 0;
+        const newPriority = priority;
+        if (oldPriority !== newPriority) {
+          changes.push({
+            providerId: provider.id,
+            name: provider.name,
+            oldPriority,
+            newPriority,
+            costMultiplier,
+          });
+        }
+      }
+    }
+
+    const summary: AutoSortResult["summary"] = {
+      totalProviders: providers.length,
+      changedCount: changes.length,
+      groupCount: groups.length,
+    };
+
+    if (!args.confirm) {
+      return {
+        ok: true,
+        data: {
+          groups,
+          changes,
+          summary,
+          applied: false,
+        },
+      };
+    }
+
+    if (changes.length > 0) {
+      await updateProviderPrioritiesBatch(
+        changes.map((change) => ({ id: change.providerId, priority: change.newPriority }))
+      );
+      try {
+        await publishProviderCacheInvalidation();
+      } catch (error) {
+        logger.warn("autoSortProviderPriority:cache_invalidation_failed", {
+          changedCount: changes.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        groups,
+        changes,
+        summary,
+        applied: true,
+      },
+    };
+  } catch (error) {
+    logger.error("autoSortProviderPriority:error", error);
+    const message = error instanceof Error ? error.message : "自动排序供应商优先级失败";
     return { ok: false, error: message };
   }
 }
@@ -662,7 +905,9 @@ export async function getProvidersHealthStatus() {
       return {};
     }
 
-    const providerIds = await findAllProviders().then((providers) => providers.map((p) => p.id));
+    const providerIds = await findAllProvidersFresh().then((providers) =>
+      providers.map((p) => p.id)
+    );
     const healthStatus = await getAllHealthStatusAsync(providerIds, {
       forceRefresh: true,
     });
@@ -709,12 +954,37 @@ export async function resetProviderCircuit(providerId: number): Promise<ActionRe
     }
 
     resetCircuit(providerId);
-    revalidatePath("/settings/providers");
 
     return { ok: true };
   } catch (error) {
     logger.error("重置熔断器失败:", error);
     const message = error instanceof Error ? error.message : "重置熔断器失败";
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * 手动重置供应商“总用量”（用于总消费上限 limit_total_usd）
+ *
+ * 说明：
+ * - 不删除历史请求日志，仅更新 providers.total_cost_reset_at 作为聚合下限。
+ */
+export async function resetProviderTotalUsage(providerId: number): Promise<ActionResult> {
+  try {
+    const session = await getSession();
+    if (!session || session.user.role !== "admin") {
+      return { ok: false, error: "无权限执行此操作" };
+    }
+
+    const ok = await resetProviderTotalCostResetAt(providerId, new Date());
+    if (!ok) {
+      return { ok: false, error: "供应商不存在" };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    logger.error("重置供应商总用量失败:", error);
+    const message = error instanceof Error ? error.message : "重置供应商总用量失败";
     return { ok: false, error: message };
   }
 }
@@ -1791,92 +2061,6 @@ function mergeStreamChunks(chunks: ProviderApiResponse[]): ProviderApiResponse {
   return base;
 }
 
-type ProviderUrlValidationError = {
-  message: string;
-  details: {
-    error: string;
-    errorType: "InvalidProviderUrl" | "BlockedUrl" | "BlockedPort";
-  };
-};
-
-function validateProviderUrlForConnectivity(
-  providerUrl: string
-): { valid: true; normalizedUrl: string } | { valid: false; error: ProviderUrlValidationError } {
-  const trimmedUrl = providerUrl.trim();
-
-  try {
-    const parsedProviderUrl = new URL(trimmedUrl);
-
-    if (!["https:", "http:"].includes(parsedProviderUrl.protocol)) {
-      return {
-        valid: false,
-        error: {
-          message: "供应商地址格式无效",
-          details: {
-            error: "仅支持 HTTP 和 HTTPS 协议",
-            errorType: "InvalidProviderUrl",
-          },
-        },
-      };
-    }
-
-    const hostname = parsedProviderUrl.hostname.toLowerCase();
-    const blockedPatterns = [
-      /^localhost$/i,
-      /^127\.\d+\.\d+\.\d+$/,
-      /^10\.\d+\.\d+\.\d+$/,
-      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/,
-      /^192\.168\.\d+\.\d+$/,
-      /^169\.254\.\d+\.\d+$/,
-      /^::1$/,
-      /^fe80:/i,
-      /^fc00:/i,
-      /^fd00:/i,
-    ];
-
-    if (blockedPatterns.some((pattern) => pattern.test(hostname))) {
-      return {
-        valid: false,
-        error: {
-          message: "供应商地址安全检查失败",
-          details: {
-            error: "不允许访问内部网络地址",
-            errorType: "BlockedUrl",
-          },
-        },
-      };
-    }
-
-    const port = parsedProviderUrl.port ? parseInt(parsedProviderUrl.port, 10) : null;
-    const dangerousPorts = [22, 23, 25, 3306, 5432, 6379, 27017, 9200];
-    if (port && dangerousPorts.includes(port)) {
-      return {
-        valid: false,
-        error: {
-          message: "供应商地址端口检查失败",
-          details: {
-            error: "不允许访问内部服务端口",
-            errorType: "BlockedPort",
-          },
-        },
-      };
-    }
-
-    return { valid: true, normalizedUrl: trimmedUrl };
-  } catch (error) {
-    return {
-      valid: false,
-      error: {
-        message: "供应商地址格式无效",
-        details: {
-          error: error instanceof Error ? error.message : "URL 解析失败",
-          errorType: "InvalidProviderUrl",
-        },
-      },
-    };
-  }
-}
-
 async function executeProviderApiTest(
   data: ProviderApiTestArgs,
   options: {
@@ -2636,8 +2820,8 @@ const SUB_STATUS_MESSAGES: Record<TestSubStatus, string> = {
 };
 
 /**
- * Check if a URL is safe for API testing (SSRF prevention)
- * Wraps validateProviderUrlForConnectivity with a simpler interface
+ * 检查 URL 是否可用于 API 测试（仅做基础格式校验）
+ * 对 validateProviderUrlForConnectivity 的薄封装
  */
 async function isUrlSafeForApiTest(
   providerUrl: string
@@ -3121,5 +3305,81 @@ async function fetchAnthropicModels(
     return buildSuccessResult(result.data.map((m) => m.id).sort(), "fetchAnthropicModels");
   } catch (error) {
     return handleFetchException(error, "fetchAnthropicModels");
+  }
+}
+
+/**
+ * 解析分组字符串为数组
+ */
+function parseGroupString(groupString: string): string[] {
+  return groupString
+    .split(",")
+    .map((g) => g.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 检查供应商分组是否匹配用户分组
+ */
+function checkProviderGroupMatch(providerGroupTag: string | null, userGroups: string[]): boolean {
+  if (userGroups.includes(PROVIDER_GROUP.ALL)) {
+    return true;
+  }
+
+  const providerTags = providerGroupTag
+    ? parseGroupString(providerGroupTag)
+    : [PROVIDER_GROUP.DEFAULT];
+
+  return providerTags.some((tag) => userGroups.includes(tag));
+}
+
+/**
+ * 根据供应商分组获取模型建议列表
+ *
+ * 用于用户/密钥编辑时的模型限制下拉建议。
+ * 从匹配分组的启用供应商中收集 allowedModels 并去重。
+ *
+ * @param providerGroup - 可选的供应商分组（逗号分隔），默认为 "default"
+ * @returns 去重后的模型列表
+ */
+export async function getModelSuggestionsByProviderGroup(
+  providerGroup?: string | null
+): Promise<ActionResult<string[]>> {
+  try {
+    const session = await getSession();
+    if (!session) {
+      return { ok: false, error: "未登录" };
+    }
+
+    // 获取所有启用的供应商
+    const providers = await findAllProviders();
+    const enabledProviders = providers.filter((p) => p.isEnabled);
+
+    // 解析用户分组
+    const userGroups = providerGroup ? parseGroupString(providerGroup) : [PROVIDER_GROUP.DEFAULT];
+
+    // 过滤匹配分组的供应商并收集 allowedModels
+    const modelSet = new Set<string>();
+
+    for (const provider of enabledProviders) {
+      if (checkProviderGroupMatch(provider.groupTag, userGroups)) {
+        const models = provider.allowedModels;
+        if (models && Array.isArray(models)) {
+          for (const model of models) {
+            if (model) {
+              modelSet.add(model);
+            }
+          }
+        }
+      }
+    }
+
+    // 转换为数组并排序
+    const sortedModels = Array.from(modelSet).sort();
+
+    return { ok: true, data: sortedModels };
+  } catch (error) {
+    logger.error("获取模型建议列表失败:", error);
+    return { ok: false, error: "获取模型建议列表失败" };
   }
 }

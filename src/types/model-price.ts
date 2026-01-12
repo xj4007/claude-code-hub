@@ -5,6 +5,7 @@ export interface ModelPriceData {
   // 基础价格信息
   input_cost_per_token?: number;
   output_cost_per_token?: number;
+  input_cost_per_request?: number; // 按次调用固定费用（与 token 费用叠加）
 
   // 缓存相关价格
   cache_creation_input_token_cost?: number;
@@ -28,7 +29,9 @@ export interface ModelPriceData {
   };
 
   // 模型能力信息
+  display_name?: string;
   litellm_provider?: string;
+  providers?: string[];
   max_input_tokens?: number;
   max_output_tokens?: number;
   max_tokens?: number;
@@ -51,12 +54,18 @@ export interface ModelPriceData {
 }
 
 /**
+ * 价格来源类型
+ */
+export type ModelPriceSource = "litellm" | "manual";
+
+/**
  * 模型价格记录
  */
 export interface ModelPrice {
   id: number;
   modelName: string;
   priceData: ModelPriceData;
+  source: ModelPriceSource;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -77,4 +86,22 @@ export interface PriceUpdateResult {
   unchanged: string[]; // 未变化的模型
   failed: string[]; // 处理失败的模型
   total: number; // 总数
+  skippedConflicts?: string[]; // 因冲突而跳过的手动添加模型
+}
+
+/**
+ * 同步冲突信息
+ */
+export interface SyncConflict {
+  modelName: string;
+  manualPrice: ModelPriceData; // 当前手动添加的价格
+  litellmPrice: ModelPriceData; // LiteLLM 中的价格
+}
+
+/**
+ * 同步冲突检查结果
+ */
+export interface SyncConflictCheckResult {
+  hasConflicts: boolean;
+  conflicts: SyncConflict[];
 }

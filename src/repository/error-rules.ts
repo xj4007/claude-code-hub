@@ -291,6 +291,22 @@ export async function deleteErrorRule(id: number): Promise<boolean> {
  */
 const DEFAULT_ERROR_RULES = [
   {
+    pattern: "Missing or invalid 'alt' query parameter. Expected 'alt=sse'",
+    category: "parameter_error",
+    description: "Not supported non-streaming request",
+    matchType: "contains" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 105,
+    overrideResponse: {
+      error: {
+        code: 400,
+        status: "INVALID_ARGUMENT",
+        message: "当前中转站不支持 Gemini generateContent 端点",
+      },
+    },
+  },
+  {
     pattern: "prompt is too long.*(tokens.*maximum|maximum.*tokens)",
     category: "prompt_limit",
     description: "Prompt token limit exceeded",
@@ -524,6 +540,25 @@ const DEFAULT_ERROR_RULES = [
       },
     },
   },
+  // Issue #550: tool_use block missing corresponding tool_result in next message (non-retryable)
+  {
+    pattern:
+      "tool_use.*ids were found without.*tool_result.*immediately after|tool_use.*block must have.*corresponding.*tool_result.*block in the next message",
+    category: "validation_error",
+    description: "tool_use block missing corresponding tool_result in next message (client error)",
+    matchType: "regex" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 88,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "validation_error",
+        message:
+          "tool_use 块缺少对应的 tool_result，请确保每个 tool_use 在下一条消息中有对应的 tool_result 块",
+      },
+    },
+  },
   // Model-related errors (non-retryable)
   {
     pattern: '"actualModel" is null|actualModel.*null',
@@ -605,6 +640,65 @@ const DEFAULT_ERROR_RULES = [
       },
     },
   },
+  // Issue #571: Total media count (document pages + images) exceeds limit
+  {
+    pattern: "Too much media",
+    category: "media_limit",
+    description: "Total media count (document pages + images) exceeds API limit",
+    matchType: "contains" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 79,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "media_limit",
+        message: "媒体数量超过限制（文档页数 + 图片数量 > 100），请减少图片或文档页数后重试",
+      },
+    },
+  },
+  // thinking 已启用，但工具调用续写的 assistant 消息未以 thinking/redacted_thinking 块开头
+  // 常见原因：工具调用回合中途切换 thinking 模式、或未原样回传上一轮 thinking/redacted_thinking 块（含 signature/data）
+  {
+    pattern: "expected\\s*`?thinking`?\\s*or\\s*`?redacted_thinking`?[^\\n]*found\\s*`?tool_use`?",
+    category: "thinking_error",
+    description:
+      "Thinking enabled but the last assistant tool_use message does not start with thinking/redacted_thinking",
+    matchType: "regex" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 68,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "thinking_error",
+        message:
+          "thinking 已启用，但工具调用续写的 assistant 消息未以 thinking/redacted_thinking 块开头。" +
+          "请在 tool_result 续写请求中原样回传上一轮 assistant 的 thinking/redacted_thinking 块（含 signature/data），" +
+          "或关闭 thinking 后重试。",
+      },
+    },
+  },
+  {
+    pattern: "must start with a thinking block",
+    category: "thinking_error",
+    description:
+      "Thinking enabled but the last assistant tool_use message does not start with thinking/redacted_thinking",
+    matchType: "contains" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 69,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "thinking_error",
+        message:
+          "thinking 已启用，但工具调用续写的 assistant 消息未以 thinking/redacted_thinking 块开头。" +
+          "请在 tool_result 续写请求中原样回传上一轮 assistant 的 thinking/redacted_thinking 块（含 signature/data），" +
+          "或关闭 thinking 后重试。",
+      },
+    },
+  },
   {
     pattern:
       "thinking.*format.*invalid|Expected.*thinking.*but found|clear_thinking.*requires.*thinking.*enabled",
@@ -619,6 +713,25 @@ const DEFAULT_ERROR_RULES = [
       error: {
         type: "thinking_error",
         message: "thinking 块格式无效，请检查配置或请求参数",
+      },
+    },
+  },
+  // Issue #518: Invalid signature in thinking block (cross-channel format incompatibility)
+  {
+    pattern: "Invalid `signature` in `thinking` block",
+    category: "thinking_error",
+    description:
+      "Invalid signature in thinking block (occurs when switching between Anthropic and non-Anthropic channels)",
+    matchType: "contains" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 71,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "thinking_error",
+        message:
+          "thinking 块签名无效，通常发生在 Anthropic 渠道与非 Anthropic 渠道切换时，请检查请求格式",
       },
     },
   },
@@ -683,6 +796,24 @@ const DEFAULT_ERROR_RULES = [
       error: {
         type: "invalid_request",
         message: "图片大小超过最大限制，请压缩图片后重试",
+      },
+    },
+  },
+  // Issue #541: Codex model reasoning effort mismatch
+  {
+    pattern: "Unsupported value.*is not supported with.*model.*Supported values",
+    category: "thinking_error",
+    description: "Reasoning effort (thinking intensity) not supported by the Codex model",
+    matchType: "regex" as const,
+    isDefault: true,
+    isEnabled: true,
+    priority: 72,
+    overrideResponse: {
+      type: "error",
+      error: {
+        type: "thinking_error",
+        message:
+          "当前思考强度不支持该模型，请调整 reasoning_effort 参数或切换模型（如 'high' 仅支持部分模型）",
       },
     },
   },

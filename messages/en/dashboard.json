@@ -1,4 +1,9 @@
 {
+  "actions": {
+    "copy": "Copy",
+    "download": "Download",
+    "copied": "Copied"
+  },
   "title": {
     "costRanking": "Cost Leaderboard",
     "costRankingDescription": "View user cost rankings, data updates every 5 minutes",
@@ -79,8 +84,8 @@
       "minRetryCountPlaceholder": "Enter minimum retries",
       "apply": "Apply Filter",
       "reset": "Reset",
-      "last7days": "Last 7 Days",
-      "last30days": "Last 30 Days",
+      "last7days": "7d",
+      "last30days": "30d",
       "customRange": "Custom Range",
       "export": "Export",
       "exporting": "Exporting...",
@@ -127,6 +132,8 @@
       "nextPage": "Next Page",
       "blocked": "Blocked",
       "nonBilling": "Non-Billing",
+      "skipped": "Skipped",
+      "specialSettings": "Special",
       "times": "times",
       "loadedCount": "Loaded {count} records",
       "loadingMore": "Loading more...",
@@ -152,6 +159,15 @@
       "success": "Request completed successfully",
       "error": "Request failed, here are the detailed error messages and provider decision chain",
       "processing": "Request is in progress, not yet completed",
+      "specialSettings": {
+        "title": "Special settings"
+      },
+      "skipped": {
+        "title": "Skipped",
+        "reason": "Reason",
+        "warmup": "Warmup Fast Response (CCH)",
+        "desc": "This request was identified as a Warmup probe and was answered directly by CCH without forwarding to upstream providers; it is not billed, not rate-limited, and excluded from statistics."
+      },
       "blocked": {
         "title": "Blocking Information",
         "type": "Blocking Type",
@@ -369,11 +385,12 @@
       "providers": "Providers",
       "models": "Models",
       "noDetailedData": "No detailed data available",
-      "storageTip": "Tip: Set environment variable STORE_SESSION_MESSAGES=true to enable messages and response storage",
+      "storageTip": "No detailed data found. To view request details, please check if the environment variable STORE_SESSION_MESSAGES is set to true. Note: Enabling this increases Redis memory usage and may include sensitive information.",
       "clientInfo": "Client Info",
       "requestHeaders": "Request Headers",
       "requestBody": "Request Body",
       "requestMessages": "Request Messages",
+      "specialSettings": "Special",
       "requestMessagesDescription": "Message content sent by the client",
       "responseHeaders": "Response Headers",
       "responseBody": "Response Body",
@@ -386,8 +403,10 @@
     "actions": {
       "back": "Back",
       "view": "View",
-      "copyMessages": "Copy Messages",
-      "downloadMessages": "Download Messages",
+      "copy": "Copy",
+      "download": "Download",
+      "copyMessages": "Copy Request (Headers + Body)",
+      "downloadMessages": "Download Request (Headers + Body)",
       "copied": "Copied",
       "copyResponse": "Copy Response",
       "terminate": "Terminate",
@@ -429,7 +448,14 @@
       "nextPage": "Next",
       "pageInfo": "Page {page} / {total}",
       "sseEvent": "Event",
-      "sseData": "Data"
+      "sseData": "Data",
+      "hardLimit": {
+        "title": "Content too large",
+        "size": "Size: {sizeMB} MB ({sizeBytes} bytes)",
+        "maximum": "Maximum allowed: {maxSizeMB} MB or {maxLines} lines",
+        "hint": "Please download the file to view the full content.",
+        "download": "Download"
+      }
     },
     "status": {
       "loading": "Loading...",
@@ -754,6 +780,12 @@
       "description": "Provider groups for this key (default: default).",
       "defaultDescription": "default includes providers without groupTag.",
       "descriptionWithUserGroup": "Provider groups for this key (user groups: {group}; default: default)."
+    },
+    "successTitle": "Key Created Successfully",
+    "successDescription": "Your API key has been created successfully.",
+    "generatedKey": {
+      "label": "Generated Key",
+      "hint": "You can manage this key in the key list (enable/disable, quotas, etc.), but the full key is only shown once. Copy it now."
     },
     "errors": {
       "userIdMissing": "User ID does not exist",
@@ -1128,6 +1160,9 @@
       "defaultGroup": "default",
       "userStatus": {
         "disabled": "Disabled"
+      },
+      "actions": {
+        "addKey": "Add Key"
       }
     },
     "keyFullDisplay": {
@@ -1196,8 +1231,8 @@
       "editKeyTitle": "Edit Key"
     },
     "editDialog": {
-      "title": "Edit user and keys",
-      "description": "Edit user information and API key settings",
+      "title": "Edit user",
+      "description": "Edit user information",
       "userSection": "User settings",
       "keysSection": "Key settings",
       "scrollToKey": "Scroll to key",
@@ -1295,7 +1330,12 @@
       "description": "Create a new user and configure API keys",
       "saveFailed": "Failed to create user",
       "keyCreateFailed": "Failed to create key",
+      "rollbackFailed": "Rollback failed. The user may have been created without a key. Please delete the user manually (userId: {userId}) and try again.",
       "createSuccess": "User created successfully",
+      "successTitle": "Created Successfully",
+      "successDescription": "User and key have been created",
+      "generatedKey": "Generated Key",
+      "keyHint": "You can manage this key from the user management page (enable/disable, quotas, etc.), but the full key is only shown once. Copy it now.",
       "keysSection": "Keys",
       "addKey": "Add key",
       "removeKey": "Remove key",
@@ -1304,31 +1344,6 @@
       "confirmRemoveKeyDescription": "Are you sure you want to remove the key \"{name}\"?",
       "creating": "Creating...",
       "create": "Create"
-    },
-    "onboarding": {
-      "skip": "Skip",
-      "next": "Next",
-      "prev": "Previous",
-      "finish": "Start Creating",
-      "stepIndicator": "Step {current} of {total}",
-      "steps": {
-        "welcome": {
-          "title": "Users & Keys",
-          "description": "Users are the main entities for API access. Each user can have multiple API Keys. User-level limits affect all keys, while key-level limits provide finer control."
-        },
-        "limits": {
-          "title": "Limit Management",
-          "description": "Six types of limits are supported: 5-hour, daily, weekly, monthly, total, and concurrent sessions. Add limit rules as needed to flexibly control usage."
-        },
-        "groups": {
-          "title": "Provider Groups",
-          "description": "Use the group feature to restrict users to specific providers. Key-level groups take priority over user-level groups."
-        },
-        "keyFeatures": {
-          "title": "Key Features",
-          "description": "Each key can be independently configured with Cache TTL override, Web UI login permission, and other advanced features."
-        }
-      }
     },
     "limitRules": {
       "addRule": "Add limit rule",
@@ -1361,6 +1376,10 @@
       "oneMonth": "In 1 month",
       "threeMonths": "In 3 months",
       "oneYear": "In 1 year"
+    },
+    "providerGroupSelect": {
+      "providersSuffix": "providers",
+      "loadFailed": "Failed to load provider groups"
     },
     "providerGroup": {
       "label": "Provider group",
@@ -1415,7 +1434,7 @@
         "label": "Enable dedicated balance page",
         "description": "Allow users to view their balance via a dedicated page",
         "descriptionEnabled": "When enabled, this key will access an independent personal usage page upon login. However, it cannot modify its own key's provider group.",
-        "descriptionDisabled": "When disabled, the user cannot access the personal usage page UI. However, they can modify their own key's provider group in the restricted Web UI."
+        "descriptionDisabled": "When disabled, the user cannot access the personal usage page UI. Instead, they will use the restricted Web UI."
       },
       "cacheTtlOverride": {
         "label": "Cache TTL override",
@@ -1540,7 +1559,7 @@
           "label": "Independent Personal Usage Page",
           "description": "When enabled, this key can access an independent personal usage page",
           "descriptionEnabled": "When enabled, this key will access an independent personal usage page upon login. However, it cannot modify its own key's provider group.",
-          "descriptionDisabled": "When disabled, the user cannot access the personal usage page UI. However, they can modify their own key's provider group in the restricted Web UI."
+          "descriptionDisabled": "When disabled, the user cannot access the personal usage page UI. Instead, they will use the restricted Web UI."
         },
       "providerGroup": {
         "label": "Provider Group",
@@ -1575,5 +1594,44 @@
         "overwriteHint": "This type already exists, saving will overwrite the existing value"
       }
     }
+  },
+  "webhookMigration": {
+    "title": "Webhook System Upgrade",
+    "description": "We have launched a new Webhook notification system with multi-target delivery, independent configuration, and improved reliability.",
+    "step1": {
+      "title": "Legacy Webhook Configuration Detected",
+      "description": "The system detected that you are using legacy Webhook configuration. The new system offers more powerful features, and we recommend migrating."
+    },
+    "step2": {
+      "title": "Select Platform Type",
+      "description": "The following Webhook URLs could not be automatically identified. Please select the platform manually:"
+    },
+    "platformOptions": {
+      "wechat": "WeChat Work",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "telegram": "Telegram",
+      "custom": "Custom"
+    },
+    "migrateButton": "Start Migration",
+    "skipButton": "Maybe Later",
+    "nextButton": "Next",
+    "goToSettingsButton": "Go to Settings",
+    "migrating": "Migrating...",
+    "success": "Migration Complete",
+    "successDescription": "Your Webhook configuration has been successfully migrated to the new system.",
+    "error": "Migration Failed",
+    "errorGeneric": "Migration failed. Please try again later.",
+    "detectedWebhooks": "Detected Webhooks",
+    "notificationTypes": {
+      "circuit_breaker": "Circuit Breaker Alert",
+      "daily_leaderboard": "Daily Leaderboard",
+      "cost_alert": "Cost Alert"
+    },
+    "urlLabel": "Webhook URL",
+    "platformLabel": "Platform Type",
+    "autoDetected": "Auto-detected",
+    "selectPlatform": "Select platform",
+    "successStats": "Created {targets} targets, {bindings} bindings"
   }
 }

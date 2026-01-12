@@ -6,32 +6,13 @@ import type { ReactNode } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { NextIntlClientProvider } from "next-intl";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import dashboardMessages from "@messages/en/dashboard.json";
 import { CodeDisplay } from "@/components/ui/code-display";
 
+// Use real locale messages to ensure test stays in sync with actual translations
 const messages = {
-  dashboard: {
-    sessions: {
-      codeDisplay: {
-        raw: "Raw",
-        pretty: "Pretty",
-        searchPlaceholder: "Search",
-        expand: "Expand",
-        collapse: "Collapse",
-        themeAuto: "Auto",
-        themeLight: "Light",
-        themeDark: "Dark",
-        noMatches: "No matches",
-        onlyMatches: "Only matches",
-        showAll: "Show all",
-        prevPage: "Prev",
-        nextPage: "Next",
-        pageInfo: "Page {page} / {total}",
-        sseEvent: "Event",
-        sseData: "Data",
-      },
-    },
-  },
+  dashboard: dashboardMessages,
 } as const;
 
 function renderWithIntl(node: ReactNode) {
@@ -201,7 +182,7 @@ describe("CodeDisplay", () => {
       "[data-testid='code-display-only-matches-toggle']"
     ) as HTMLElement;
     click(toggle);
-    expect(container.textContent).toContain("No matches");
+    expect(container.textContent).toContain(dashboardMessages.sessions.codeDisplay.noMatches);
 
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -238,7 +219,7 @@ describe("CodeDisplay", () => {
       setter?.call(input, "does-not-exist");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(container.textContent).toContain("No matches");
+    expect(container.textContent).toContain(dashboardMessages.sessions.codeDisplay.noMatches);
 
     unmount();
   });
@@ -288,9 +269,55 @@ describe("CodeDisplay", () => {
       <CodeDisplay content={hugeContent} language="text" fileName="huge.txt" />
     );
 
-    expect(container.textContent).toContain("Content too large");
-    expect(container.textContent).toContain("1.00 MB");
+    expect(container.textContent).toContain(dashboardMessages.sessions.codeDisplay.hardLimit.title);
     unmount();
+  });
+
+  test("hard-limited content provides download action", async () => {
+    const hugeContent = "x".repeat(1_000_001);
+
+    const createObjectURLSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation(() => "blob:mock");
+    const revokeObjectURLSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi.spyOn(document, "createElement");
+    let lastAnchor: HTMLAnchorElement | null = null;
+    createElementSpy.mockImplementation(((tagName: string) => {
+      const el = originalCreateElement(tagName);
+      if (tagName === "a") {
+        lastAnchor = el as HTMLAnchorElement;
+      }
+      return el;
+    }) as unknown as typeof document.createElement);
+
+    const { container, unmount } = renderWithIntl(
+      <CodeDisplay content={hugeContent} language="text" fileName="huge.txt" />
+    );
+
+    const downloadBtn = container.querySelector(
+      "[data-testid='code-display-hard-limit-download']"
+    ) as HTMLButtonElement;
+    expect(downloadBtn).not.toBeNull();
+    click(downloadBtn);
+
+    expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
+    expect(lastAnchor).not.toBeNull();
+    expect(lastAnchor!.download).toBe("huge.txt");
+    expect(lastAnchor!.href).toBe("blob:mock");
+
+    const blob = createObjectURLSpy.mock.calls[0]?.[0] as Blob;
+    expect(await blob.text()).toBe(hugeContent);
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith("blob:mock");
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+
+    unmount();
+    createObjectURLSpy.mockRestore();
+    revokeObjectURLSpy.mockRestore();
+    clickSpy.mockRestore();
+    createElementSpy.mockRestore();
   });
 
   test("should show error for too many lines", () => {
@@ -299,8 +326,7 @@ describe("CodeDisplay", () => {
       <CodeDisplay content={manyLines} language="text" fileName="many-lines.txt" />
     );
 
-    expect(container.textContent).toContain("Content too large");
-    expect(container.textContent).toContain("10,000 lines");
+    expect(container.textContent).toContain(dashboardMessages.sessions.codeDisplay.hardLimit.title);
     unmount();
   });
 });

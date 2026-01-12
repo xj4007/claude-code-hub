@@ -3,9 +3,13 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/drizzle/db";
 import { keys as keysTable, messageRequest, providers, users } from "@/drizzle/schema";
+import { getEnvConfig } from "@/lib/config/env.schema";
 import { formatCostForStorage } from "@/lib/utils/currency";
 import type { CreateMessageRequestData, MessageRequest } from "@/types/message";
+import type { SpecialSetting } from "@/types/special-settings";
+import { EXCLUDE_WARMUP_CONDITION } from "./_shared/message-request-conditions";
 import { toMessageRequest } from "./_shared/transformers";
+import { enqueueMessageRequestUpdate } from "./message-write-buffer";
 
 /**
  * 创建消息请求记录
@@ -67,6 +71,11 @@ export async function createMessageRequest(
  * 更新消息请求的耗时
  */
 export async function updateMessageRequestDuration(id: number, durationMs: number): Promise<void> {
+  if (getEnvConfig().MESSAGE_REQUEST_WRITE_MODE === "async") {
+    enqueueMessageRequestUpdate(id, { durationMs });
+    return;
+  }
+
   await db
     .update(messageRequest)
     .set({
@@ -85,6 +94,11 @@ export async function updateMessageRequestCost(
 ): Promise<void> {
   const formattedCost = formatCostForStorage(costUsd);
   if (!formattedCost) {
+    return;
+  }
+
+  if (getEnvConfig().MESSAGE_REQUEST_WRITE_MODE === "async") {
+    enqueueMessageRequestUpdate(id, { costUsd: formattedCost });
     return;
   }
 
@@ -119,8 +133,14 @@ export async function updateMessageRequestDetails(
     model?: string; // ⭐ 新增：支持更新重定向后的模型名称
     providerId?: number; // ⭐ 新增：支持更新最终供应商ID（重试切换后）
     context1mApplied?: boolean; // 是否应用了1M上下文窗口
+    specialSettings?: CreateMessageRequestData["special_settings"]; // 特殊设置（审计/展示）
   }
 ): Promise<void> {
+  if (getEnvConfig().MESSAGE_REQUEST_WRITE_MODE === "async") {
+    enqueueMessageRequestUpdate(id, details);
+    return;
+  }
+
   const updateData: Record<string, unknown> = {
     updatedAt: new Date(),
   };
@@ -172,6 +192,9 @@ export async function updateMessageRequestDetails(
   }
   if (details.context1mApplied !== undefined) {
     updateData.context1mApplied = details.context1mApplied;
+  }
+  if (details.specialSettings !== undefined) {
+    updateData.specialSettings = details.specialSettings;
   }
 
   await db.update(messageRequest).set(updateData).where(eq(messageRequest.id, id));
@@ -249,6 +272,52 @@ export async function findMessageRequestBySessionId(
 }
 
 /**
+ * 按 (sessionId, requestSequence) 获取请求的审计字段（用于 Session 详情页补齐特殊设置展示）
+ */
+export async function findMessageRequestAuditBySessionIdAndSequence(
+  sessionId: string,
+  requestSequence: number
+): Promise<{
+  statusCode: number | null;
+  blockedBy: string | null;
+  blockedReason: string | null;
+  cacheTtlApplied: string | null;
+  context1mApplied: boolean | null;
+  specialSettings: SpecialSetting[] | null;
+} | null> {
+  const [row] = await db
+    .select({
+      statusCode: messageRequest.statusCode,
+      blockedBy: messageRequest.blockedBy,
+      blockedReason: messageRequest.blockedReason,
+      cacheTtlApplied: messageRequest.cacheTtlApplied,
+      context1mApplied: messageRequest.context1mApplied,
+      specialSettings: messageRequest.specialSettings,
+    })
+    .from(messageRequest)
+    .where(
+      and(
+        eq(messageRequest.sessionId, sessionId),
+        eq(messageRequest.requestSequence, requestSequence),
+        isNull(messageRequest.deletedAt)
+      )
+    )
+    .limit(1);
+
+  if (!row) return null;
+  return {
+    statusCode: row.statusCode,
+    blockedBy: row.blockedBy,
+    blockedReason: row.blockedReason,
+    cacheTtlApplied: row.cacheTtlApplied,
+    context1mApplied: row.context1mApplied,
+    specialSettings: Array.isArray(row.specialSettings)
+      ? (row.specialSettings as SpecialSetting[])
+      : null,
+  };
+}
+
+/**
  * 聚合查询指定 session 的所有请求数据
  * 返回总成本、总 Token、请求次数、供应商列表等
  *
@@ -279,20 +348,23 @@ export async function aggregateSessionStats(sessionId: string): Promise<{
   // 1. 聚合统计
   const [stats] = await db
     .select({
-      requestCount: sql<number>`count(*)::double precision`,
-      totalCostUsd: sql<string>`COALESCE(sum(${messageRequest.costUsd}), 0)`,
-      totalInputTokens: sql<number>`COALESCE(sum(${messageRequest.inputTokens})::double precision, 0::double precision)`,
-      totalOutputTokens: sql<number>`COALESCE(sum(${messageRequest.outputTokens})::double precision, 0::double precision)`,
-      totalCacheCreationTokens: sql<number>`COALESCE(sum(${messageRequest.cacheCreationInputTokens})::double precision, 0::double precision)`,
-      totalCacheReadTokens: sql<number>`COALESCE(sum(${messageRequest.cacheReadInputTokens})::double precision, 0::double precision)`,
-      totalDurationMs: sql<number>`COALESCE(sum(${messageRequest.durationMs})::double precision, 0::double precision)`,
-      firstRequestAt: sql<Date>`min(${messageRequest.createdAt})`,
-      lastRequestAt: sql<Date>`max(${messageRequest.createdAt})`,
+      // Session 存在性：包含所有请求（含 warmup）
+      totalCount: sql<number>`count(*)::double precision`,
+      // Session 统计：排除 warmup（不计入任何统计）
+      requestCount: sql<number>`count(*) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision`,
+      totalCostUsd: sql<string>`COALESCE(sum(${messageRequest.costUsd}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION}), 0)`,
+      totalInputTokens: sql<number>`COALESCE(sum(${messageRequest.inputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalOutputTokens: sql<number>`COALESCE(sum(${messageRequest.outputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalCacheCreationTokens: sql<number>`COALESCE(sum(${messageRequest.cacheCreationInputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalCacheReadTokens: sql<number>`COALESCE(sum(${messageRequest.cacheReadInputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalDurationMs: sql<number>`COALESCE(sum(${messageRequest.durationMs}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      firstRequestAt: sql<Date>`min(${messageRequest.createdAt}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})`,
+      lastRequestAt: sql<Date>`max(${messageRequest.createdAt}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})`,
     })
     .from(messageRequest)
     .where(and(eq(messageRequest.sessionId, sessionId), isNull(messageRequest.deletedAt)));
 
-  if (!stats || stats.requestCount === 0) {
+  if (!stats || stats.totalCount === 0) {
     return null;
   }
 
@@ -308,6 +380,7 @@ export async function aggregateSessionStats(sessionId: string): Promise<{
       and(
         eq(messageRequest.sessionId, sessionId),
         isNull(messageRequest.deletedAt),
+        EXCLUDE_WARMUP_CONDITION,
         sql`${messageRequest.providerId} IS NOT NULL`
       )
     );
@@ -320,6 +393,7 @@ export async function aggregateSessionStats(sessionId: string): Promise<{
       and(
         eq(messageRequest.sessionId, sessionId),
         isNull(messageRequest.deletedAt),
+        EXCLUDE_WARMUP_CONDITION,
         sql`${messageRequest.model} IS NOT NULL`
       )
     );
@@ -332,6 +406,7 @@ export async function aggregateSessionStats(sessionId: string): Promise<{
       and(
         eq(messageRequest.sessionId, sessionId),
         isNull(messageRequest.deletedAt),
+        EXCLUDE_WARMUP_CONDITION,
         sql`${messageRequest.cacheTtlApplied} IS NOT NULL`
       )
     );
@@ -379,7 +454,7 @@ export async function aggregateSessionStats(sessionId: string): Promise<{
     lastRequestAt: stats.lastRequestAt,
     providers: providerList.map((p) => ({
       id: p.providerId!,
-      name: p.providerName || "未知",
+      name: p.providerName || `Provider #${p.providerId}`,
     })),
     models: modelList.map((m) => m.model!),
     userName: userInfo.userName,
@@ -431,15 +506,15 @@ export async function aggregateMultipleSessionStats(sessionIds: string[]): Promi
   const statsResults = await db
     .select({
       sessionId: messageRequest.sessionId,
-      requestCount: sql<number>`count(*)::double precision`,
-      totalCostUsd: sql<string>`COALESCE(sum(${messageRequest.costUsd}), 0)`,
-      totalInputTokens: sql<number>`COALESCE(sum(${messageRequest.inputTokens})::double precision, 0::double precision)`,
-      totalOutputTokens: sql<number>`COALESCE(sum(${messageRequest.outputTokens})::double precision, 0::double precision)`,
-      totalCacheCreationTokens: sql<number>`COALESCE(sum(${messageRequest.cacheCreationInputTokens})::double precision, 0::double precision)`,
-      totalCacheReadTokens: sql<number>`COALESCE(sum(${messageRequest.cacheReadInputTokens})::double precision, 0::double precision)`,
-      totalDurationMs: sql<number>`COALESCE(sum(${messageRequest.durationMs})::double precision, 0::double precision)`,
-      firstRequestAt: sql<Date>`min(${messageRequest.createdAt})`,
-      lastRequestAt: sql<Date>`max(${messageRequest.createdAt})`,
+      requestCount: sql<number>`count(*) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision`,
+      totalCostUsd: sql<string>`COALESCE(sum(${messageRequest.costUsd}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION}), 0)`,
+      totalInputTokens: sql<number>`COALESCE(sum(${messageRequest.inputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalOutputTokens: sql<number>`COALESCE(sum(${messageRequest.outputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalCacheCreationTokens: sql<number>`COALESCE(sum(${messageRequest.cacheCreationInputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalCacheReadTokens: sql<number>`COALESCE(sum(${messageRequest.cacheReadInputTokens}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      totalDurationMs: sql<number>`COALESCE(sum(${messageRequest.durationMs}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})::double precision, 0::double precision)`,
+      firstRequestAt: sql<Date>`min(${messageRequest.createdAt}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})`,
+      lastRequestAt: sql<Date>`max(${messageRequest.createdAt}) FILTER (WHERE ${EXCLUDE_WARMUP_CONDITION})`,
     })
     .from(messageRequest)
     .where(and(inArray(messageRequest.sessionId, sessionIds), isNull(messageRequest.deletedAt)))
@@ -461,6 +536,7 @@ export async function aggregateMultipleSessionStats(sessionIds: string[]): Promi
       and(
         inArray(messageRequest.sessionId, sessionIds),
         isNull(messageRequest.deletedAt),
+        EXCLUDE_WARMUP_CONDITION,
         sql`${messageRequest.providerId} IS NOT NULL`
       )
     );
@@ -476,7 +552,7 @@ export async function aggregateMultipleSessionStats(sessionIds: string[]): Promi
     }
     providersMap.get(p.sessionId)?.push({
       id: p.providerId!,
-      name: p.providerName || "未知",
+      name: p.providerName || `Provider #${p.providerId}`,
     });
   }
 
@@ -491,6 +567,7 @@ export async function aggregateMultipleSessionStats(sessionIds: string[]): Promi
       and(
         inArray(messageRequest.sessionId, sessionIds),
         isNull(messageRequest.deletedAt),
+        EXCLUDE_WARMUP_CONDITION,
         sql`${messageRequest.model} IS NOT NULL`
       )
     );
@@ -518,6 +595,7 @@ export async function aggregateMultipleSessionStats(sessionIds: string[]): Promi
       and(
         inArray(messageRequest.sessionId, sessionIds),
         isNull(messageRequest.deletedAt),
+        EXCLUDE_WARMUP_CONDITION,
         sql`${messageRequest.cacheTtlApplied} IS NOT NULL`
       )
     );

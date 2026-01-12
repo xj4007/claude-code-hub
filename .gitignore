@@ -12,6 +12,10 @@
 
 # testing
 /coverage
+/coverage-quota
+/coverage-my-usage
+/coverage-proxy-guard-pipeline
+/coverage-thinking-signature-rectifier
 
 # next.js
 /.next/
@@ -51,6 +55,7 @@ next-env.d.ts
 # tooling & logs
 .cursor/
 .claude/
+.codex/
 .serena/
 !src/app/dashboard/logs/
 !src/app/settings/logs/

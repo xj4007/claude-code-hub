@@ -1,8 +1,9 @@
 "use server";
 
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/drizzle/db";
 import { providers } from "@/drizzle/schema";
+import { getCachedProviders } from "@/lib/cache/provider-cache";
 import { getEnvConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import type { CreateProviderData, Provider, UpdateProviderData } from "@/types/provider";
@@ -38,6 +39,8 @@ export async function createProvider(providerData: CreateProviderData): Promise<
       providerData.limit_weekly_usd != null ? providerData.limit_weekly_usd.toString() : null,
     limitMonthlyUsd:
       providerData.limit_monthly_usd != null ? providerData.limit_monthly_usd.toString() : null,
+    limitTotalUsd:
+      providerData.limit_total_usd != null ? providerData.limit_total_usd.toString() : null,
     limitConcurrentSessions: providerData.limit_concurrent_sessions,
     maxRetryAttempts: providerData.max_retry_attempts ?? null,
     circuitBreakerFailureThreshold: providerData.circuit_breaker_failure_threshold ?? 5,
@@ -53,6 +56,10 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     faviconUrl: providerData.favicon_url ?? null,
     cacheTtlPreference: providerData.cache_ttl_preference ?? null,
     context1mPreference: providerData.context_1m_preference ?? null,
+    codexReasoningEffortPreference: providerData.codex_reasoning_effort_preference ?? null,
+    codexReasoningSummaryPreference: providerData.codex_reasoning_summary_preference ?? null,
+    codexTextVerbosityPreference: providerData.codex_text_verbosity_preference ?? null,
+    codexParallelToolCallsPreference: providerData.codex_parallel_tool_calls_preference ?? null,
     tpm: providerData.tpm,
     rpm: providerData.rpm,
     rpd: providerData.rpd,
@@ -85,6 +92,8 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     dailyResetTime: providers.dailyResetTime,
     limitWeeklyUsd: providers.limitWeeklyUsd,
     limitMonthlyUsd: providers.limitMonthlyUsd,
+    limitTotalUsd: providers.limitTotalUsd,
+    totalCostResetAt: providers.totalCostResetAt,
     limitConcurrentSessions: providers.limitConcurrentSessions,
     maxRetryAttempts: providers.maxRetryAttempts,
     circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
@@ -99,6 +108,10 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     faviconUrl: providers.faviconUrl,
     cacheTtlPreference: providers.cacheTtlPreference,
     context1mPreference: providers.context1mPreference,
+    codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+    codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+    codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+    codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
     tpm: providers.tpm,
     rpm: providers.rpm,
     rpd: providers.rpd,
@@ -142,6 +155,8 @@ export async function findProviderList(
       dailyResetTime: providers.dailyResetTime,
       limitWeeklyUsd: providers.limitWeeklyUsd,
       limitMonthlyUsd: providers.limitMonthlyUsd,
+      limitTotalUsd: providers.limitTotalUsd,
+      totalCostResetAt: providers.totalCostResetAt,
       limitConcurrentSessions: providers.limitConcurrentSessions,
       maxRetryAttempts: providers.maxRetryAttempts,
       circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
@@ -156,6 +171,10 @@ export async function findProviderList(
       faviconUrl: providers.faviconUrl,
       cacheTtlPreference: providers.cacheTtlPreference,
       context1mPreference: providers.context1mPreference,
+      codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+      codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+      codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+      codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -179,10 +198,13 @@ export async function findProviderList(
 }
 
 /**
- * Fetch all providers without pagination limits.
- * Use this when you need the complete provider list (e.g., for selection, health status).
+ * 直接从数据库获取所有供应商（绕过缓存）
+ *
+ * 用于：
+ * - 管理后台需要保证数据新鲜度的场景
+ * - 缓存刷新时的数据源
  */
-export async function findAllProviders(): Promise<Provider[]> {
+export async function findAllProvidersFresh(): Promise<Provider[]> {
   const result = await db
     .select({
       id: providers.id,
@@ -210,6 +232,8 @@ export async function findAllProviders(): Promise<Provider[]> {
       dailyResetTime: providers.dailyResetTime,
       limitWeeklyUsd: providers.limitWeeklyUsd,
       limitMonthlyUsd: providers.limitMonthlyUsd,
+      limitTotalUsd: providers.limitTotalUsd,
+      totalCostResetAt: providers.totalCostResetAt,
       limitConcurrentSessions: providers.limitConcurrentSessions,
       maxRetryAttempts: providers.maxRetryAttempts,
       circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
@@ -224,6 +248,10 @@ export async function findAllProviders(): Promise<Provider[]> {
       faviconUrl: providers.faviconUrl,
       cacheTtlPreference: providers.cacheTtlPreference,
       context1mPreference: providers.context1mPreference,
+      codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+      codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+      codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+      codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -236,12 +264,25 @@ export async function findAllProviders(): Promise<Provider[]> {
     .where(isNull(providers.deletedAt))
     .orderBy(desc(providers.createdAt));
 
-  logger.trace("findAllProviders:query_result", {
+  logger.trace("findAllProvidersFresh:query_result", {
     count: result.length,
     ids: result.map((r) => r.id),
   });
 
   return result.map(toProvider);
+}
+
+/**
+ * 获取所有供应商（带缓存）
+ *
+ * 使用进程级缓存：
+ * - 30s TTL 自动过期
+ * - Redis Pub/Sub 跨实例即时失效
+ *
+ * 用于高频读取场景（如供应商选择）
+ */
+export async function findAllProviders(): Promise<Provider[]> {
+  return getCachedProviders(findAllProvidersFresh);
 }
 
 export async function findProviderById(id: number): Promise<Provider | null> {
@@ -272,6 +313,8 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       dailyResetTime: providers.dailyResetTime,
       limitWeeklyUsd: providers.limitWeeklyUsd,
       limitMonthlyUsd: providers.limitMonthlyUsd,
+      limitTotalUsd: providers.limitTotalUsd,
+      totalCostResetAt: providers.totalCostResetAt,
       limitConcurrentSessions: providers.limitConcurrentSessions,
       maxRetryAttempts: providers.maxRetryAttempts,
       circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
@@ -286,6 +329,10 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       faviconUrl: providers.faviconUrl,
       cacheTtlPreference: providers.cacheTtlPreference,
       context1mPreference: providers.context1mPreference,
+      codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+      codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+      codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+      codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -357,6 +404,9 @@ export async function updateProvider(
   if (providerData.limit_monthly_usd !== undefined)
     dbData.limitMonthlyUsd =
       providerData.limit_monthly_usd != null ? providerData.limit_monthly_usd.toString() : null;
+  if (providerData.limit_total_usd !== undefined)
+    dbData.limitTotalUsd =
+      providerData.limit_total_usd != null ? providerData.limit_total_usd.toString() : null;
   if (providerData.limit_concurrent_sessions !== undefined)
     dbData.limitConcurrentSessions = providerData.limit_concurrent_sessions;
   if (providerData.max_retry_attempts !== undefined)
@@ -383,6 +433,16 @@ export async function updateProvider(
     dbData.cacheTtlPreference = providerData.cache_ttl_preference ?? null;
   if (providerData.context_1m_preference !== undefined)
     dbData.context1mPreference = providerData.context_1m_preference ?? null;
+  if (providerData.codex_reasoning_effort_preference !== undefined)
+    dbData.codexReasoningEffortPreference = providerData.codex_reasoning_effort_preference ?? null;
+  if (providerData.codex_reasoning_summary_preference !== undefined)
+    dbData.codexReasoningSummaryPreference =
+      providerData.codex_reasoning_summary_preference ?? null;
+  if (providerData.codex_text_verbosity_preference !== undefined)
+    dbData.codexTextVerbosityPreference = providerData.codex_text_verbosity_preference ?? null;
+  if (providerData.codex_parallel_tool_calls_preference !== undefined)
+    dbData.codexParallelToolCallsPreference =
+      providerData.codex_parallel_tool_calls_preference ?? null;
   if (providerData.tpm !== undefined) dbData.tpm = providerData.tpm;
   if (providerData.rpm !== undefined) dbData.rpm = providerData.rpm;
   if (providerData.rpd !== undefined) dbData.rpd = providerData.rpd;
@@ -416,6 +476,8 @@ export async function updateProvider(
       dailyResetTime: providers.dailyResetTime,
       limitWeeklyUsd: providers.limitWeeklyUsd,
       limitMonthlyUsd: providers.limitMonthlyUsd,
+      limitTotalUsd: providers.limitTotalUsd,
+      totalCostResetAt: providers.totalCostResetAt,
       limitConcurrentSessions: providers.limitConcurrentSessions,
       maxRetryAttempts: providers.maxRetryAttempts,
       circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
@@ -430,6 +492,10 @@ export async function updateProvider(
       faviconUrl: providers.faviconUrl,
       cacheTtlPreference: providers.cacheTtlPreference,
       context1mPreference: providers.context1mPreference,
+      codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+      codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+      codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+      codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -443,11 +509,67 @@ export async function updateProvider(
   return toProvider(provider);
 }
 
+export async function updateProviderPrioritiesBatch(
+  updates: Array<{ id: number; priority: number }>
+): Promise<number> {
+  if (updates.length === 0) {
+    return 0;
+  }
+
+  // Deduplicate ids: last one wins
+  const updateMap = new Map<number, number>();
+  for (const update of updates) {
+    updateMap.set(update.id, update.priority);
+  }
+
+  const ids = Array.from(updateMap.keys());
+  const priorityCol = sql.identifier("priority");
+  const updatedAtCol = sql.identifier("updated_at");
+  const cases = ids.map((id) => sql`WHEN ${id} THEN ${updateMap.get(id)!}`);
+
+  const idList = sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `
+  );
+
+  const query = sql`
+    UPDATE providers
+    SET
+      ${priorityCol} = CASE id ${sql.join(cases, sql` `)} ELSE ${priorityCol} END,
+      ${updatedAtCol} = NOW()
+    WHERE id IN (${idList}) AND deleted_at IS NULL
+  `;
+
+  const result = await db.execute(query);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (result as any).rowCount || 0;
+}
+
 export async function deleteProvider(id: number): Promise<boolean> {
   const result = await db
     .update(providers)
     .set({ deletedAt: new Date() })
     .where(and(eq(providers.id, id), isNull(providers.deletedAt)))
+    .returning({ id: providers.id });
+
+  return result.length > 0;
+}
+
+/**
+ * 手动重置供应商“总消费”统计起点
+ *
+ * 说明：
+ * - 不删除 message_request 历史记录，仅通过 resetAt 作为聚合下限实现“从 0 重新累计”。
+ */
+export async function resetProviderTotalCostResetAt(
+  providerId: number,
+  resetAt: Date
+): Promise<boolean> {
+  const result = await db
+    .update(providers)
+    .set({ totalCostResetAt: resetAt, updatedAt: new Date() })
+    .where(and(eq(providers.id, providerId), isNull(providers.deletedAt)))
     .returning({ id: providers.id });
 
   return result.length > 0;
@@ -467,7 +589,7 @@ export async function getDistinctProviderGroups(): Promise<string[]> {
     .where(
       and(
         isNull(providers.deletedAt),
-        sql`${providers.groupTag} IS NOT NULL AND ${providers.groupTag} != ''`
+        and(isNotNull(providers.groupTag), ne(providers.groupTag, ""))
       )
     )
     .orderBy(providers.groupTag);
@@ -540,6 +662,7 @@ export async function getProviderStatistics(): Promise<
         FROM providers p
         -- 性能优化：添加日期过滤条件，仅扫描今日数据（避免全表扫描）
         LEFT JOIN message_request mr ON mr.deleted_at IS NULL
+          AND (mr.blocked_by IS NULL OR mr.blocked_by <> 'warmup')
           AND mr.created_at >= (CURRENT_DATE AT TIME ZONE ${timezone})
         WHERE p.deleted_at IS NULL
         GROUP BY p.id
@@ -556,6 +679,7 @@ export async function getProviderStatistics(): Promise<
         FROM message_request
         -- 性能优化：添加 7 天时间范围限制（避免扫描历史数据）
         WHERE deleted_at IS NULL
+          AND (blocked_by IS NULL OR blocked_by <> 'warmup')
           AND created_at >= (CURRENT_DATE AT TIME ZONE ${timezone} - INTERVAL '7 days')
         ORDER BY final_provider_id, created_at DESC
       )

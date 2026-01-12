@@ -13,9 +13,23 @@ import {
   pgEnum,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import type { SpecialSetting } from '@/types/special-settings';
+import type { ResponseFixerConfig } from '@/types/system-config';
 
 // Enums
 export const dailyResetModeEnum = pgEnum('daily_reset_mode', ['fixed', 'rolling']);
+export const webhookProviderTypeEnum = pgEnum('webhook_provider_type', [
+  'wechat',
+  'feishu',
+  'dingtalk',
+  'telegram',
+  'custom',
+]);
+export const notificationTypeEnum = pgEnum('notification_type', [
+  'circuit_breaker',
+  'daily_leaderboard',
+  'cost_alert',
+]);
 
 // Users table
 export const users = pgTable('users', {
@@ -188,6 +202,8 @@ export const providers = pgTable('providers', {
     .notNull(), // HH:mm 格式，如 "18:00"（仅 fixed 模式使用）
   limitWeeklyUsd: numeric('limit_weekly_usd', { precision: 10, scale: 2 }),
   limitMonthlyUsd: numeric('limit_monthly_usd', { precision: 10, scale: 2 }),
+  limitTotalUsd: numeric('limit_total_usd', { precision: 10, scale: 2 }),
+  totalCostResetAt: timestamp('total_cost_reset_at', { withTimezone: true }),
   limitConcurrentSessions: integer('limit_concurrent_sessions').default(0),
 
   // 熔断器配置（每个供应商独立配置）
@@ -230,6 +246,14 @@ export const providers = pgTable('providers', {
   // - 'force_enable': 强制启用 1M 上下文（仅对支持的模型生效）
   // - 'disabled': 禁用 1M 上下文，即使客户端请求也不启用
   context1mPreference: varchar('context_1m_preference', { length: 20 }),
+
+  // Codex（Responses API）参数覆写（仅对 Codex 类型供应商有效）
+  // - 'inherit' 或 null: 遵循客户端请求
+  // - 其他值: 强制覆写对应请求体字段
+  codexReasoningEffortPreference: varchar('codex_reasoning_effort_preference', { length: 20 }),
+  codexReasoningSummaryPreference: varchar('codex_reasoning_summary_preference', { length: 20 }),
+  codexTextVerbosityPreference: varchar('codex_text_verbosity_preference', { length: 10 }),
+  codexParallelToolCallsPreference: varchar('codex_parallel_tool_calls_preference', { length: 10 }),
 
   // 废弃（保留向后兼容，但不再使用）
   tpm: integer('tpm').default(0),
@@ -297,6 +321,9 @@ export const messageRequest = pgTable('message_request', {
   // 1M Context Window 应用状态
   context1mApplied: boolean('context_1m_applied').default(false),
 
+  // 特殊设置（用于记录各类“特殊行为/覆写”的命中与生效情况，便于审计与展示）
+  specialSettings: jsonb('special_settings').$type<SpecialSetting[]>(),
+
   // 错误信息
   errorMessage: text('error_message'),
   errorStack: text('error_stack'),  // 完整堆栈信息，用于排查 TypeError: terminated 等流错误
@@ -326,6 +353,8 @@ export const messageRequest = pgTable('message_request', {
   messageRequestSessionSeqIdx: index('idx_message_request_session_seq').on(table.sessionId, table.requestSequence).where(sql`${table.deletedAt} IS NULL`),
   // Endpoint 过滤查询索引（仅针对未删除数据）
   messageRequestEndpointIdx: index('idx_message_request_endpoint').on(table.endpoint).where(sql`${table.deletedAt} IS NULL`),
+  // blocked_by 过滤查询索引（用于排除 warmup/sensitive 等拦截请求）
+  messageRequestBlockedByIdx: index('idx_message_request_blocked_by').on(table.blockedBy).where(sql`${table.deletedAt} IS NULL`),
   // 基础索引
   messageRequestProviderIdIdx: index('idx_message_request_provider_id').on(table.providerId),
   messageRequestUserIdIdx: index('idx_message_request_user_id').on(table.userId),
@@ -339,6 +368,8 @@ export const modelPrices = pgTable('model_prices', {
   id: serial('id').primaryKey(),
   modelName: varchar('model_name').notNull(),
   priceData: jsonb('price_data').notNull(),
+  // 价格来源: 'litellm' = 从 LiteLLM 同步, 'manual' = 手动添加
+  source: varchar('source', { length: 20 }).notNull().default('litellm').$type<'litellm' | 'manual'>(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
@@ -347,6 +378,8 @@ export const modelPrices = pgTable('model_prices', {
   // 基础索引
   modelPricesModelNameIdx: index('idx_model_prices_model_name').on(table.modelName),
   modelPricesCreatedAtIdx: index('idx_model_prices_created_at').on(table.createdAt.desc()),
+  // 按来源过滤的索引
+  modelPricesSourceIdx: index('idx_model_prices_source').on(table.source),
 }));
 
 // Error Rules table
@@ -452,6 +485,30 @@ export const systemSettings = pgTable('system_settings', {
   // 启用 HTTP/2 连接供应商（默认关闭，启用后自动回退到 HTTP/1.1 失败时）
   enableHttp2: boolean('enable_http2').notNull().default(false),
 
+  // 可选拦截 Anthropic Warmup 请求（默认关闭）
+  // 开启后：对 /v1/messages 的 Warmup 请求直接由 CCH 抢答，避免打到上游供应商
+  interceptAnthropicWarmupRequests: boolean('intercept_anthropic_warmup_requests')
+    .notNull()
+    .default(false),
+
+  // thinking signature 整流器（默认开启）
+  // 开启后：当 Anthropic 类型供应商出现 thinking 签名不兼容/非法请求等 400 错误时，自动整流并重试一次
+  enableThinkingSignatureRectifier: boolean('enable_thinking_signature_rectifier')
+    .notNull()
+    .default(true),
+
+  // 响应整流（默认开启）
+  enableResponseFixer: boolean('enable_response_fixer').notNull().default(true),
+  responseFixerConfig: jsonb('response_fixer_config')
+    .$type<ResponseFixerConfig>()
+    .default({
+      fixTruncatedJson: true,
+      fixSseFormat: true,
+      fixEncoding: true,
+      maxJsonDepth: 200,
+      maxFixSize: 1024 * 1024,
+    }),
+
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
@@ -462,6 +519,8 @@ export const notificationSettings = pgTable('notification_settings', {
 
   // 全局开关
   enabled: boolean('enabled').notNull().default(false),
+  // 兼容旧配置：默认使用 legacy 字段（单 URL / 自动识别），创建新目标后会切到新模式
+  useLegacyMode: boolean('use_legacy_mode').notNull().default(false),
 
   // 熔断器告警配置
   circuitBreakerEnabled: boolean('circuit_breaker_enabled').notNull().default(false),
@@ -482,6 +541,73 @@ export const notificationSettings = pgTable('notification_settings', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
+
+// Webhook Targets table - 推送目标（多平台配置）
+export const webhookTargets = pgTable('webhook_targets', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 100 }).notNull(),
+  providerType: webhookProviderTypeEnum('provider_type').notNull(),
+
+  // 通用配置
+  webhookUrl: varchar('webhook_url', { length: 1024 }),
+
+  // Telegram 特有配置
+  telegramBotToken: varchar('telegram_bot_token', { length: 256 }),
+  telegramChatId: varchar('telegram_chat_id', { length: 64 }),
+
+  // 钉钉签名配置
+  dingtalkSecret: varchar('dingtalk_secret', { length: 256 }),
+
+  // 自定义 Webhook 配置
+  customTemplate: jsonb('custom_template'),
+  customHeaders: jsonb('custom_headers'),
+
+  // 代理配置
+  proxyUrl: varchar('proxy_url', { length: 512 }),
+  proxyFallbackToDirect: boolean('proxy_fallback_to_direct').default(false),
+
+  // 元数据
+  isEnabled: boolean('is_enabled').notNull().default(true),
+  lastTestAt: timestamp('last_test_at', { withTimezone: true }),
+  lastTestResult: jsonb('last_test_result'),
+
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+});
+
+// Notification Target Bindings table - 通知类型与目标绑定
+export const notificationTargetBindings = pgTable(
+  'notification_target_bindings',
+  {
+    id: serial('id').primaryKey(),
+    notificationType: notificationTypeEnum('notification_type').notNull(),
+    targetId: integer('target_id')
+      .notNull()
+      .references(() => webhookTargets.id, { onDelete: 'cascade' }),
+
+    isEnabled: boolean('is_enabled').notNull().default(true),
+
+    // 定时配置覆盖（可选，仅用于定时类通知）
+    scheduleCron: varchar('schedule_cron', { length: 100 }),
+    scheduleTimezone: varchar('schedule_timezone', { length: 50 }).default('Asia/Shanghai'),
+
+    // 模板覆盖（可选，主要用于 custom webhook）
+    templateOverride: jsonb('template_override'),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    uniqueBinding: uniqueIndex('unique_notification_target_binding').on(
+      table.notificationType,
+      table.targetId
+    ),
+    bindingsTypeIdx: index('idx_notification_bindings_type').on(
+      table.notificationType,
+      table.isEnabled
+    ),
+    bindingsTargetIdx: index('idx_notification_bindings_target').on(table.targetId, table.isEnabled),
+  })
+);
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({

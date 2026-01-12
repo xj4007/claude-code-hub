@@ -100,6 +100,18 @@
       "allowGlobalViewDesc": "關閉後，普通使用者在儀表板僅能查看自己金鑰的使用統計。",
       "verboseProviderError": "詳細供應商錯誤資訊",
       "verboseProviderErrorDesc": "開啟後，當所有供應商不可用時返回詳細錯誤資訊（包含供應商數量、限流原因等）；關閉後僅返回簡潔錯誤碼。",
+      "interceptAnthropicWarmupRequests": "攔截 Warmup 請求（Anthropic）",
+      "interceptAnthropicWarmupRequestsDesc": "開啟後，識別到 Claude Code 的 Warmup 探測請求將由 CCH 直接搶答短回應，避免存取上游供應商；該請求會記錄在日誌中，但不計費、不限流、不計入統計。",
+      "enableThinkingSignatureRectifier": "啟用 thinking 簽名整流器",
+      "enableThinkingSignatureRectifierDesc": "當 Anthropic 類型供應商返回 thinking 簽名不相容或非法請求等錯誤時，自動移除不相容的 thinking 相關區塊並對同一供應商重試一次（預設開啟）。",
+      "enableResponseFixer": "啟用回應整流",
+      "enableResponseFixerDesc": "自動修復上游回應中常見的編碼、SSE 與 JSON 格式問題（預設開啟）。",
+      "responseFixerFixEncoding": "修復編碼問題",
+      "responseFixerFixEncodingDesc": "移除 BOM 與空字節，並對無效 UTF-8 做相容處理。",
+      "responseFixerFixSseFormat": "修復 SSE 格式",
+      "responseFixerFixSseFormatDesc": "補齊 data: 前綴、統一換行符，並修復常見欄位格式。",
+      "responseFixerFixTruncatedJson": "修復截斷的 JSON",
+      "responseFixerFixTruncatedJsonDesc": "補齊未閉合的括號/引號，移除尾隨逗號，必要時補 null。",
       "cleanupSchedule": "清理週期",
       "cleanupScheduleDesc": "選擇自動清理的執行週期",
       "configUpdated": "系統設定已更新，頁面將重新整理以應用貨幣顯示變更。",
@@ -371,14 +383,101 @@
   "notifications": {
     "title": "訊息推送",
     "description": "設定 Webhook 訊息推送",
-    "global": {
-      "title": "通知總開關",
-      "description": "啟用或停用所有訊息推送功能",
-      "enable": "啟用訊息推送"
+  "global": {
+    "title": "通知總開關",
+    "description": "啟用或停用所有訊息推送功能",
+    "enable": "啟用訊息推送",
+    "legacyModeTitle": "相容模式",
+    "legacyModeDescription": "目前使用舊版單一 URL 推送設定。建立推送目標後將自動切換為多目標模式。"
+  },
+  "targets": {
+    "title": "推送目標",
+    "description": "管理推送目標，支援企業微信、飛書、釘釘、Telegram、自訂 Webhook",
+    "add": "新增目標",
+    "update": "儲存目標",
+    "edit": "編輯",
+    "delete": "刪除",
+    "deleteConfirmTitle": "刪除推送目標",
+    "deleteConfirm": "確定要刪除此目標嗎？相關綁定也會被移除。",
+    "enable": "啟用目標",
+    "statusEnabled": "已啟用",
+    "statusDisabled": "已停用",
+    "lastTestAt": "上次測試",
+    "lastTestNever": "從未測試",
+    "lastTestSuccess": "測試成功",
+    "lastTestFailed": "測試失敗",
+    "test": "測試",
+    "testSelectType": "選擇測試類型",
+    "emptyHint": "尚無推送目標，點擊「新增目標」建立。",
+    "created": "目標已新增",
+    "updated": "目標已更新",
+    "deleted": "目標已刪除",
+    "bindingsSaved": "綁定已儲存"
+  },
+  "targetDialog": {
+    "createTitle": "新增推送目標",
+    "editTitle": "編輯推送目標",
+    "name": "目標名稱",
+    "namePlaceholder": "例如：運維群",
+    "type": "平台類型",
+    "selectType": "請選擇平台類型",
+    "enable": "啟用",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlPlaceholder": "https://example.com/webhook",
+    "telegramBotToken": "Telegram Bot Token",
+    "telegramBotTokenPlaceholder": "例如：123456:ABCDEF...",
+    "telegramChatId": "Telegram Chat ID",
+    "telegramChatIdPlaceholder": "例如：-1001234567890",
+    "dingtalkSecret": "釘釘簽名密鑰",
+    "dingtalkSecretPlaceholder": "可選，用於簽名",
+    "customHeaders": "自訂 Headers（JSON）",
+    "customHeadersPlaceholder": "{\"X-Token\":\"...\"}",
+    "errors": {
+      "headersInvalidJson": "Headers 不是有效 JSON",
+      "headersMustBeObject": "Headers 必須是 JSON 物件",
+      "headersValueMustBeString": "Headers 的值必須為字串"
     },
-    "circuitBreaker": {
-      "title": "熔斷器告警",
-      "description": "供應商完全熔斷時立即推送告警訊息",
+    "types": {
+      "wechat": "企業微信",
+      "feishu": "飛書",
+      "dingtalk": "釘釘",
+      "telegram": "Telegram",
+      "custom": "自訂 Webhook"
+    },
+    "proxy": {
+      "title": "代理設定",
+      "toggle": "展開/收起代理設定",
+      "url": "代理位址",
+      "urlPlaceholder": "http://127.0.0.1:7890",
+      "fallbackToDirect": "代理失敗時回退直連"
+    }
+  },
+  "bindings": {
+    "title": "綁定",
+    "noTargets": "尚無可用推送目標",
+    "bindTarget": "綁定目標",
+    "enable": "啟用",
+    "enableType": "啟用此通知",
+    "advanced": "進階",
+    "scheduleCron": "Cron 表達式",
+    "scheduleCronPlaceholder": "例如：0 9 * * *",
+    "scheduleTimezone": "時區",
+    "templateOverride": "模板覆蓋",
+    "editTemplateOverride": "編輯覆蓋",
+    "templateOverrideTitle": "編輯模板覆蓋",
+    "boundCount": "已綁定：{count}",
+    "enabledCount": "已啟用：{count}"
+  },
+  "templateEditor": {
+    "title": "模板（JSON）",
+    "placeholder": "請輸入 JSON 模板...",
+    "jsonInvalid": "JSON 格式不正確",
+    "placeholders": "佔位符",
+    "insert": "插入"
+  },
+  "circuitBreaker": {
+    "title": "熔斷器告警",
+    "description": "供應商完全熔斷時立即推送告警訊息",
       "enable": "啟用熔斷器告警",
       "webhook": "Webhook URL",
       "webhookPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
@@ -435,24 +534,92 @@
       "description": "管理 AI 模型的價格設定"
     },
     "searchPlaceholder": "搜尋模型名稱...",
+    "filters": {
+      "all": "全部",
+      "local": "本地",
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "vertex": "Vertex"
+    },
+    "badges": {
+      "local": "本地"
+    },
+    "capabilities": {
+      "assistantPrefill": "助手預填充",
+      "computerUse": "電腦使用",
+      "functionCalling": "函數呼叫",
+      "pdfInput": "PDF 輸入",
+      "promptCaching": "Prompt 快取",
+      "reasoning": "推理",
+      "responseSchema": "回應 Schema",
+      "toolChoice": "工具選擇",
+      "vision": "視覺",
+      "statusSupported": "支援",
+      "statusUnsupported": "不支援",
+      "tooltip": "{label}: {status}"
+    },
     "sync": {
-      "button": "同步 LiteLLM 價格",
+      "button": "同步雲端價格表",
       "syncing": "同步中...",
+      "checking": "檢查衝突...",
       "successWithChanges": "價格表更新: 新增 {added} 個，更新 {updated} 個，未變化 {unchanged} 個",
       "successNoChanges": "價格表已是最新，無需更新",
       "failed": "同步失敗",
       "failedError": "同步失敗: {error}",
       "failedNoResult": "價格表更新成功但未返回處理結果",
       "noModels": "未找到支援的模型價格",
-      "partialFailure": "部分更新成功，但有 {failed} 個模型失敗"
+      "partialFailure": "部分更新成功，但有 {failed} 個模型失敗",
+      "failedModels": "失敗模型: {models}",
+      "skippedConflicts": "跳過 {count} 個手動模型"
+    },
+    "conflict": {
+      "title": "選擇要覆蓋的衝突項",
+      "description": "以下模型存在手動維護的價格，勾選後將用 LiteLLM 價格覆蓋，未勾選的保持本地不變",
+      "searchPlaceholder": "搜尋模型...",
+      "table": {
+        "modelName": "模型",
+        "manualPrice": "手動價格",
+        "litellmPrice": "LiteLLM 價格",
+        "action": "操作"
+      },
+      "viewDiff": "查看差異",
+      "diffTitle": "價格差異對比",
+      "diff": {
+        "field": "欄位",
+        "manual": "手動",
+        "litellm": "LiteLLM",
+        "inputPrice": "輸入價格",
+        "outputPrice": "輸出價格",
+        "imagePrice": "圖片價格",
+        "provider": "供應商",
+        "mode": "類型"
+      },
+      "pagination": {
+        "showing": "顯示 {from}-{to} 條，共 {total} 條"
+      },
+      "selectedCount": "已選擇 {count}/{total} 個模型",
+      "noMatch": "未找到符合的模型",
+      "noConflicts": "無衝突項",
+      "applyOverwrite": "套用覆蓋",
+      "applying": "套用中..."
     },
     "table": {
       "modelName": "模型名稱",
-      "type": "類型",
       "provider": "提供商",
+      "capabilities": "能力",
+      "price": "價格",
       "inputPrice": "輸入價格 ($/M)",
       "outputPrice": "輸出價格 ($/M)",
+      "priceInput": "輸入",
+      "priceOutput": "輸出",
+      "pricePerRequest": "按次",
+      "cacheReadPrice": "快取讀取 ($/M)",
+      "cacheCreationPrice": "快取建立 ($/M)",
+      "cache5m": "5m",
+      "cache1h": "1h+",
+      "copyModelId": "複製模型 ID",
       "updatedAt": "更新時間",
+      "actions": "操作",
       "typeChat": "對話",
       "typeImage": "圖像生成",
       "typeCompletion": "補全",
@@ -466,6 +633,7 @@
       "showing": "顯示 {from}-{to} 條，共 {total} 條",
       "previous": "上一頁",
       "next": "下一頁",
+      "perPageLabel": "每頁",
       "perPage": "每頁 {size} 條"
     },
     "stats": {
@@ -475,23 +643,25 @@
     },
     "dialog": {
       "title": "更新模型價格表",
-      "description": "選擇包含模型價格資料的 JSON 檔案並上傳",
-      "selectFile": "點擊選擇 JSON 檔案或拖曳到此處",
+      "description": "選擇包含模型價格資料的 JSON 或 TOML 檔案並上傳",
+      "selectFile": "點擊選擇 JSON/TOML 檔案或拖曳到此處",
       "fileSizeLimit": "檔案大小不能超過 10MB",
       "fileSizeLimitSmall": "檔案大小不超過 10MB",
-      "invalidFileType": "請選擇 JSON 格式的檔案",
+      "invalidFileType": "請選擇 JSON 或 TOML 格式的檔案",
       "fileTooLarge": "檔案大小超過 10MB 限制",
       "upload": "上傳並更新",
       "uploading": "上傳中...",
       "updatePriceTable": "更新價格表",
       "updating": "更新中...",
-      "selectJson": "選擇 JSON 檔案",
+      "selectJson": "選擇檔案",
       "updateSuccess": "價格表更新成功，共更新 {count} 個模型",
       "updateFailed": "更新失敗",
       "systemHasBuiltIn": "系統已內置價格表",
       "manualDownload": "你也可以手動下載",
-      "latestPriceTable": "最新價格表",
+      "latestPriceTable": "雲端價格表",
       "andUploadViaButton": "，並透過上方按鈕上傳",
+      "cloudModelCountLoading": "雲端模型數量載入中...",
+      "cloudModelCountFailed": "雲端模型數量載入失敗",
       "supportedModels": "目前支援 {count} 個模型",
       "results": {
         "title": "更新結果",
@@ -499,9 +669,52 @@
         "success": "成功: {success}",
         "failed": "失敗: {failed}",
         "skipped": "跳過: {skipped}",
+        "more": " (+{count})",
         "details": "詳細資訊",
         "viewDetails": "檢視詳細記錄"
       }
+    },
+    "addModel": "新增模型",
+    "editModel": "編輯模型",
+    "deleteModel": "刪除模型",
+    "addModelDescription": "手動新增模型價格設定",
+    "editModelDescription": "編輯模型的價格設定",
+    "deleteConfirm": "確定要刪除模型 {name} 嗎？此操作無法復原。",
+    "form": {
+      "modelName": "模型 ID",
+      "modelNamePlaceholder": "例如: gpt-5.2-codex",
+      "modelNameRequired": "模型 ID 為必填",
+      "displayName": "顯示名稱（選填）",
+      "displayNamePlaceholder": "例如: GPT-5.2 Codex",
+      "type": "類型",
+      "provider": "提供商",
+      "providerPlaceholder": "例如: openai",
+      "requestPrice": "按次呼叫價格 ($/request)",
+      "inputPrice": "輸入價格 ($/M tokens)",
+      "outputPrice": "輸出價格 ($/M tokens)",
+      "outputPriceImage": "輸出價格 ($/張圖)",
+      "cacheReadPrice": "快取讀取價格 ($/M tokens)",
+      "cacheCreationPrice5m": "快取建立價格（5m，$/M tokens）",
+      "cacheCreationPrice1h": "快取建立價格（1h+，$/M tokens）"
+    },
+    "drawer": {
+      "prefillLabel": "搜尋現有模型並預填充",
+      "prefillEmpty": "未找到匹配的模型",
+      "prefillFailed": "搜尋失敗",
+      "promptCachingHint": "僅當模型支援快取時開啟，並配置下方快取價格",
+      "cachePricingTitle": "快取價格"
+    },
+    "actions": {
+      "edit": "編輯",
+      "more": "更多操作",
+      "delete": "刪除"
+    },
+    "toast": {
+      "createSuccess": "模型已新增",
+      "updateSuccess": "模型已更新",
+      "deleteSuccess": "模型已刪除",
+      "saveFailed": "儲存失敗",
+      "deleteFailed": "刪除失敗"
     }
   },
   "providers": {
@@ -509,6 +722,22 @@
     "addFailed": "新增服務商失敗",
     "addProvider": "新增服务商",
     "addSuccess": "新增服務商成功",
+    "autoSort": {
+      "button": "自動排序優先級",
+      "dialogTitle": "自動排序供應商優先級",
+      "dialogDescription": "根據成本倍率自動分配優先級（低成本 = 高優先級）",
+      "changeCount": "{count} 個供應商將被更新",
+      "noChanges": "無需更改（已排序）",
+      "costMultiplierHeader": "成本倍率",
+      "priorityHeader": "優先級",
+      "providersHeader": "供應商",
+      "changesTitle": "變更詳情",
+      "providerHeader": "供應商",
+      "priorityChangeHeader": "優先級變更",
+      "confirm": "應用變更",
+      "success": "已更新 {count} 個供應商的優先級",
+      "error": "更新優先級失敗"
+    },
     "circuitBroken": "熔断中",
     "clone": "複製服務商",
     "cloneFailed": "複製失敗",
@@ -636,6 +865,15 @@
         "chunksCount": "已接收 {count} 個區塊（{format}）",
         "truncatedPreview": "顯示前 {length} 個字元，複製可查看完整內容",
         "truncatedBrief": "顯示前 {length} 個字元，點擊「查看詳情」以查看更多",
+        "timeout": {
+          "label": "逾時時間（秒）",
+          "desc": "測試請求的最大等待時間（5-120 秒）",
+          "geminiHint": "，Gemini Thinking 模型建議 60 秒以上"
+        },
+        "geminiAuthFallback": {
+          "warning": "Header 認證失敗，使用了 URL 參數認證",
+          "desc": "實際代理轉發僅使用 Header 認證，可能導致請求失敗"
+        },
         "copyFormat": {
           "testResult": "測試結果",
           "message": "訊息",
@@ -954,6 +1192,7 @@
         "create": "新增供應商",
         "edit": "編輯供應商"
       },
+      "dialogDescription": "設定供應商資訊與進階設定。",
       "url": {
         "label": "API 位址 *",
         "placeholder": "例如：https://open.bigmodel.cn/api/anthropic"
@@ -1045,6 +1284,15 @@
               "desc": "分組標籤。僅供 providerGroup 與此值相符的用戶使用。例：設為「premium」表示僅供 providerGroup=\"premium\" 的用戶使用"
             }
           },
+          "cacheTtl": {
+            "label": "Cache TTL 覆寫",
+            "options": {
+              "inherit": "不覆寫（跟隨客戶端）",
+              "5m": "5 分鐘",
+              "1h": "1 小時"
+            },
+            "desc": "強制設定 prompt cache TTL；僅影響包含 cache_control 的請求。"
+          },
           "context1m": {
             "label": "1M 上下文視窗",
             "options": {
@@ -1053,6 +1301,49 @@
               "disabled": "停用"
             },
             "desc": "設定 1M 上下文視窗支援。僅對 Sonnet 模型生效（claude-sonnet-4-5、claude-sonnet-4）。啟用後將套用階梯定價。"
+          },
+          "codexOverrides": {
+            "reasoningEffort": {
+              "label": "推理等級覆寫",
+              "help": "控制模型在輸出前用於推理的強度（推理 token 數量）。選擇「跟隨客戶端」表示不改寫請求；選擇其他值則強制覆寫 reasoning.effort。注意：none 僅 GPT-5.1 系列支援；xhigh 僅 GPT-5.1-Codex-Max 支援，模型不支援會返回錯誤。",
+              "options": {
+                "inherit": "不覆寫（跟隨客戶端）",
+                "minimal": "minimal（更省、更快）",
+                "low": "low",
+                "medium": "medium（預設）",
+                "high": "high（更強推理）",
+                "xhigh": "xhigh（僅 GPT-5.1-Codex-Max）",
+                "none": "none（僅 GPT-5.1）"
+              }
+            },
+            "reasoningSummary": {
+              "label": "推理摘要覆寫",
+              "help": "控制是否回傳推理摘要。auto 回傳精簡摘要，detailed 回傳更詳細摘要；「跟隨客戶端」不改寫 reasoning.summary。",
+              "options": {
+                "inherit": "不覆寫（跟隨客戶端）",
+                "auto": "auto（精簡）",
+                "detailed": "detailed（更詳細）"
+              }
+            },
+            "textVerbosity": {
+              "label": "輸出冗長度覆寫",
+              "help": "控制模型輸出的詳細程度。low 較精簡，high 較詳細；「跟隨客戶端」不改寫 text.verbosity。",
+              "options": {
+                "inherit": "不覆寫（跟隨客戶端）",
+                "low": "low（精簡）",
+                "medium": "medium（預設）",
+                "high": "high（更詳細）"
+              }
+            },
+            "parallelToolCalls": {
+              "label": "並行工具呼叫覆寫",
+              "help": "控制是否允許並行 tool calls。關閉可能降低工具呼叫並發能力；「跟隨客戶端」不改寫 parallel_tool_calls。",
+              "options": {
+                "inherit": "不覆寫（跟隨客戶端）",
+                "true": "強制開啟",
+                "false": "強制關閉"
+              }
+            }
           }
         },
         "rateLimit": {
@@ -1061,6 +1352,7 @@
             "fiveHour": "5h：${amount}",
             "weekly": "週：${amount}",
             "monthly": "月：${amount}",
+            "total": "總：${amount}",
             "concurrent": "並發：{count}",
             "none": "無限制"
           },
@@ -1074,6 +1366,10 @@
           },
           "limitMonthly": {
             "label": "月消費上限 (USD)",
+            "placeholder": "留空表示無限制"
+          },
+          "limitTotal": {
+            "label": "總消費上限 (USD)",
             "placeholder": "留空表示無限制"
           },
           "limitConcurrent": {
@@ -1253,6 +1549,7 @@
       "errors": {
         "invalidUrl": "請輸入有效的 API 位址",
         "invalidWebsiteUrl": "請輸入有效的供應商官網",
+        "groupTagTooLong": "分組標籤總長度不能超過 {max} 個字元",
         "addFailed": "新增供應商失敗",
         "updateFailed": "更新供應商失敗",
         "deleteFailed": "刪除供應商失敗"
@@ -1399,7 +1696,6 @@
       "leaderboard": "供應商排行榜",
       "title": "服务商管理"
     },
-    "addProvider": "新增服務商",
     "filter": {
       "status": {
         "all": "所有狀態",
@@ -1410,7 +1706,8 @@
         "label": "分組:",
         "all": "全部",
         "default": "default"
-      }
+      },
+      "circuitBroken": "熔斷"
     },
     "subtitle": "服務商管理",
     "subtitleDesc": "設定上游服務商的金額限流和並行限制。留空表示無限制。",
@@ -1476,6 +1773,10 @@
       "resetCircuitSuccess": "熔斷器已重置",
       "resetCircuitSuccessDesc": "供應商 \"{name}\" 的熔斷狀態已解除",
       "resetCircuitFailed": "重置熔斷器失敗",
+      "resetUsageTitle": "重置總用量",
+      "resetUsageSuccess": "總用量已重置",
+      "resetUsageSuccessDesc": "供應商 \"{name}\" 的總用量已重置",
+      "resetUsageFailed": "重置總用量失敗",
       "toggleSuccess": "供應商已{status}",
       "toggleSuccessDesc": "供應商 \"{name}\" 狀態已更新",
       "toggleFailed": "狀態切換失敗",

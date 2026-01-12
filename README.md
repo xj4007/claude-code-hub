@@ -25,13 +25,13 @@ Claude Code Hub 通过 Next.js 15 + Hono + PostgreSQL + Redis 组合，实现 Cl
 <table>
 <tr>
 <td width="200">
-<a href="https://cubence.com?source=cch">
+<a href="https://cubence.com/signup?code=SCE7Y3QR&source=cch">
 <img src="public/readme/cubence.jpg" alt="Cubence Logo" width="180"/>
 </a>
 </td>
 <td>
-<b>💎 特别优惠</b>：<a href="https://cubence.com?source=cch">Cubence</a> 一家稳定高效的AI服务中转平台，为 Claude Code、Codex、Gemini 等AI工具提供中转服务，有着不错的稳定性和性价比。<br/>
-Cubence 为 CCH 的使用用户提供了特别的优惠折扣：在购买时使用优惠券 <code>DING113CCH</code>，可享受 <b>20% 优惠折扣</b> → <a href="https://cubence.com?source=cch">立即访问</a>
+<b>💎 特别优惠</b>：<a href="https://cubence.com/signup?code=SCE7Y3QR&source=cch">Cubence</a> 一家稳定高效的AI服务中转平台，为 Claude Code、Codex、Gemini 等AI工具提供中转服务，有着不错的稳定性和性价比。<br/>
+Cubence 为 CCH 的使用用户提供了特别的优惠折扣：在购买时使用优惠券 <code>DING113CCH</code>，可享受 <b>10% 优惠折扣</b> → <a href="https://cubence.com/signup?code=SCE7Y3QR&source=cch">立即访问</a>
 </td>
 </tr>
 </table>
@@ -60,6 +60,20 @@ Cubence 为 CCH 的使用用户提供了特别的优惠折扣：在购买时使�
 <td>
 <b>💎 特别优惠</b>：感谢 <a href="https://www.packyapi.com/register?aff=withcch">PackyCode</a> 赞助本项目！PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。<br/>
 PackyCode 为本软件的用户提供了特别优惠，使用此链接注册并在充值时填写优惠码 <code>WITHCCH</code>，可享受 <b>9 折优惠</b> → <a href="https://www.packyapi.com/register?aff=withcch">立即访问</a>
+</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="200">
+<a href="https://co.yes.vg/register?ref=ygxz">
+<img src="public/readme/yescode.png" alt="YesCode Logo" width="180"/>
+</a>
+</td>
+<td>
+<b>💎 特别优惠</b>：<a href="https://co.yes.vg/register?ref=ygxz">YesCode</a> 是一家低调务实的 AI API 中转服务商，专注于为开发者提供稳定可靠的 Claude、Codex、Gemini 等模型接入服务，以扎实的技术底蕴和持续稳定的服务质量赢得用户信赖。<br/>
+通过此链接注册即可体验 → <a href="https://co.yes.vg/register?ref=ygxz">立即访问</a>
 </td>
 </tr>
 </table>
@@ -275,6 +289,13 @@ Docker Compose 是**首选部署方式**，自动配置数据库、Redis 和应�
 | ------------------------------------------ | ------------------------ | ---------------------------------------------------------------------------- |
 | `ADMIN_TOKEN`                              | `change-me`              | 后台登录令牌，部署前必须修改。                                               |
 | `DSN`                                      | -                        | PostgreSQL 连接串，如 `postgres://user:pass@host:5432/db`.                   |
+| `DB_POOL_MAX`                              | 生产环境 `20` / 开发 `10` | PostgreSQL 连接池上限（每进程）；高并发可提高，k8s 多副本需结合 `max_connections` 分摊。 |
+| `DB_POOL_IDLE_TIMEOUT`                     | `20`                     | 空闲连接回收（秒）；避免连接长期占用。                                       |
+| `DB_POOL_CONNECT_TIMEOUT`                  | `10`                     | 建立连接超时（秒）；避免网络异常时卡住连接获取。                             |
+| `MESSAGE_REQUEST_WRITE_MODE`               | `async`                  | 请求日志写入模式：`async` 异步批量（默认）；`sync` 同步写入（更实时但更慢）。 |
+| `MESSAGE_REQUEST_ASYNC_FLUSH_INTERVAL_MS`  | `250`                    | 异步批量写入 flush 间隔（毫秒）。                                            |
+| `MESSAGE_REQUEST_ASYNC_BATCH_SIZE`         | `200`                    | 单次批量写入最大条数（避免单条 SQL 过大）。                                  |
+| `MESSAGE_REQUEST_ASYNC_MAX_PENDING`        | `5000`                   | 内存队列上限（防止 DB 异常时无限增长；超限将丢弃最旧更新并告警）。           |
 | `AUTO_MIGRATE`                             | `true`                   | 启动时自动执行 Drizzle 迁移；生产环境可关闭以人工控制。                      |
 | `REDIS_URL`                                | `redis://localhost:6379` | Redis 地址，支持 `rediss://` 用于 TLS。                                      |
 | `REDIS_TLS_REJECT_UNAUTHORIZED`            | `true`                   | 是否验证 Redis TLS 证书；设为 `false` 可跳过验证（用于自签/共享证书）。      |

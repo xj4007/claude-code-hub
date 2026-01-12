@@ -100,6 +100,18 @@
       "allowGlobalViewDesc": "При отключении обычные пользователи могут видеть только статистику использования своих ключей на панели.",
       "verboseProviderError": "Подробные ошибки провайдеров",
       "verboseProviderErrorDesc": "При включении возвращает подробные сообщения об ошибках при недоступности всех провайдеров (количество провайдеров, причины ограничений и т.д.); при отключении возвращает только простой код ошибки.",
+      "interceptAnthropicWarmupRequests": "Перехватывать Warmup-запросы (Anthropic)",
+      "interceptAnthropicWarmupRequestsDesc": "Если включено, Warmup-пробные запросы Claude Code будут отвечены самим CCH без обращения к провайдерам; запрос сохраняется в логах, но не тарифицируется, не учитывается в лимитах и исключается из статистики.",
+      "enableThinkingSignatureRectifier": "Включить исправление thinking-signature",
+      "enableThinkingSignatureRectifierDesc": "Если Anthropic-провайдер возвращает ошибку несовместимой подписи thinking или некорректного запроса, автоматически удаляет несовместимые thinking-блоки и повторяет запрос один раз к тому же провайдеру (включено по умолчанию).",
+      "enableResponseFixer": "Включить исправление ответов",
+      "enableResponseFixerDesc": "Автоматически исправляет распространённые проблемы ответа у провайдеров (кодировка, SSE, обрезанный JSON). Включено по умолчанию.",
+      "responseFixerFixEncoding": "Исправлять кодировку",
+      "responseFixerFixEncodingDesc": "Удаляет BOM/нулевые байты и нормализует невалидный UTF-8.",
+      "responseFixerFixSseFormat": "Исправлять формат SSE",
+      "responseFixerFixSseFormatDesc": "Добавляет отсутствующий префикс data:, нормализует переводы строк и исправляет распространённые поля.",
+      "responseFixerFixTruncatedJson": "Исправлять обрезанный JSON",
+      "responseFixerFixTruncatedJsonDesc": "Закрывает незакрытые скобки/кавычки, удаляет завершающие запятые и при необходимости дополняет null.",
       "cleanupSchedule": "График очистки",
       "cleanupScheduleDesc": "Выбрать расписание автоматической очистки",
       "configUpdated": "Параметры системы обновлены. Страница обновится для применения изменений валюты.",
@@ -371,13 +383,100 @@
   "notifications": {
     "title": "Push-уведомления",
     "description": "Настройка push-уведомлений Webhook",
-    "global": {
-      "title": "Главный переключатель уведомлений",
-      "description": "Включить или отключить все функции push-уведомлений",
-      "enable": "Включить push-уведомления"
+  "global": {
+    "title": "Главный переключатель уведомлений",
+    "description": "Включить или отключить все функции push-уведомлений",
+    "enable": "Включить push-уведомления",
+    "legacyModeTitle": "Режим совместимости",
+    "legacyModeDescription": "Сейчас используется устаревшая схема уведомлений с одним URL. Создайте цель отправки, чтобы перейти на режим с несколькими целями."
+  },
+  "targets": {
+    "title": "Цели отправки",
+    "description": "Управление целями отправки. Поддерживает WeCom, Feishu, DingTalk, Telegram и пользовательский Webhook.",
+    "add": "Добавить цель",
+    "update": "Сохранить цель",
+    "edit": "Редактировать",
+    "delete": "Удалить",
+    "deleteConfirmTitle": "Удалить цель",
+    "deleteConfirm": "Удалить эту цель? Связанные привязки также будут удалены.",
+    "enable": "Включить цель",
+    "statusEnabled": "Включено",
+    "statusDisabled": "Отключено",
+    "lastTestAt": "Последний тест",
+    "lastTestNever": "Тестов не было",
+    "lastTestSuccess": "Тест OK",
+    "lastTestFailed": "Тест не пройден",
+    "test": "Тест",
+    "testSelectType": "Выберите тип теста",
+    "emptyHint": "Целей нет. Нажмите «Добавить цель», чтобы создать.",
+    "created": "Цель создана",
+    "updated": "Цель обновлена",
+    "deleted": "Цель удалена",
+    "bindingsSaved": "Привязки сохранены"
+  },
+  "targetDialog": {
+    "createTitle": "Добавить цель",
+    "editTitle": "Редактировать цель",
+    "name": "Название",
+    "namePlaceholder": "например, Ops Group",
+    "type": "Платформа",
+    "selectType": "Выберите платформу",
+    "enable": "Включить",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlPlaceholder": "https://example.com/webhook",
+    "telegramBotToken": "Telegram Bot Token",
+    "telegramBotTokenPlaceholder": "например, 123456:ABCDEF...",
+    "telegramChatId": "Telegram Chat ID",
+    "telegramChatIdPlaceholder": "например, -1001234567890",
+    "dingtalkSecret": "Секрет DingTalk",
+    "dingtalkSecretPlaceholder": "Необязательно, для подписи",
+    "customHeaders": "Пользовательские заголовки (JSON)",
+    "customHeadersPlaceholder": "{\"X-Token\":\"...\"}",
+    "errors": {
+      "headersInvalidJson": "Заголовки должны быть корректным JSON",
+      "headersMustBeObject": "Заголовки должны быть JSON-объектом",
+      "headersValueMustBeString": "Значения заголовков должны быть строками"
     },
-    "circuitBreaker": {
-      "title": "Оповещение о размыкателе цепи",
+    "types": {
+      "wechat": "WeCom",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "telegram": "Telegram",
+      "custom": "Custom Webhook"
+    },
+    "proxy": {
+      "title": "Прокси",
+      "toggle": "Показать/скрыть настройки прокси",
+      "url": "URL прокси",
+      "urlPlaceholder": "http://127.0.0.1:7890",
+      "fallbackToDirect": "При ошибке прокси — прямое подключение"
+    }
+  },
+  "bindings": {
+    "title": "Привязки",
+    "noTargets": "Нет доступных целей отправки.",
+    "bindTarget": "Привязать цель",
+    "enable": "Включить",
+    "enableType": "Включить это уведомление",
+    "advanced": "Дополнительно",
+    "scheduleCron": "Cron",
+    "scheduleCronPlaceholder": "например, 0 9 * * *",
+    "scheduleTimezone": "Часовой пояс",
+    "templateOverride": "Переопределение шаблона",
+    "editTemplateOverride": "Редактировать",
+    "templateOverrideTitle": "Редактировать переопределение шаблона",
+    "boundCount": "Привязано: {count}",
+    "enabledCount": "Включено: {count}"
+  },
+  "templateEditor": {
+    "title": "Шаблон (JSON)",
+    "placeholder": "Введите JSON-шаблон...",
+    "jsonInvalid": "Некорректный JSON",
+    "placeholders": "Плейсхолдеры",
+    "insert": "Вставить"
+  },
+  "circuitBreaker": {
+    "title": "Оповещение о размыкателе цепи",
       "description": "Отправить оповещение немедленно при полном размыкании провайдера",
       "enable": "Включить оповещение о размыкателе цепи",
       "webhook": "Webhook URL",
@@ -435,24 +534,92 @@
       "description": "Управление ценами AI моделей"
     },
     "searchPlaceholder": "Поиск по названию модели...",
+    "filters": {
+      "all": "Все",
+      "local": "Локальные",
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "vertex": "Vertex"
+    },
+    "badges": {
+      "local": "Локальная"
+    },
+    "capabilities": {
+      "assistantPrefill": "Предзаполнение ассистента",
+      "computerUse": "Использование компьютера",
+      "functionCalling": "Вызов функций",
+      "pdfInput": "Ввод PDF",
+      "promptCaching": "Кэширование промпта",
+      "reasoning": "Рассуждение",
+      "responseSchema": "Схема ответа",
+      "toolChoice": "Выбор инструментов",
+      "vision": "Зрение",
+      "statusSupported": "Поддерживается",
+      "statusUnsupported": "Не поддерживается",
+      "tooltip": "{label}: {status}"
+    },
     "sync": {
-      "button": "Синхронизировать цены LiteLLM",
+      "button": "Синхронизировать облачный прайс-лист",
       "syncing": "Синхронизация...",
+      "checking": "Проверка конфликтов...",
       "successWithChanges": "Обновление прайс-листа: добавлено {added}, обновлено {updated}, без изменений {unchanged}",
       "successNoChanges": "Прайс-лист актуален, обновление не требуется",
       "failed": "Ошибка синхронизации",
       "failedError": "Ошибка синхронизации: {error}",
       "failedNoResult": "Прайс-лист обновлен но результат не возвращен",
       "noModels": "Цены моделей не найдены",
-      "partialFailure": "Частичное обновление выполнено, но {failed} моделей не удалось обновить"
+      "partialFailure": "Частичное обновление выполнено, но {failed} моделей не удалось обновить",
+      "failedModels": "Не удалось обновить модели: {models}",
+      "skippedConflicts": "Пропущено {count} ручных моделей"
+    },
+    "conflict": {
+      "title": "Выберите элементы для перезаписи",
+      "description": "Следующие модели имеют ручные цены. Отмеченные будут перезаписаны ценами LiteLLM, неотмеченные останутся без изменений",
+      "searchPlaceholder": "Поиск моделей...",
+      "table": {
+        "modelName": "Модель",
+        "manualPrice": "Ручная цена",
+        "litellmPrice": "Цена LiteLLM",
+        "action": "Действие"
+      },
+      "viewDiff": "Показать различия",
+      "diffTitle": "Различия цен",
+      "diff": {
+        "field": "Поле",
+        "manual": "Ручное",
+        "litellm": "LiteLLM",
+        "inputPrice": "Цена ввода",
+        "outputPrice": "Цена вывода",
+        "imagePrice": "Цена изображения",
+        "provider": "Поставщик",
+        "mode": "Тип"
+      },
+      "pagination": {
+        "showing": "Показано {from}-{to} из {total}"
+      },
+      "selectedCount": "Выбрано {count}/{total} моделей",
+      "noMatch": "Модели не найдены",
+      "noConflicts": "Конфликтов нет",
+      "applyOverwrite": "Применить перезапись",
+      "applying": "Применение..."
     },
     "table": {
       "modelName": "Название модели",
-      "type": "Тип",
       "provider": "Поставщик",
+      "capabilities": "Возможности",
+      "price": "Цена",
       "inputPrice": "Цена ввода ($/M)",
       "outputPrice": "Цена вывода ($/M)",
+      "priceInput": "Ввод",
+      "priceOutput": "Вывод",
+      "pricePerRequest": "Запрос",
+      "cacheReadPrice": "Чтение кэша ($/M)",
+      "cacheCreationPrice": "Создание кэша ($/M)",
+      "cache5m": "5m",
+      "cache1h": "1h+",
+      "copyModelId": "Скопировать ID модели",
       "updatedAt": "Обновлено",
+      "actions": "Действия",
       "typeChat": "Чат",
       "typeImage": "Генерация изображений",
       "typeCompletion": "Дополнение",
@@ -466,6 +633,7 @@
       "showing": "Показано {from}-{to} из {total}",
       "previous": "Назад",
       "next": "Вперёд",
+      "perPageLabel": "На странице",
       "perPage": "{size} на странице"
     },
     "stats": {
@@ -475,23 +643,25 @@
     },
     "dialog": {
       "title": "Обновить прайс-лист",
-      "description": "Выберите и загрузите JSON файл с данными о ценах моделей",
-      "selectFile": "Нажмите для выбора JSON или перетащите сюда",
+      "description": "Выберите и загрузите JSON или TOML файл с данными о ценах моделей",
+      "selectFile": "Нажмите для выбора JSON/TOML или перетащите сюда",
       "fileSizeLimit": "Размер файла не может превышать 10MB",
       "fileSizeLimitSmall": "Размер файла не превышает 10MB",
-      "invalidFileType": "Пожалуйста, выберите файл в формате JSON",
+      "invalidFileType": "Пожалуйста, выберите файл JSON или TOML",
       "fileTooLarge": "Размер файла превышает лимит 10MB",
       "upload": "Загрузить и обновить",
       "uploading": "Загрузка...",
       "updatePriceTable": "Обновить прайс-лист",
       "updating": "Обновление...",
-      "selectJson": "Выбрать JSON файл",
+      "selectJson": "Выбрать файл",
       "updateSuccess": "Прайс-лист успешно обновлён, {count} моделей обновлено",
       "updateFailed": "Ошибка обновления",
       "systemHasBuiltIn": "Система имеет встроенный прайс-лист",
       "manualDownload": "Вы также можете скачать вручную",
-      "latestPriceTable": "последний прайс-лист",
+      "latestPriceTable": "облачный прайс-лист",
       "andUploadViaButton": ", и загрузить через кнопку выше",
+      "cloudModelCountLoading": "Загрузка количества моделей из облака...",
+      "cloudModelCountFailed": "Не удалось загрузить количество моделей из облака",
       "supportedModels": "Поддерживается {count} моделей",
       "results": {
         "title": "Результаты обновления",
@@ -499,9 +669,52 @@
         "success": "Успешно: {success}",
         "failed": "Ошибок: {failed}",
         "skipped": "Пропущено: {skipped}",
+        "more": " (+{count})",
         "details": "Подробности",
         "viewDetails": "Просмотреть подробный журнал"
       }
+    },
+    "addModel": "Добавить модель",
+    "editModel": "Редактировать модель",
+    "deleteModel": "Удалить модель",
+    "addModelDescription": "Вручную добавить новую цену модели",
+    "editModelDescription": "Редактировать цену модели",
+    "deleteConfirm": "Удалить модель {name}? Это действие необратимо.",
+    "form": {
+      "modelName": "ID модели",
+      "modelNamePlaceholder": "например: gpt-5.2-codex",
+      "modelNameRequired": "ID модели обязателен",
+      "displayName": "Отображаемое имя (необязательно)",
+      "displayNamePlaceholder": "например: GPT-5.2 Codex",
+      "type": "Тип",
+      "provider": "Поставщик",
+      "providerPlaceholder": "например: openai",
+      "requestPrice": "Цена за вызов ($/request)",
+      "inputPrice": "Цена ввода ($/M токенов)",
+      "outputPrice": "Цена вывода ($/M токенов)",
+      "outputPriceImage": "Цена вывода ($/изображение)",
+      "cacheReadPrice": "Цена чтения кэша ($/M токенов)",
+      "cacheCreationPrice5m": "Цена создания кэша (5m, $/M токенов)",
+      "cacheCreationPrice1h": "Цена создания кэша (1h+, $/M токенов)"
+    },
+    "drawer": {
+      "prefillLabel": "Поиск существующих моделей для автозаполнения",
+      "prefillEmpty": "Модели не найдены",
+      "prefillFailed": "Ошибка поиска",
+      "promptCachingHint": "Включайте только если модель поддерживает кэширование, и задайте цены кэша ниже",
+      "cachePricingTitle": "Цены кэша"
+    },
+    "actions": {
+      "edit": "Редактировать",
+      "more": "Больше действий",
+      "delete": "Удалить"
+    },
+    "toast": {
+      "createSuccess": "Модель добавлена",
+      "updateSuccess": "Модель обновлена",
+      "deleteSuccess": "Модель удалена",
+      "saveFailed": "Ошибка сохранения",
+      "deleteFailed": "Ошибка удаления"
     }
   },
   "providers": {
@@ -509,6 +722,22 @@
     "addFailed": "Ошибка добавления поставщика",
     "addProvider": "Добавить провайдера",
     "addSuccess": "Поставщик добавлен успешно",
+    "autoSort": {
+      "button": "Авто сортировка приоритета",
+      "dialogTitle": "Автоматическая сортировка приоритета поставщиков",
+      "dialogDescription": "Автоматически назначить приоритет на основе множителя стоимости (низкая стоимость = высокий приоритет)",
+      "changeCount": "{count} поставщиков будет обновлено",
+      "noChanges": "Изменения не требуются (уже отсортировано)",
+      "costMultiplierHeader": "Множитель стоимости",
+      "priorityHeader": "Приоритет",
+      "providersHeader": "Поставщики",
+      "changesTitle": "Детали изменений",
+      "providerHeader": "Поставщик",
+      "priorityChangeHeader": "Изменение приоритета",
+      "confirm": "Применить изменения",
+      "success": "Обновлён приоритет для {count} поставщиков",
+      "error": "Не удалось обновить приоритеты"
+    },
     "circuitBroken": "Цепь разомкнута",
     "clone": "Дублировать поставщика",
     "cloneFailed": "Ошибка копирования",
@@ -598,6 +827,15 @@
         "chunksCount": "Получено {count} чанков ({format})",
         "truncatedPreview": "Показаны первые {length} символов, скопируйте для просмотра полного текста",
         "truncatedBrief": "Показаны первые {length} символов, нажмите «Подробнее» для полного просмотра",
+        "timeout": {
+          "label": "Таймаут (секунды)",
+          "desc": "Максимальное время ожидания тестового запроса (5-120 сек)",
+          "geminiHint": ", для моделей Gemini Thinking рекомендуется 60+ сек"
+        },
+        "geminiAuthFallback": {
+          "warning": "Ошибка аутентификации через заголовок, использована URL-аутентификация",
+          "desc": "Реальный прокси использует только аутентификацию через заголовок, что может вызвать ошибки"
+        },
         "copyFormat": {
           "testResult": "Результат теста",
           "message": "Сообщение",
@@ -954,6 +1192,7 @@
         "create": "Добавить провайдера",
         "edit": "Редактировать провайдера"
       },
+      "dialogDescription": "Настройте детали провайдера и расширенные параметры.",
       "url": {
         "label": "Адрес API *",
         "placeholder": "например: https://open.bigmodel.cn/api/anthropic"
@@ -1045,6 +1284,15 @@
               "desc": "Метка группы. Пользователь может использовать провайдера только если его providerGroup совпадает. Пример: значение \"premium\" — только для пользователей с providerGroup=\"premium\""
             }
           },
+          "cacheTtl": {
+            "label": "Переопределение Cache TTL",
+            "options": {
+              "inherit": "Не переопределять (следовать клиенту)",
+              "5m": "5 минут",
+              "1h": "1 час"
+            },
+            "desc": "Принудительно задать TTL кэша промптов; влияет только на запросы с cache_control."
+          },
           "context1m": {
             "label": "Контекстное окно 1M",
             "options": {
@@ -1053,6 +1301,49 @@
               "disabled": "Отключено"
             },
             "desc": "Настройка поддержки контекстного окна 1M. Применяется только к моделям Sonnet (claude-sonnet-4-5, claude-sonnet-4). При включении применяется многоуровневая тарификация."
+          },
+          "codexOverrides": {
+            "reasoningEffort": {
+              "label": "Переопределение уровня рассуждений",
+              "help": "Управляет тем, сколько усилий модель тратит на рассуждения перед ответом. \"inherit\" следует запросу клиента, остальные значения принудительно задают reasoning.effort. Примечание: \"none\" поддерживается только моделями GPT-5.1, а \"xhigh\" — только GPT-5.1-Codex-Max. Неподдерживаемые значения приведут к ошибке у апстрима.",
+              "options": {
+                "inherit": "Не переопределять (следовать клиенту)",
+                "minimal": "minimal",
+                "low": "low",
+                "medium": "medium (по умолчанию)",
+                "high": "high",
+                "xhigh": "xhigh (только GPT-5.1-Codex-Max)",
+                "none": "none (только GPT-5.1)"
+              }
+            },
+            "reasoningSummary": {
+              "label": "Переопределение сводки рассуждений",
+              "help": "Управляет тем, возвращает ли Responses API сводку рассуждений. auto — кратко, detailed — подробнее. \"inherit\" следует запросу клиента.",
+              "options": {
+                "inherit": "Не переопределять (следовать клиенту)",
+                "auto": "auto",
+                "detailed": "detailed"
+              }
+            },
+            "textVerbosity": {
+              "label": "Переопределение подробности текста",
+              "help": "Управляет подробностью ответа. low — короче, high — подробнее. \"inherit\" следует запросу клиента.",
+              "options": {
+                "inherit": "Не переопределять (следовать клиенту)",
+                "low": "low",
+                "medium": "medium (по умолчанию)",
+                "high": "high"
+              }
+            },
+            "parallelToolCalls": {
+              "label": "Переопределение параллельных tool calls",
+              "help": "Управляет тем, разрешены ли параллельные вызовы инструментов. \"inherit\" следует запросу клиента. Отключение может снизить параллельность вызовов инструментов.",
+              "options": {
+                "inherit": "Не переопределять (следовать клиенту)",
+                "true": "Принудительно включить",
+                "false": "Принудительно отключить"
+              }
+            }
           }
         },
         "rateLimit": {
@@ -1061,6 +1352,7 @@
             "fiveHour": "5ч: ${amount}",
             "weekly": "Неделя: ${amount}",
             "monthly": "Месяц: ${amount}",
+            "total": "Всего: ${amount}",
             "concurrent": "Параллельно: {count}",
             "none": "Без ограничений"
           },
@@ -1074,6 +1366,10 @@
           },
           "limitMonthly": {
             "label": "Месячный лимит (USD)",
+            "placeholder": "Пусто — без ограничений"
+          },
+          "limitTotal": {
+            "label": "Общий лимит (USD)",
             "placeholder": "Пусто — без ограничений"
           },
           "limitConcurrent": {
@@ -1247,6 +1543,7 @@
       "errors": {
         "invalidUrl": "Введите корректный адрес API",
         "invalidWebsiteUrl": "Введите корректный адрес сайта провайдера",
+        "groupTagTooLong": "Список групп провайдера слишком длинный (макс. {max} символов всего)",
         "addFailed": "Не удалось добавить провайдера",
         "updateFailed": "Не удалось обновить провайдера",
         "deleteFailed": "Не удалось удалить провайдера"
@@ -1393,7 +1690,6 @@
       "leaderboard": "Рейтинг",
       "title": "Поставщики"
     },
-    "addProvider": "Добавить",
     "filter": {
       "status": {
         "all": "Все статусы",
@@ -1404,7 +1700,8 @@
         "label": "Группы:",
         "all": "Все",
         "default": "default"
-      }
+      },
+      "circuitBroken": "Сбой соединения"
     },
     "subtitle": "Поставщики",
     "subtitleDesc": "Настройка ограничений по расходам и параллельным сеансам.",
@@ -1470,6 +1767,10 @@
       "resetCircuitSuccess": "Автоматический выключатель сброшен",
       "resetCircuitSuccessDesc": "Статус автоматического выключателя провайдера \"{name}\" очищен",
       "resetCircuitFailed": "Не удалось сбросить автоматический выключатель",
+      "resetUsageTitle": "Сбросить общий расход",
+      "resetUsageSuccess": "Общий расход сброшен",
+      "resetUsageSuccessDesc": "Общий расход провайдера \"{name}\" был сброшен",
+      "resetUsageFailed": "Не удалось сбросить общий расход",
       "toggleSuccess": "Провайдер {status}",
       "toggleSuccessDesc": "Статус провайдера \"{name}\" обновлен",
       "toggleFailed": "Не удалось переключить",

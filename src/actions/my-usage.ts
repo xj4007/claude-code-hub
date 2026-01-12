@@ -1,22 +1,24 @@
 "use server";
 
-import { and, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/drizzle/db";
 import { keys as keysTable, messageRequest } from "@/drizzle/schema";
 import { getSession } from "@/lib/auth";
-import { getEnvConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { RateLimitService } from "@/lib/rate-limit/service";
+import type { DailyResetMode } from "@/lib/rate-limit/time-utils";
 import { SessionTracker } from "@/lib/session-tracker";
 import type { CurrencyCode } from "@/lib/utils";
-import { sumUserCostToday } from "@/repository/statistics";
+import { EXCLUDE_WARMUP_CONDITION } from "@/repository/_shared/message-request-conditions";
 import { getSystemSettings } from "@/repository/system-config";
 import {
+  findUsageLogsStats,
   findUsageLogsWithDetails,
   getDistinctEndpointsForKey,
   getDistinctModelsForKey,
   getTotalUsageForKey,
   type UsageLogFilters,
+  type UsageLogSummary,
 } from "@/repository/usage-logs";
 import type { BillingModelSource } from "@/types/system-config";
 import type { ActionResult } from "./types";
@@ -54,6 +56,7 @@ export interface MyUsageQuota {
   userLimitMonthlyUsd: number | null;
   userLimitTotalUsd: number | null;
   userLimitConcurrentSessions: number | null;
+  userRpmLimit: number | null;
   userCurrent5hUsd: number;
   userCurrentDailyUsd: number;
   userCurrentWeeklyUsd: number;
@@ -70,6 +73,9 @@ export interface MyUsageQuota {
   keyProviderGroup: string | null;
   keyName: string;
   keyIsEnabled: boolean;
+
+  userAllowedModels: string[];
+  userAllowedClients: string[];
 
   expiresAt: Date | null;
   dailyResetMode: "fixed" | "rolling";
@@ -121,44 +127,25 @@ export interface MyUsageLogsResult {
   billingModelSource: BillingModelSource;
 }
 
-function getPeriodStart(period: "5h" | "weekly" | "monthly" | "total" | "today") {
-  const now = new Date();
-  if (period === "total") return null;
-  if (period === "today") {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    return start;
-  }
-  if (period === "5h") {
-    return new Date(now.getTime() - 5 * 60 * 60 * 1000);
-  }
-  if (period === "weekly") {
-    return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  }
-  if (period === "monthly") {
-    return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  }
-  return null;
-}
-
+/**
+ * 查询用户在指定周期内的消费
+ * 使用与 Key 层级和限额检查相同的时间范围计算逻辑
+ *
+ * @deprecated 此函数已被重构为使用统一的时间范围计算逻辑
+ */
 async function sumUserCost(userId: number, period: "5h" | "weekly" | "monthly" | "total") {
-  const conditions = [
-    eq(keysTable.userId, userId),
-    isNull(keysTable.deletedAt),
-    isNull(messageRequest.deletedAt),
-  ];
-  const start = getPeriodStart(period);
-  if (start) {
-    conditions.push(gte(messageRequest.createdAt, start));
+  // 动态导入避免循环依赖
+  const { sumUserCostInTimeRange, sumUserTotalCost } = await import("@/repository/statistics");
+  const { getTimeRangeForPeriod } = await import("@/lib/rate-limit/time-utils");
+
+  // 总消费：使用专用函数
+  if (period === "total") {
+    return await sumUserTotalCost(userId);
   }
 
-  const [row] = await db
-    .select({ total: sql<string>`COALESCE(sum(${messageRequest.costUsd}), 0)` })
-    .from(messageRequest)
-    .innerJoin(keysTable, eq(messageRequest.key, keysTable.key))
-    .where(and(...conditions));
-
-  return Number(row?.total ?? 0);
+  // 其他周期：使用统一的时间范围计算
+  const { startTime, endTime } = getTimeRangeForPeriod(period);
+  return await sumUserCostInTimeRange(userId, startTime, endTime);
 }
 
 export async function getMyUsageMetadata(): Promise<ActionResult<MyUsageMetadata>> {
@@ -199,6 +186,18 @@ export async function getMyQuota(): Promise<ActionResult<MyUsageQuota>> {
     const key = session.key;
     const user = session.user;
 
+    // 获取用户每日消费时使用用户的 dailyResetTime 和 dailyResetMode 配置
+    // 导入时间工具函数
+    const { getTimeRangeForPeriodWithMode } = await import("@/lib/rate-limit/time-utils");
+    const { sumUserCostInTimeRange } = await import("@/repository/statistics");
+
+    // 计算用户每日消费的时间范围(使用用户的配置)
+    const userDailyTimeRange = getTimeRangeForPeriodWithMode(
+      "daily",
+      user.dailyResetTime ?? "00:00",
+      (user.dailyResetMode as DailyResetMode | undefined) ?? "fixed"
+    );
+
     const [
       keyCost5h,
       keyCostDaily,
@@ -226,7 +225,8 @@ export async function getMyQuota(): Promise<ActionResult<MyUsageQuota>> {
       getTotalUsageForKey(key.key),
       SessionTracker.getKeySessionCount(key.id),
       sumUserCost(user.id, "5h"),
-      sumUserCostToday(user.id),
+      // 修复: 使用与 Key 层级相同的时间范围逻辑来计算用户每日消费
+      sumUserCostInTimeRange(user.id, userDailyTimeRange.startTime, userDailyTimeRange.endTime),
       sumUserCost(user.id, "weekly"),
       sumUserCost(user.id, "monthly"),
       sumUserCost(user.id, "total"),
@@ -252,6 +252,7 @@ export async function getMyQuota(): Promise<ActionResult<MyUsageQuota>> {
       userLimitMonthlyUsd: user.limitMonthlyUsd ?? null,
       userLimitTotalUsd: user.limitTotalUsd ?? null,
       userLimitConcurrentSessions: user.limitConcurrentSessions ?? null,
+      userRpmLimit: user.rpm ?? null,
       userCurrent5hUsd: userCost5h,
       userCurrentDailyUsd: userCostDaily,
       userCurrentWeeklyUsd: userCostWeekly,
@@ -268,6 +269,9 @@ export async function getMyQuota(): Promise<ActionResult<MyUsageQuota>> {
       keyProviderGroup: key.providerGroup ?? null,
       keyName: key.name,
       keyIsEnabled: key.isEnabled ?? true,
+
+      userAllowedModels: user.allowedModels ?? [],
+      userAllowedClients: user.allowedClients ?? [],
 
       expiresAt: key.expiresAt ?? null,
       dailyResetMode: key.dailyResetMode ?? "fixed",
@@ -290,8 +294,13 @@ export async function getMyTodayStats(): Promise<ActionResult<MyTodayStats>> {
     const billingModelSource = settings.billingModelSource;
     const currencyCode = settings.currencyDisplay;
 
-    const timezone = getEnvConfig().TZ || "UTC";
-    const startOfDay = sql`(CURRENT_TIMESTAMP AT TIME ZONE ${timezone})::date`;
+    // 修复: 使用 Key 的 dailyResetTime 和 dailyResetMode 来计算时间范围
+    const { getTimeRangeForPeriodWithMode } = await import("@/lib/rate-limit/time-utils");
+    const timeRange = getTimeRangeForPeriodWithMode(
+      "daily",
+      session.key.dailyResetTime ?? "00:00",
+      (session.key.dailyResetMode as DailyResetMode | undefined) ?? "fixed"
+    );
 
     const [aggregate] = await db
       .select({
@@ -305,7 +314,9 @@ export async function getMyTodayStats(): Promise<ActionResult<MyTodayStats>> {
         and(
           eq(messageRequest.key, session.key.key),
           isNull(messageRequest.deletedAt),
-          sql`(${messageRequest.createdAt} AT TIME ZONE ${timezone})::date = ${startOfDay}`
+          EXCLUDE_WARMUP_CONDITION,
+          gte(messageRequest.createdAt, timeRange.startTime),
+          lt(messageRequest.createdAt, timeRange.endTime)
         )
       );
 
@@ -323,7 +334,9 @@ export async function getMyTodayStats(): Promise<ActionResult<MyTodayStats>> {
         and(
           eq(messageRequest.key, session.key.key),
           isNull(messageRequest.deletedAt),
-          sql`(${messageRequest.createdAt} AT TIME ZONE ${timezone})::date = ${startOfDay}`
+          EXCLUDE_WARMUP_CONDITION,
+          gte(messageRequest.createdAt, timeRange.startTime),
+          lt(messageRequest.createdAt, timeRange.endTime)
         )
       )
       .groupBy(messageRequest.model, messageRequest.originalModel);
@@ -382,12 +395,21 @@ export async function getMyUsageLogs(
     const pageSize = Math.min(rawPageSize, 100);
     const page = filters.page && filters.page > 0 ? filters.page : 1;
 
+    const parsedStart = filters.startDate
+      ? new Date(`${filters.startDate}T00:00:00`).getTime()
+      : Number.NaN;
+    const parsedEnd = filters.endDate
+      ? new Date(`${filters.endDate}T00:00:00`).getTime()
+      : Number.NaN;
+
+    const startTime = Number.isFinite(parsedStart) ? parsedStart : undefined;
+    // endTime 使用“次日零点”作为排他上界（created_at < endTime），避免 23:59:59.999 的边界问题
+    const endTime = Number.isFinite(parsedEnd) ? parsedEnd + 24 * 60 * 60 * 1000 : undefined;
+
     const usageFilters: UsageLogFilters = {
       keyId: session.key.id,
-      startTime: filters.startDate
-        ? new Date(`${filters.startDate}T00:00:00`).getTime()
-        : undefined,
-      endTime: filters.endDate ? new Date(`${filters.endDate}T23:59:59.999`).getTime() : undefined,
+      startTime,
+      endTime,
       model: filters.model,
       statusCode: filters.statusCode,
       excludeStatusCode200: filters.excludeStatusCode200,
@@ -483,5 +505,126 @@ async function getUserConcurrentSessions(userId: number): Promise<number> {
   } catch (error) {
     logger.error("[my-usage] getUserConcurrentSessions failed", error);
     return 0;
+  }
+}
+
+export interface MyStatsSummaryFilters {
+  startDate?: string; // "YYYY-MM-DD"
+  endDate?: string; // "YYYY-MM-DD"
+}
+
+export interface ModelBreakdownItem {
+  model: string | null;
+  requests: number;
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface MyStatsSummary extends UsageLogSummary {
+  keyModelBreakdown: ModelBreakdownItem[];
+  userModelBreakdown: ModelBreakdownItem[];
+  currencyCode: CurrencyCode;
+}
+
+/**
+ * Get aggregated statistics for a date range
+ * Uses findUsageLogsStats for efficient aggregation
+ */
+export async function getMyStatsSummary(
+  filters: MyStatsSummaryFilters = {}
+): Promise<ActionResult<MyStatsSummary>> {
+  try {
+    const session = await getSession({ allowReadOnlyAccess: true });
+    if (!session) return { ok: false, error: "Unauthorized" };
+
+    const settings = await getSystemSettings();
+    const currencyCode = settings.currencyDisplay;
+
+    // 日期字符串来自前端的 YYYY-MM-DD（目前使用 toISOString().split("T")[0] 生成），因此按 UTC 解析更一致。
+    // 注意：new Date("YYYY-MM-DDT00:00:00") 会按本地时区解析，可能导致跨时区边界偏移。
+    const parsedStart = filters.startDate
+      ? Date.parse(`${filters.startDate}T00:00:00.000Z`)
+      : Number.NaN;
+    const parsedEnd = filters.endDate ? Date.parse(`${filters.endDate}T00:00:00.000Z`) : Number.NaN;
+
+    const startTime = Number.isFinite(parsedStart) ? parsedStart : undefined;
+    // endTime 使用“次日零点”作为排他上界（created_at < endTime），避免 23:59:59.999 的边界问题
+    const endTime = Number.isFinite(parsedEnd) ? parsedEnd + 24 * 60 * 60 * 1000 : undefined;
+
+    // Get aggregated stats using existing repository function
+    const stats = await findUsageLogsStats({
+      keyId: session.key.id,
+      startTime,
+      endTime,
+    });
+
+    // Get model breakdown for current key
+    const keyBreakdown = await db
+      .select({
+        model: messageRequest.model,
+        requests: sql<number>`count(*)::int`,
+        cost: sql<string>`COALESCE(sum(${messageRequest.costUsd}), 0)`,
+        inputTokens: sql<number>`COALESCE(sum(${messageRequest.inputTokens}), 0)::int`,
+        outputTokens: sql<number>`COALESCE(sum(${messageRequest.outputTokens}), 0)::int`,
+      })
+      .from(messageRequest)
+      .where(
+        and(
+          eq(messageRequest.key, session.key.key),
+          isNull(messageRequest.deletedAt),
+          EXCLUDE_WARMUP_CONDITION,
+          startTime ? gte(messageRequest.createdAt, new Date(startTime)) : undefined,
+          endTime ? lt(messageRequest.createdAt, new Date(endTime)) : undefined
+        )
+      )
+      .groupBy(messageRequest.model)
+      .orderBy(sql`sum(${messageRequest.costUsd}) DESC`);
+
+    // Get model breakdown for user (all keys)
+    const userBreakdown = await db
+      .select({
+        model: messageRequest.model,
+        requests: sql<number>`count(*)::int`,
+        cost: sql<string>`COALESCE(sum(${messageRequest.costUsd}), 0)`,
+        inputTokens: sql<number>`COALESCE(sum(${messageRequest.inputTokens}), 0)::int`,
+        outputTokens: sql<number>`COALESCE(sum(${messageRequest.outputTokens}), 0)::int`,
+      })
+      .from(messageRequest)
+      .where(
+        and(
+          eq(messageRequest.userId, session.user.id),
+          isNull(messageRequest.deletedAt),
+          EXCLUDE_WARMUP_CONDITION,
+          startTime ? gte(messageRequest.createdAt, new Date(startTime)) : undefined,
+          endTime ? lt(messageRequest.createdAt, new Date(endTime)) : undefined
+        )
+      )
+      .groupBy(messageRequest.model)
+      .orderBy(sql`sum(${messageRequest.costUsd}) DESC`);
+
+    const result: MyStatsSummary = {
+      ...stats,
+      keyModelBreakdown: keyBreakdown.map((row) => ({
+        model: row.model,
+        requests: row.requests,
+        cost: Number(row.cost ?? 0),
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+      })),
+      userModelBreakdown: userBreakdown.map((row) => ({
+        model: row.model,
+        requests: row.requests,
+        cost: Number(row.cost ?? 0),
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+      })),
+      currencyCode,
+    };
+
+    return { ok: true, data: result };
+  } catch (error) {
+    logger.error("[my-usage] getMyStatsSummary failed", error);
+    return { ok: false, error: "Failed to get statistics summary" };
   }
 }

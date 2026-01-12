@@ -6,7 +6,7 @@ import { Link } from "@/i18n/routing";
 import { getSession } from "@/lib/auth";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { SettingsPageHeader } from "../_components/settings-page-header";
-import { AddProviderDialog } from "./_components/add-provider-dialog";
+import { AutoSortPriorityDialog } from "./_components/auto-sort-priority-dialog";
 import { ProviderManagerLoader } from "./_components/provider-manager-loader";
 import { SchedulingRulesDialog } from "./_components/scheduling-rules-dialog";
 
@@ -34,6 +34,7 @@ export default async function SettingsProvidersPage() {
                 {t("providers.section.leaderboard")}
               </Link>
             </Button>
+            <AutoSortPriorityDialog />
             <SchedulingRulesDialog />
           </>
         }
@@ -41,7 +42,6 @@ export default async function SettingsProvidersPage() {
         <ProviderManagerLoader
           currentUser={session?.user}
           enableMultiProviderTypes={enableMultiProviderTypes}
-          addDialogSlot={<AddProviderDialog enableMultiProviderTypes={enableMultiProviderTypes} />}
         />
       </Section>
     </>

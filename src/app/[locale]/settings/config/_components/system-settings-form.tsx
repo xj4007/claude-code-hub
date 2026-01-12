@@ -29,6 +29,10 @@ interface SystemSettingsFormProps {
     | "billingModelSource"
     | "verboseProviderError"
     | "enableHttp2"
+    | "interceptAnthropicWarmupRequests"
+    | "enableThinkingSignatureRectifier"
+    | "enableResponseFixer"
+    | "responseFixerConfig"
   >;
 }
 
@@ -50,6 +54,18 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
     initialSettings.verboseProviderError
   );
   const [enableHttp2, setEnableHttp2] = useState(initialSettings.enableHttp2);
+  const [interceptAnthropicWarmupRequests, setInterceptAnthropicWarmupRequests] = useState(
+    initialSettings.interceptAnthropicWarmupRequests
+  );
+  const [enableThinkingSignatureRectifier, setEnableThinkingSignatureRectifier] = useState(
+    initialSettings.enableThinkingSignatureRectifier
+  );
+  const [enableResponseFixer, setEnableResponseFixer] = useState(
+    initialSettings.enableResponseFixer
+  );
+  const [responseFixerConfig, setResponseFixerConfig] = useState(
+    initialSettings.responseFixerConfig
+  );
   const [isPending, startTransition] = useTransition();
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -68,6 +84,10 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
         billingModelSource,
         verboseProviderError,
         enableHttp2,
+        interceptAnthropicWarmupRequests,
+        enableThinkingSignatureRectifier,
+        enableResponseFixer,
+        responseFixerConfig,
       });
 
       if (!result.ok) {
@@ -82,6 +102,10 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
         setBillingModelSource(result.data.billingModelSource);
         setVerboseProviderError(result.data.verboseProviderError);
         setEnableHttp2(result.data.enableHttp2);
+        setInterceptAnthropicWarmupRequests(result.data.interceptAnthropicWarmupRequests);
+        setEnableThinkingSignatureRectifier(result.data.enableThinkingSignatureRectifier);
+        setEnableResponseFixer(result.data.enableResponseFixer);
+        setResponseFixerConfig(result.data.responseFixerConfig);
       }
 
       toast.success(t("configUpdated"));
@@ -190,6 +214,118 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
           onCheckedChange={(checked) => setEnableHttp2(checked)}
           disabled={isPending}
         />
+      </div>
+
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-dashed border-border px-4 py-3">
+        <div>
+          <Label htmlFor="intercept-anthropic-warmup" className="text-sm font-medium">
+            {t("interceptAnthropicWarmupRequests")}
+          </Label>
+          <p className="text-xs text-muted-foreground mt-1">
+            {t("interceptAnthropicWarmupRequestsDesc")}
+          </p>
+        </div>
+        <Switch
+          id="intercept-anthropic-warmup"
+          checked={interceptAnthropicWarmupRequests}
+          onCheckedChange={(checked) => setInterceptAnthropicWarmupRequests(checked)}
+          disabled={isPending}
+        />
+      </div>
+
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-dashed border-border px-4 py-3">
+        <div>
+          <Label htmlFor="enable-thinking-signature-rectifier" className="text-sm font-medium">
+            {t("enableThinkingSignatureRectifier")}
+          </Label>
+          <p className="text-xs text-muted-foreground mt-1">
+            {t("enableThinkingSignatureRectifierDesc")}
+          </p>
+        </div>
+        <Switch
+          id="enable-thinking-signature-rectifier"
+          checked={enableThinkingSignatureRectifier}
+          onCheckedChange={(checked) => setEnableThinkingSignatureRectifier(checked)}
+          disabled={isPending}
+        />
+      </div>
+
+      <div className="rounded-lg border border-dashed border-border px-4 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="enable-response-fixer" className="text-sm font-medium">
+              {t("enableResponseFixer")}
+            </Label>
+            <p className="text-xs text-muted-foreground mt-1">{t("enableResponseFixerDesc")}</p>
+          </div>
+          <Switch
+            id="enable-response-fixer"
+            checked={enableResponseFixer}
+            onCheckedChange={(checked) => setEnableResponseFixer(checked)}
+            disabled={isPending}
+          />
+        </div>
+
+        {enableResponseFixer && (
+          <div className="mt-4 space-y-3 border-l border-border pl-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Label htmlFor="response-fixer-encoding" className="text-sm font-medium">
+                  {t("responseFixerFixEncoding")}
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t("responseFixerFixEncodingDesc")}
+                </p>
+              </div>
+              <Switch
+                id="response-fixer-encoding"
+                checked={responseFixerConfig.fixEncoding}
+                onCheckedChange={(checked) =>
+                  setResponseFixerConfig((prev) => ({ ...prev, fixEncoding: checked }))
+                }
+                disabled={isPending}
+              />
+            </div>
+
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Label htmlFor="response-fixer-sse" className="text-sm font-medium">
+                  {t("responseFixerFixSseFormat")}
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t("responseFixerFixSseFormatDesc")}
+                </p>
+              </div>
+              <Switch
+                id="response-fixer-sse"
+                checked={responseFixerConfig.fixSseFormat}
+                onCheckedChange={(checked) =>
+                  setResponseFixerConfig((prev) => ({ ...prev, fixSseFormat: checked }))
+                }
+                disabled={isPending}
+              />
+            </div>
+
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Label htmlFor="response-fixer-json" className="text-sm font-medium">
+                  {t("responseFixerFixTruncatedJson")}
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t("responseFixerFixTruncatedJsonDesc")}
+                </p>
+              </div>
+              <Switch
+                id="response-fixer-json"
+                checked={responseFixerConfig.fixTruncatedJson}
+                onCheckedChange={(checked) =>
+                  setResponseFixerConfig((prev) => ({ ...prev, fixTruncatedJson: checked }))
+                }
+                disabled={isPending}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex justify-end">

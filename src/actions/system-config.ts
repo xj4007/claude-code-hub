@@ -6,7 +6,7 @@ import { invalidateSystemSettingsCache } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { UpdateSystemSettingsSchema } from "@/lib/validation/schemas";
 import { getSystemSettings, updateSystemSettings } from "@/repository/system-config";
-import type { SystemSettings } from "@/types/system-config";
+import type { ResponseFixerConfig, SystemSettings } from "@/types/system-config";
 import type { ActionResult } from "./types";
 
 export async function fetchSystemSettings(): Promise<ActionResult<SystemSettings>> {
@@ -37,6 +37,10 @@ export async function saveSystemSettings(formData: {
   enableClientVersionCheck?: boolean;
   verboseProviderError?: boolean;
   enableHttp2?: boolean;
+  interceptAnthropicWarmupRequests?: boolean;
+  enableThinkingSignatureRectifier?: boolean;
+  enableResponseFixer?: boolean;
+  responseFixerConfig?: Partial<ResponseFixerConfig>;
 }): Promise<ActionResult<SystemSettings>> {
   try {
     const session = await getSession();
@@ -57,6 +61,10 @@ export async function saveSystemSettings(formData: {
       enableClientVersionCheck: validated.enableClientVersionCheck,
       verboseProviderError: validated.verboseProviderError,
       enableHttp2: validated.enableHttp2,
+      interceptAnthropicWarmupRequests: validated.interceptAnthropicWarmupRequests,
+      enableThinkingSignatureRectifier: validated.enableThinkingSignatureRectifier,
+      enableResponseFixer: validated.enableResponseFixer,
+      responseFixerConfig: validated.responseFixerConfig,
     });
 
     // Invalidate the system settings cache so proxy requests get fresh settings

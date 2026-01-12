@@ -1,11 +1,15 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import { getProviders, getProvidersHealthStatus } from "@/actions/providers";
+import { useQuery } from "@tanstack/react-query";
+import {
+  getProviderStatisticsAsync,
+  getProviders,
+  getProvidersHealthStatus,
+} from "@/actions/providers";
 import type { CurrencyCode } from "@/lib/utils/currency";
-import type { ProviderDisplay } from "@/types/provider";
+import type { ProviderDisplay, ProviderStatisticsMap } from "@/types/provider";
 import type { User } from "@/types/user";
+import { AddProviderDialog } from "./add-provider-dialog";
 import { ProviderManager } from "./provider-manager";
 
 type ProviderHealthStatus = Record<
@@ -19,15 +23,6 @@ type ProviderHealthStatus = Record<
   }
 >;
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      staleTime: 30000,
-    },
-  },
-});
-
 async function fetchSystemSettings(): Promise<{ currencyDisplay: CurrencyCode }> {
   const response = await fetch("/api/system-settings");
   if (!response.ok) {
@@ -39,13 +34,11 @@ async function fetchSystemSettings(): Promise<{ currencyDisplay: CurrencyCode }>
 interface ProviderManagerLoaderProps {
   currentUser?: User;
   enableMultiProviderTypes: boolean;
-  addDialogSlot?: ReactNode;
 }
 
 function ProviderManagerLoaderContent({
   currentUser,
   enableMultiProviderTypes,
-  addDialogSlot,
 }: ProviderManagerLoaderProps) {
   const {
     data: providers = [],
@@ -54,6 +47,8 @@ function ProviderManagerLoaderContent({
   } = useQuery<ProviderDisplay[]>({
     queryKey: ["providers"],
     queryFn: getProviders,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
   });
 
   const {
@@ -63,7 +58,19 @@ function ProviderManagerLoaderContent({
   } = useQuery<ProviderHealthStatus>({
     queryKey: ["providers-health"],
     queryFn: getProvidersHealthStatus,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
   });
+
+  // Statistics loaded independently with longer cache
+  const { data: statistics = {} as ProviderStatisticsMap, isLoading: isStatisticsLoading } =
+    useQuery<ProviderStatisticsMap>({
+      queryKey: ["providers-statistics"],
+      queryFn: getProviderStatisticsAsync,
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    });
 
   const {
     data: systemSettings,
@@ -72,6 +79,8 @@ function ProviderManagerLoaderContent({
   } = useQuery<{ currencyDisplay: CurrencyCode }>({
     queryKey: ["system-settings"],
     queryFn: fetchSystemSettings,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
   });
 
   const loading = isProvidersLoading || isHealthLoading || isSettingsLoading;
@@ -83,19 +92,17 @@ function ProviderManagerLoaderContent({
       providers={providers}
       currentUser={currentUser}
       healthStatus={healthStatus}
+      statistics={statistics}
+      statisticsLoading={isStatisticsLoading}
       currencyCode={currencyCode}
       enableMultiProviderTypes={enableMultiProviderTypes}
       loading={loading}
       refreshing={refreshing}
-      addDialogSlot={addDialogSlot}
+      addDialogSlot={<AddProviderDialog enableMultiProviderTypes={enableMultiProviderTypes} />}
     />
   );
 }
 
 export function ProviderManagerLoader(props: ProviderManagerLoaderProps) {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <ProviderManagerLoaderContent {...props} />
-    </QueryClientProvider>
-  );
+  return <ProviderManagerLoaderContent {...props} />;
 }

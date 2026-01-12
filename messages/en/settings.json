@@ -102,6 +102,18 @@
       "verboseProviderErrorDesc": "When enabled, return detailed error messages when all providers are unavailable (including provider count, rate limit reasons, etc.); when disabled, only return a simple error code.",
       "enableHttp2": "Enable HTTP/2",
       "enableHttp2Desc": "When enabled, proxy requests will prefer HTTP/2 protocol. Automatically falls back to HTTP/1.1 on failure.",
+      "interceptAnthropicWarmupRequests": "Intercept Warmup Requests (Anthropic)",
+      "interceptAnthropicWarmupRequestsDesc": "When enabled, Claude Code warmup probe requests will be answered by CCH directly to avoid upstream provider calls; the request is logged for audit but is not billed, not rate-limited, and excluded from statistics.",
+      "enableThinkingSignatureRectifier": "Enable Thinking Signature Rectifier",
+      "enableThinkingSignatureRectifierDesc": "When Anthropic providers return thinking signature incompatibility or invalid request errors, automatically removes incompatible thinking blocks and retries once against the same provider (enabled by default).",
+      "enableResponseFixer": "Enable Response Fixer",
+      "enableResponseFixerDesc": "Automatically repairs common upstream response issues (encoding, SSE, truncated JSON). Enabled by default.",
+      "responseFixerFixEncoding": "Fix encoding issues",
+      "responseFixerFixEncodingDesc": "Removes BOM/null bytes and normalizes invalid UTF-8.",
+      "responseFixerFixSseFormat": "Fix SSE format",
+      "responseFixerFixSseFormatDesc": "Adds missing data: prefix, normalizes line endings, and fixes common field formatting.",
+      "responseFixerFixTruncatedJson": "Fix truncated JSON",
+      "responseFixerFixTruncatedJsonDesc": "Closes unclosed braces/quotes, removes trailing commas, and fills missing values with null when needed.",
       "cleanupSchedule": "Cleanup Schedule",
       "cleanupScheduleDesc": "Select the execution schedule for automatic cleanup",
       "configUpdated": "System settings updated. The page will refresh to apply currency display changes.",
@@ -380,14 +392,101 @@
   "notifications": {
     "title": "Push Notifications",
     "description": "Configure Webhook push notifications",
-    "global": {
-      "title": "Notification Master Switch",
-      "description": "Enable or disable all push notification features",
-      "enable": "Enable Push Notifications"
+  "global": {
+    "title": "Notification Master Switch",
+    "description": "Enable or disable all push notification features",
+    "enable": "Enable Push Notifications",
+    "legacyModeTitle": "Legacy Mode",
+    "legacyModeDescription": "You are using legacy single-URL notifications. Create a push target to switch to multi-target mode."
+  },
+  "targets": {
+    "title": "Push Targets",
+    "description": "Manage push targets. Supports WeCom, Feishu, DingTalk, Telegram and custom Webhook.",
+    "add": "Add Target",
+    "update": "Save Target",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleteConfirmTitle": "Delete Push Target",
+    "deleteConfirm": "Are you sure you want to delete this target? Related bindings will also be removed.",
+    "enable": "Enable Target",
+    "statusEnabled": "Enabled",
+    "statusDisabled": "Disabled",
+    "lastTestAt": "Last Test",
+    "lastTestNever": "Never tested",
+    "lastTestSuccess": "Test OK",
+    "lastTestFailed": "Test Failed",
+    "test": "Test",
+    "testSelectType": "Select test type",
+    "emptyHint": "No push targets yet. Click \"Add Target\" to create one.",
+    "created": "Target created",
+    "updated": "Target updated",
+    "deleted": "Target deleted",
+    "bindingsSaved": "Bindings saved"
+  },
+  "targetDialog": {
+    "createTitle": "Add Push Target",
+    "editTitle": "Edit Push Target",
+    "name": "Target Name",
+    "namePlaceholder": "e.g. Ops Group",
+    "type": "Platform Type",
+    "selectType": "Select platform type",
+    "enable": "Enable",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlPlaceholder": "https://example.com/webhook",
+    "telegramBotToken": "Telegram Bot Token",
+    "telegramBotTokenPlaceholder": "e.g. 123456:ABCDEF...",
+    "telegramChatId": "Telegram Chat ID",
+    "telegramChatIdPlaceholder": "e.g. -1001234567890",
+    "dingtalkSecret": "DingTalk Secret",
+    "dingtalkSecretPlaceholder": "Optional, used for signing",
+    "customHeaders": "Custom Headers (JSON)",
+    "customHeadersPlaceholder": "{\"X-Token\":\"...\"}",
+    "errors": {
+      "headersInvalidJson": "Headers must be valid JSON",
+      "headersMustBeObject": "Headers must be a JSON object",
+      "headersValueMustBeString": "Header values must be strings"
     },
-    "circuitBreaker": {
-      "title": "Circuit Breaker Alert",
-      "description": "Send alert immediately when provider is fully circuit broken",
+    "types": {
+      "wechat": "WeCom",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "telegram": "Telegram",
+      "custom": "Custom Webhook"
+    },
+    "proxy": {
+      "title": "Proxy",
+      "toggle": "Toggle proxy settings",
+      "url": "Proxy URL",
+      "urlPlaceholder": "http://127.0.0.1:7890",
+      "fallbackToDirect": "Fallback to direct on proxy failure"
+    }
+  },
+  "bindings": {
+    "title": "Bindings",
+    "noTargets": "No push targets available.",
+    "bindTarget": "Bind target",
+    "enable": "Enable",
+    "enableType": "Enable this notification",
+    "advanced": "Advanced",
+    "scheduleCron": "Cron",
+    "scheduleCronPlaceholder": "e.g. 0 9 * * *",
+    "scheduleTimezone": "Timezone",
+    "templateOverride": "Template Override",
+    "editTemplateOverride": "Edit Override",
+    "templateOverrideTitle": "Edit Template Override",
+    "boundCount": "Bound: {count}",
+    "enabledCount": "Enabled: {count}"
+  },
+  "templateEditor": {
+    "title": "Template (JSON)",
+    "placeholder": "Enter JSON template...",
+    "jsonInvalid": "Invalid JSON",
+    "placeholders": "Placeholders",
+    "insert": "Insert"
+  },
+  "circuitBreaker": {
+    "title": "Circuit Breaker Alert",
+    "description": "Send alert immediately when provider is fully circuit broken",
       "enable": "Enable Circuit Breaker Alert",
       "webhook": "Webhook URL",
       "webhookPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
@@ -444,24 +543,92 @@
       "description": "Manage AI model pricing configuration"
     },
     "searchPlaceholder": "Search model name...",
+    "filters": {
+      "all": "All",
+      "local": "Local",
+      "anthropic": "Anthropic",
+      "openai": "OpenAI",
+      "vertex": "Vertex"
+    },
+    "badges": {
+      "local": "Local"
+    },
+    "capabilities": {
+      "assistantPrefill": "Assistant prefill",
+      "computerUse": "Computer use",
+      "functionCalling": "Function calling",
+      "pdfInput": "PDF input",
+      "promptCaching": "Prompt caching",
+      "reasoning": "Reasoning",
+      "responseSchema": "Response schema",
+      "toolChoice": "Tool choice",
+      "vision": "Vision",
+      "statusSupported": "Supported",
+      "statusUnsupported": "Not supported",
+      "tooltip": "{label}: {status}"
+    },
     "sync": {
-      "button": "Sync LiteLLM Prices",
+      "button": "Sync Cloud Price Table",
       "syncing": "Syncing...",
+      "checking": "Checking conflicts...",
       "successWithChanges": "Price table updated: {added} added, {updated} updated, {unchanged} unchanged",
       "successNoChanges": "Price table is up to date, no updates needed",
       "failed": "Sync failed",
       "failedError": "Sync failed: {error}",
       "failedNoResult": "Price table updated but no result returned",
       "noModels": "No model prices found",
-      "partialFailure": "Partial update succeeded, but {failed} models failed"
+      "partialFailure": "Partial update succeeded, but {failed} models failed",
+      "failedModels": "Failed models: {models}",
+      "skippedConflicts": "Skipped {count} manual models"
+    },
+    "conflict": {
+      "title": "Select Items to Overwrite",
+      "description": "The following models have manual prices. Check the ones to overwrite with LiteLLM prices, unchecked ones will be kept unchanged",
+      "searchPlaceholder": "Search models...",
+      "table": {
+        "modelName": "Model",
+        "manualPrice": "Manual Price",
+        "litellmPrice": "LiteLLM Price",
+        "action": "Action"
+      },
+      "viewDiff": "View Diff",
+      "diffTitle": "Price Difference",
+      "diff": {
+        "field": "Field",
+        "manual": "Manual",
+        "litellm": "LiteLLM",
+        "inputPrice": "Input Price",
+        "outputPrice": "Output Price",
+        "imagePrice": "Image Price",
+        "provider": "Provider",
+        "mode": "Type"
+      },
+      "pagination": {
+        "showing": "Showing {from}-{to} of {total}"
+      },
+      "selectedCount": "Selected {count}/{total} models",
+      "noMatch": "No matching models found",
+      "noConflicts": "No conflicts",
+      "applyOverwrite": "Apply Overwrite",
+      "applying": "Applying..."
     },
     "table": {
       "modelName": "Model Name",
-      "type": "Type",
       "provider": "Provider",
+      "capabilities": "Capabilities",
+      "price": "Price",
       "inputPrice": "Input Price ($/M)",
       "outputPrice": "Output Price ($/M)",
+      "priceInput": "In",
+      "priceOutput": "Out",
+      "pricePerRequest": "Req",
+      "cacheReadPrice": "Cache Read ($/M)",
+      "cacheCreationPrice": "Cache Create ($/M)",
+      "cache5m": "5m",
+      "cache1h": "1h+",
+      "copyModelId": "Copy model ID",
       "updatedAt": "Updated At",
+      "actions": "Actions",
       "typeChat": "Chat",
       "typeImage": "Image",
       "typeCompletion": "Completion",
@@ -475,6 +642,7 @@
       "showing": "Showing {from}-{to} of {total}",
       "previous": "Previous",
       "next": "Next",
+      "perPageLabel": "Per page",
       "perPage": "{size} per page"
     },
     "stats": {
@@ -484,23 +652,25 @@
     },
     "dialog": {
       "title": "Update Model Price Table",
-      "description": "Select and upload JSON file containing model pricing data",
-      "selectFile": "Click to select JSON file or drag and drop here",
+      "description": "Select and upload JSON or TOML file containing model pricing data",
+      "selectFile": "Click to select JSON/TOML file or drag and drop here",
       "fileSizeLimit": "File size cannot exceed 10MB",
       "fileSizeLimitSmall": "File size not exceeding 10MB",
-      "invalidFileType": "Please select a JSON format file",
+      "invalidFileType": "Please select a JSON or TOML file",
       "fileTooLarge": "File size exceeds 10MB limit",
       "upload": "Upload and Update",
       "uploading": "Uploading...",
       "updatePriceTable": "Update Price Table",
       "updating": "Updating...",
-      "selectJson": "Select JSON File",
+      "selectJson": "Select File",
       "updateSuccess": "Price table updated successfully, {count} models updated",
       "updateFailed": "Update failed",
       "systemHasBuiltIn": "System has built-in price table",
       "manualDownload": "You can also manually download",
-      "latestPriceTable": "latest price table",
+      "latestPriceTable": "cloud price table",
       "andUploadViaButton": ", and upload via button above",
+      "cloudModelCountLoading": "Loading cloud model count...",
+      "cloudModelCountFailed": "Failed to load cloud model count",
       "supportedModels": "Currently supports {count} models",
       "results": {
         "title": "Update Results",
@@ -508,9 +678,52 @@
         "success": "Success: {success}",
         "failed": "Failed: {failed}",
         "skipped": "Skipped: {skipped}",
+        "more": " (+{count})",
         "details": "Details",
         "viewDetails": "View detailed logs"
       }
+    },
+    "addModel": "Add Model",
+    "editModel": "Edit Model",
+    "deleteModel": "Delete Model",
+    "addModelDescription": "Manually add a new model price configuration",
+    "editModelDescription": "Edit the model price configuration",
+    "deleteConfirm": "Are you sure you want to delete model {name}? This action cannot be undone.",
+    "form": {
+      "modelName": "Model ID",
+      "modelNamePlaceholder": "e.g., gpt-5.2-codex",
+      "modelNameRequired": "Model ID is required",
+      "displayName": "Display Name (Optional)",
+      "displayNamePlaceholder": "e.g., GPT-5.2 Codex",
+      "type": "Type",
+      "provider": "Provider",
+      "providerPlaceholder": "e.g., openai",
+      "requestPrice": "Per-call Price ($/request)",
+      "inputPrice": "Input Price ($/M tokens)",
+      "outputPrice": "Output Price ($/M tokens)",
+      "outputPriceImage": "Output Price ($/image)",
+      "cacheReadPrice": "Cache Read Price ($/M tokens)",
+      "cacheCreationPrice5m": "Cache Creation Price (5m, $/M tokens)",
+      "cacheCreationPrice1h": "Cache Creation Price (1h+, $/M tokens)"
+    },
+    "drawer": {
+      "prefillLabel": "Search existing models to prefill",
+      "prefillEmpty": "No matching models found",
+      "prefillFailed": "Search failed",
+      "promptCachingHint": "Enable if the model supports prompt caching",
+      "cachePricingTitle": "Cache Pricing"
+    },
+    "actions": {
+      "edit": "Edit",
+      "more": "More actions",
+      "delete": "Delete"
+    },
+    "toast": {
+      "createSuccess": "Model added",
+      "updateSuccess": "Model updated",
+      "deleteSuccess": "Model deleted",
+      "saveFailed": "Failed to save",
+      "deleteFailed": "Failed to delete"
     }
   },
   "providers": {
@@ -518,6 +731,22 @@
     "addFailed": "Failed to add provider",
     "addProvider": "Add Provider",
     "addSuccess": "Provider added successfully",
+    "autoSort": {
+      "button": "Auto Sort Priority",
+      "dialogTitle": "Auto Sort Provider Priority",
+      "dialogDescription": "Automatically assign priority based on cost multiplier (lower cost = higher priority)",
+      "changeCount": "{count} providers will be updated",
+      "noChanges": "No changes needed (already sorted)",
+      "costMultiplierHeader": "Cost Multiplier",
+      "priorityHeader": "Priority",
+      "providersHeader": "Providers",
+      "changesTitle": "Change Details",
+      "providerHeader": "Provider",
+      "priorityChangeHeader": "Priority Change",
+      "confirm": "Apply Changes",
+      "success": "Updated priority for {count} providers",
+      "error": "Failed to update priorities"
+    },
     "types": {
       "claude": {
         "label": "Claude",
@@ -571,6 +800,10 @@
       "resetCircuitSuccess": "Circuit breaker reset",
       "resetCircuitSuccessDesc": "Provider \"{name}\" circuit breaker status cleared",
       "resetCircuitFailed": "Failed to reset circuit breaker",
+      "resetUsageTitle": "Reset total usage",
+      "resetUsageSuccess": "Total usage reset",
+      "resetUsageSuccessDesc": "Provider \"{name}\" total usage has been reset",
+      "resetUsageFailed": "Failed to reset total usage",
       "toggleSuccess": "Provider {status}",
       "toggleSuccessDesc": "Provider \"{name}\" status updated",
       "toggleFailed": "Toggle failed",
@@ -666,6 +899,15 @@
         "chunksCount": "Received {count} chunks ({format})",
         "truncatedPreview": "Showing first {length} characters, copy to see full content",
         "truncatedBrief": "Showing first {length} characters, click \"View Details\" for more",
+        "timeout": {
+          "label": "Timeout (seconds)",
+          "desc": "Max wait time for test request (5-120 sec)",
+          "geminiHint": ", Gemini Thinking models recommend 60+ sec"
+        },
+        "geminiAuthFallback": {
+          "warning": "Header auth failed, using URL parameter auth",
+          "desc": "Actual proxy forwarding only uses header auth, may cause request failures"
+        },
         "copyFormat": {
           "testResult": "Test result",
           "message": "Message",
@@ -1059,6 +1301,7 @@
         "create": "Add Provider",
         "edit": "Edit Provider"
       },
+      "dialogDescription": "Configure provider details and advanced settings.",
       "url": {
         "label": "API Address *",
         "placeholder": "e.g. https://open.bigmodel.cn/api/anthropic"
@@ -1150,6 +1393,15 @@
               "desc": "Group tag. Only users whose providerGroup matches can use this provider. Example: set to \"premium\" to serve users with providerGroup=\"premium\" only"
             }
           },
+          "cacheTtl": {
+            "label": "Cache TTL Override",
+            "options": {
+              "inherit": "No override (follow client)",
+              "5m": "5 minutes",
+              "1h": "1 hour"
+            },
+            "desc": "Force prompt cache TTL; only affects requests with cache_control."
+          },
           "context1m": {
             "label": "1M Context Window",
             "options": {
@@ -1158,6 +1410,49 @@
               "disabled": "Disabled"
             },
             "desc": "Configure 1M context window support. Only affects Sonnet models (claude-sonnet-4-5, claude-sonnet-4). Tiered pricing applies when enabled."
+          },
+          "codexOverrides": {
+            "reasoningEffort": {
+              "label": "Reasoning Effort Override",
+              "help": "Controls how much reasoning effort the model uses before answering. \"inherit\" follows the client request; other values force override reasoning.effort. Note: \"none\" is only supported on GPT-5.1 models; \"xhigh\" is only supported on GPT-5.1-Codex-Max. Using an unsupported value will cause an upstream error.",
+              "options": {
+                "inherit": "No override (follow client)",
+                "minimal": "minimal",
+                "low": "low",
+                "medium": "medium (default)",
+                "high": "high",
+                "xhigh": "xhigh (GPT-5.1-Codex-Max only)",
+                "none": "none (GPT-5.1 only)"
+              }
+            },
+            "reasoningSummary": {
+              "label": "Reasoning Summary Override",
+              "help": "Controls whether the Responses API returns reasoning summaries. \"auto\" returns a condensed summary, \"detailed\" returns a more comprehensive one. \"inherit\" follows the client request.",
+              "options": {
+                "inherit": "No override (follow client)",
+                "auto": "auto",
+                "detailed": "detailed"
+              }
+            },
+            "textVerbosity": {
+              "label": "Text Verbosity Override",
+              "help": "Controls how verbose the model output is. \"low\" is concise, \"high\" is verbose. \"inherit\" follows the client request.",
+              "options": {
+                "inherit": "No override (follow client)",
+                "low": "low",
+                "medium": "medium (default)",
+                "high": "high"
+              }
+            },
+            "parallelToolCalls": {
+              "label": "Parallel Tool Calls Override",
+              "help": "Controls whether parallel tool calls are allowed. \"inherit\" follows the client request. Disabling may reduce tool-call concurrency.",
+              "options": {
+                "inherit": "No override (follow client)",
+                "true": "Force enable",
+                "false": "Force disable"
+              }
+            }
           }
         },
         "rateLimit": {
@@ -1167,6 +1462,7 @@
             "daily": "Day: ${amount} (reset ${resetTime})",
             "weekly": "Week: ${amount}",
             "monthly": "Month: ${amount}",
+            "total": "Total: ${amount}",
             "concurrent": "Concurrent: {count}",
             "none": "Unlimited"
           },
@@ -1198,6 +1494,10 @@
           },
           "limitMonthly": {
             "label": "Monthly Spend Limit (USD)",
+            "placeholder": "Leave empty for unlimited"
+          },
+          "limitTotal": {
+            "label": "Total Spend Limit (USD)",
             "placeholder": "Leave empty for unlimited"
           },
           "limitConcurrent": {
@@ -1377,6 +1677,7 @@
       "errors": {
         "invalidUrl": "Please enter a valid API address",
         "invalidWebsiteUrl": "Please enter a valid provider website URL",
+        "groupTagTooLong": "Provider group tags are too long (max {max} chars total)",
         "addFailed": "Failed to add provider",
         "updateFailed": "Failed to update provider",
         "deleteFailed": "Failed to delete provider"
@@ -1523,7 +1824,6 @@
       "leaderboard": "Leaderboard",
       "title": "Provider Management"
     },
-    "addProvider": "Add server",
     "filter": {
       "status": {
         "all": "Any status",
@@ -1534,7 +1834,8 @@
         "label": "Groups:",
         "all": "All",
         "default": "default"
-      }
+      },
+      "circuitBroken": "Circuit Broken"
     },
     "subtitle": "Provider Management",
     "subtitleDesc": "Configure upstream provider rate limiting and concurrent session limits. Leave empty for unlimited.",
