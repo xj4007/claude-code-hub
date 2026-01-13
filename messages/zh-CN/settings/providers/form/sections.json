@@ -119,6 +119,13 @@
           "false": "强制关闭"
         }
       }
+    },
+    "unifiedClientId": {
+      "label": "统一客户端标识",
+      "desc": "启用后，将使用统一的客户端标识向上游发送请求（仅 Claude / Claude-Auth 供应商生效）",
+      "idLabel": "统一客户端 ID",
+      "regenerate": "重新生成",
+      "help": "ID 为 64 位十六进制字符串，建议保持默认自动生成，不要在不同实例之间复用。"
     }
   },
   "rateLimit": {
