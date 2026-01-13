@@ -51,12 +51,18 @@ function parseGroupString(groupString: string): string[] {
 }
 
 /**
- * 获取有效的供应商分组（优先级：key.providerGroup > user.providerGroup）
+ * 获取有效的供应商分组（优先级：forcedProviderGroup > key.providerGroup > user.providerGroup）
  *
  * @param session - 代理会话对象
  * @returns 有效分组字符串，或 null（无认证信息时）
  */
 function getEffectiveProviderGroup(session?: ProxySession): string | null {
+  // 优先级 1: 强制分组（最高优先级，用于非 CLI 请求路由到 2api）
+  if (session?.forcedProviderGroup) {
+    return session.forcedProviderGroup;
+  }
+
+  // 优先级 2 & 3: key.providerGroup > user.providerGroup
   if (!session?.authState) {
     return null;
   }
@@ -417,6 +423,26 @@ export class ProxyProviderResolver {
     let message = "No available providers";
     let errorType = "no_available_providers";
 
+    // 检查是否为强制分组失败（2api 不可用）
+    const selectionContext = session.getLastSelectionContext();
+    const forcedGroup = selectionContext?.forcedGroup;
+
+    if (forcedGroup) {
+      // 强制分组不可用（2api 分组缺失或无可用供应商）
+      message = `Forced group "${forcedGroup}" unavailable`;
+      errorType = "forced_group_unavailable";
+
+      logger.error("ProviderSelector: Forced group unavailable", {
+        forcedGroup,
+        totalAttempts: attemptCount,
+      });
+
+      return ProxyResponses.buildError(status, message, errorType, {
+        group: forcedGroup,
+        totalAttempts: attemptCount,
+      });
+    }
+
     if (excludedProviders.length > 0) {
       message = `All providers unavailable (tried ${excludedProviders.length} providers)`;
       errorType = "all_providers_failed";
@@ -689,9 +715,20 @@ export class ProxyProviderResolver {
         });
       } else {
         // 严格分组隔离：用户分组内没有供应商
-        logger.error("ProviderSelector: User group has no providers", {
-          effectiveGroup: effectiveGroupPick,
-        });
+        // 如果是强制分组（2api），返回专用错误码
+        const isForcedGroup = session?.forcedProviderGroup === effectiveGroupPick;
+
+        if (isForcedGroup) {
+          logger.error("ProviderSelector: Forced group unavailable", {
+            forcedGroup: effectiveGroupPick,
+            totalProviders: allProviders.length,
+          });
+        } else {
+          logger.error("ProviderSelector: User group has no providers", {
+            effectiveGroup: effectiveGroupPick,
+          });
+        }
+
         return {
           provider: null,
           context: {
@@ -708,6 +745,8 @@ export class ProxyProviderResolver {
             priorityLevels: [],
             selectedPriority: 0,
             candidatesAtPriority: [],
+            // 添加强制分组标记，用于后续错误处理
+            forcedGroup: isForcedGroup ? effectiveGroupPick : undefined,
           },
         };
       }

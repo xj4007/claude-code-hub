@@ -123,6 +123,7 @@ export interface ProviderChainItem {
     userGroup?: string; // 用户分组（如果有）
     afterGroupFilter?: number; // 分组筛选后数量
     groupFilterApplied: boolean; // 是否应用了分组筛选
+    forcedGroup?: string; // 强制分组（如 2api，用于非 CLI 请求）
 
     // --- 模型白名单过滤 ---
     afterModelFilter?: number; // 模型白名单筛选后数量

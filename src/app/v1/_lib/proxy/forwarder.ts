@@ -1309,9 +1309,16 @@ export class ProxyForwarder {
         }
       }
 
-      // ⭐ Claude 请求默认字段补全（缺失时才添加）
+      // ⭐ Claude 请求默认字段补全（仅在需要伪装时执行）
       if (provider.providerType === "claude" || provider.providerType === "claude-auth") {
-        ensureClaudeRequestDefaults(session.request.message, provider);
+        // 仅在 needsClaudeDisguise 为 true 时执行伪装
+        if (session.needsClaudeDisguise) {
+          ensureClaudeRequestDefaults(session.request.message, provider);
+          logger.debug("ProxyForwarder: Applied Claude Code disguise", {
+            providerId: provider.id,
+            providerName: provider.name,
+          });
+        }
       }
 
       if (

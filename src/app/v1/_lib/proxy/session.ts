@@ -99,6 +99,12 @@ export class ProxySession {
   // 特殊设置（用于审计/展示，可扩展）
   private specialSettings: SpecialSetting[] = [];
 
+  // 强制分组（优先级最高，用于非 CLI 请求路由到 2api）
+  forcedProviderGroup?: string;
+
+  // 是否需要伪装为 Claude Code 请求（用于非 CLI 请求）
+  needsClaudeDisguise?: boolean;
+
   // Cached price data (lazy loaded: undefined=not loaded, null=no data)
   private cachedPriceData?: ModelPriceData | null;
 
