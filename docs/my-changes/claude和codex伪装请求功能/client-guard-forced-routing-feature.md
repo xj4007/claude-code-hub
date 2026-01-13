@@ -3,6 +3,7 @@
 **更新时间**: 2026-01-13
 **状态**: 已上线
 **适用范围**: Claude 请求路径（/v1/messages 等）
+**当前版本**: 4.1
 
 ---
 
@@ -471,6 +472,7 @@ ProxyForwarder
 
 | 版本 | 日期 | 变更说明 |
 |------|------|---------|
+| **4.1** | **2026-01-13** | **修复：仅对 Claude 请求执行 CLI 检测（修复 Codex/Gemini 被误路由问题）** |
 | 4.0 | 2026-01-13 | 新增 Claude CLI 检测与强制路由功能 |
 | 3.0 | 2025-01-03 | 职责分离，移除强制路由（解决主分支合并冲突） |
 | 2.0 | 2025-01-02 | 增强校验与伪装（已废弃） |
@@ -478,6 +480,151 @@ ProxyForwarder
 
 ---
 
-**文档版本**: 4.0（Claude CLI 检测与强制路由版本）
+## 12. 版本 4.1 修复说明（2026-01-13）
+
+### 12.1 问题描述
+
+**版本 4.0 的 Bug**：所有非 Claude CLI 的请求（包括 Codex CLI、Gemini CLI、OpenAI 请求等）都被错误地强制路由到 `2api` 分组。
+
+**影响**：
+- ❌ Codex CLI 请求（`/v1/responses`）被错误路由到 2api
+- ❌ Gemini CLI 请求被错误路由到 2api
+- ❌ OpenAI 请求（`/v1/chat/completions`）被错误路由到 2api
+- ❌ 导致这些请求无法正常工作（找不到支持的供应商）
+
+**根本原因**：版本 4.0 的实现没有区分请求类型，对所有请求都执行 Claude CLI 检测。
+
+---
+
+### 12.2 修复方案
+
+**核心修改**：仅对 **Claude 请求**（`originalFormat === "claude"`）执行 CLI 检测和强制路由。
+
+**实现逻辑**：
+```typescript
+// 仅对 Claude 请求执行 CLI 检测
+if (session.originalFormat === "claude") {
+  // 执行 Claude CLI 检测
+  const cliDetection = ProxyClientGuard.isClaudeCliRequest(...);
+
+  if (!cliDetection.isCli) {
+    // 非 Claude CLI → 强制路由到 2api
+    session.forcedProviderGroup = "2api";
+    session.needsClaudeDisguise = true;
+  }
+  // Claude CLI → 继续 allowedClients 校验
+}
+
+// 非 Claude 请求（Codex、OpenAI、Gemini 等）：跳过所有检测
+logger.debug("ProxyClientGuard: Non-Claude request, skipping CLI detection");
+return null;
+```
+
+---
+
+### 12.3 请求类型判断
+
+系统通过 `session.originalFormat` 字段判断请求类型（由路径自动检测）：
+
+| 请求路径 | originalFormat | 处理方式 |
+|---------|---------------|---------|
+| `/v1/messages` | `claude` | ✅ 执行 CLI 检测 + 强制路由 |
+| `/v1/responses` | `response` (Codex) | ⏭️ **跳过检测，正常路由** |
+| `/v1/chat/completions` | `openai` | ⏭️ 跳过检测，正常路由 |
+| `/v1beta/models/{model}:generateContent` | `gemini` | ⏭️ 跳过检测，正常路由 |
+| `/v1internal/models/{model}:generateContent` | `gemini-cli` | ⏭️ 跳过检测，正常路由 |
+
+**格式检测函数**：`detectFormatByEndpoint()` (定义在 `format-mapper.ts`)
+
+---
+
+### 12.4 代码修改
+
+**文件**：`src/app/v1/_lib/proxy/client-guard.ts`
+
+**修改位置**：
+- **第 13 行**：更新注释说明仅对 Claude 请求生效
+- **第 133 行**：添加 `originalFormat` 检查
+- **第 208-213 行**：添加非 Claude 请求的处理逻辑
+
+**关键代码**：
+```typescript
+// 第 133 行
+if (session.originalFormat === "claude") {
+  // 仅对 Claude 请求执行检测
+}
+
+// 第 208-213 行
+// 非 Claude 请求（Codex、OpenAI、Gemini 等）：跳过所有检测
+logger.debug("ProxyClientGuard: Non-Claude request, skipping CLI detection", {
+  userName: user.name,
+  originalFormat: session.originalFormat,
+});
+return null;
+```
+
+---
+
+### 12.5 行为对比
+
+| 请求类型 | 版本 4.0（Bug） | 版本 4.1（修复后） |
+|---------|----------------|------------------|
+| Claude CLI | ✅ 正常路由 | ✅ 正常路由（不变） |
+| 非 Claude CLI（curl等） | ✅ 强制路由到 2api | ✅ 强制路由到 2api（不变） |
+| **Codex CLI** | ❌ **错误路由到 2api** | ✅ **正常路由** ✨ |
+| **Gemini CLI** | ❌ 错误路由到 2api | ✅ 正常路由 |
+| **OpenAI 请求** | ❌ 错误路由到 2api | ✅ 正常路由 |
+
+---
+
+### 12.6 日志变化
+
+**新增日志**（非 Claude 请求）：
+```
+ProxyClientGuard: Non-Claude request, skipping CLI detection
+{
+  userName: "codex",
+  originalFormat: "response"
+}
+```
+
+**不再出现的日志**（Codex/Gemini 请求）：
+- ❌ `ProxyClientGuard: CLI detection result` - 不再对非 Claude 请求执行检测
+- ❌ `ProxyClientGuard: Non-CLI request detected, routing to 2api` - 不再错误路由
+
+---
+
+### 12.7 测试验证
+
+**测试场景**：
+
+1. **Codex CLI 请求**（`/v1/responses`）：
+   - ✅ 跳过 CLI 检测
+   - ✅ 按正常分组策略路由
+   - ✅ 日志：`Non-Claude request, skipping CLI detection`
+
+2. **Claude CLI 请求**（`/v1/messages`）：
+   - ✅ 执行 CLI 检测
+   - ✅ 真实 CLI → 正常路由
+   - ✅ 非 CLI → 强制路由到 2api
+
+3. **Gemini CLI 请求**（`/v1internal/models/{model}:generateContent`）：
+   - ✅ 跳过 CLI 检测
+   - ✅ 按正常分组策略路由
+
+---
+
+### 12.8 验证结果
+
+| 检查项 | 结果 |
+|-------|------|
+| TypeScript 类型检查 | ✅ 通过 |
+| 代码语法 | ✅ 正确 |
+| Codex CLI 正常工作 | ✅ 验证通过 |
+| Claude CLI 不受影响 | ✅ 验证通过 |
+
+---
+
+**文档版本**: 4.1（修复 Codex/Gemini 误路由问题）
 **维护者**: Team
 **上次更新**: 2026-01-13
