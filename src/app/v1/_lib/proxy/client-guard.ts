@@ -56,7 +56,7 @@ export class ProxyClientGuard {
       // content 可能是字符串或数组
       let hasSystemReminder = false;
       if (typeof content === "string") {
-      hasSystemReminder = content.includes("<system-reminder>");
+        hasSystemReminder = content.includes("<system-reminder>");
       } else if (Array.isArray(content) && content.length > 0) {
         const firstContent = content[0] as Record<string, unknown>;
         const text = firstContent?.text;
@@ -75,7 +75,9 @@ export class ProxyClientGuard {
       let hasClaudeIdentity = false;
 
       if (typeof system === "string") {
-        hasClaudeIdentity = system.includes("You are Claude Code, Anthropic's official CLI for Claude.");
+        hasClaudeIdentity = system.includes(
+          "You are Claude Code, Anthropic's official CLI for Claude."
+        );
       } else if (Array.isArray(system) && system.length > 0) {
         const firstSystem = system[0] as Record<string, unknown>;
         const text = firstSystem?.text;
