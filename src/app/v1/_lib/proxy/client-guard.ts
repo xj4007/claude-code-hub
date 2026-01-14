@@ -52,7 +52,9 @@ export class ProxyClientGuard {
       let hasClaudeIdentity = false;
 
       if (typeof system === "string") {
-        hasClaudeIdentity = system.includes("You are Claude Code, Anthropic's official CLI for Claude.");
+        hasClaudeIdentity = system.includes(
+          "You are Claude Code, Anthropic's official CLI for Claude."
+        );
       } else if (Array.isArray(system) && system.length > 0) {
         const firstSystem = system[0] as Record<string, unknown>;
         const text = firstSystem?.text;
