@@ -46,7 +46,6 @@ export class ProxyClientGuard {
 
       reasons.push(`UA matched: ${clientInfo.clientType}`);
 
-      
       // 2. 检查 system[0] 是否包含 Claude Code 身份
       const system = requestBody.system;
       let hasClaudeIdentity = false;
