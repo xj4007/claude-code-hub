@@ -46,34 +46,8 @@ export class ProxyClientGuard {
 
       reasons.push(`UA matched: ${clientInfo.clientType}`);
 
-      // 2. 检查 messages[0].content[0] 是否包含 <system-reminder>
-      const messages = requestBody.messages as Array<Record<string, unknown>> | undefined;
-      if (!messages || !Array.isArray(messages) || messages.length === 0) {
-        reasons.push("messages array missing or empty");
-        return { isCli: false, reasons };
-      }
-
-      const firstMessage = messages[0];
-      const content = firstMessage?.content;
-
-      // content 可能是字符串或数组
-      let hasSystemReminder = false;
-      if (typeof content === "string") {
-        hasSystemReminder = content.includes("<system-reminder>");
-      } else if (Array.isArray(content) && content.length > 0) {
-        const firstContent = content[0] as Record<string, unknown>;
-        const text = firstContent?.text;
-        hasSystemReminder = typeof text === "string" && text.includes("<system-reminder>");
-      }
-
-      if (!hasSystemReminder) {
-        reasons.push("missing <system-reminder> in messages[0].content");
-        return { isCli: false, reasons };
-      }
-
-      reasons.push("has <system-reminder>");
-
-      // 3. 检查 system[0] 是否包含 Claude Code 身份
+      
+      // 2. 检查 system[0] 是否包含 Claude Code 身份
       const system = requestBody.system;
       let hasClaudeIdentity = false;
 
@@ -94,7 +68,7 @@ export class ProxyClientGuard {
 
       reasons.push("has Claude Code identity");
 
-      // 4. 检查 metadata.user_id 格式
+      // 3. 检查 metadata.user_id 格式
       const metadata = requestBody.metadata as Record<string, unknown> | undefined;
       const userId = metadata?.user_id;
 

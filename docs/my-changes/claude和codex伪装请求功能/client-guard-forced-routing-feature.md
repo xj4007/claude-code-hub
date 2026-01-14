@@ -1,9 +1,9 @@
 # Claude CLI 检测与强制路由功能
 
-**更新时间**: 2026-01-13
+**更新时间**: 2026-01-14
 **状态**: 已上线
 **适用范围**: Claude 请求路径（/v1/messages 等）
-**当前版本**: 4.1
+**当前版本**: 4.2
 
 ---
 
@@ -39,7 +39,6 @@
 | 维度 | 检测方法 | 说明 |
 |------|---------|------|
 | **User-Agent** | 使用 `parseUserAgent()` 解析 | 检测 `claude-cli` 或 `claude-vscode` |
-| **messages 特征** | 检查 `messages[0].content[0]` 包含 `<system-reminder>` | Claude Code 特有标记 |
 | **system 特征** | 检查 `system[0]` 包含 Claude Code 身份标识 | "You are Claude Code, Anthropic's official CLI for Claude." |
 | **metadata.user_id 格式** | 检查符合 `user_{64hex}_account__session_{uuid}` 格式 | 符合 Claude Code 生成格式 |
 
@@ -49,15 +48,11 @@
    ├─ 不符合 → 判定为非 CLI
    └─ 符合 → 继续检查请求体特征
 
-2. 检查 messages[0].content[0] 是否包含 <system-reminder>
+2. 检查 system[0] 是否包含 Claude Code 身份
    ├─ 不符合 → 判定为非 CLI
    └─ 符合 → 继续检查
 
-3. 检查 system[0] 是否包含 Claude Code 身份
-   ├─ 不符合 → 判定为非 CLI
-   └─ 符合 → 继续检查
-
-4. 检查 metadata.user_id 格式是否正确
+3. 检查 metadata.user_id 格式是否正确
    ├─ 不符合 → 判定为非 CLI
    └─ 符合 → 判定为 Claude CLI 请求
 ```
