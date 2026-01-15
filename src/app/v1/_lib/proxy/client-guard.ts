@@ -17,9 +17,7 @@ export class ProxyClientGuard {
   /**
    * Build diagnostics for system/messages preview logging (safe, truncated).
    */
-  private static buildSystemDiagnostics(
-    requestBody: Record<string, unknown>
-  ): {
+  private static buildSystemDiagnostics(requestBody: Record<string, unknown>): {
     systemType: string;
     systemIsArray: boolean;
     systemLen: number | null;
