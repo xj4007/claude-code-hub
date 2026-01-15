@@ -121,7 +121,6 @@ export class ProxyClientGuard {
 
       reasons.push(`UA matched: ${clientInfo.clientType}`);
 
-
       // 2. 检查 system[0] 是否包含 Claude Code 身份
       // 支持两种变体：
       // - 标准 CLI: "You are Claude Code, Anthropic's official CLI for Claude."
