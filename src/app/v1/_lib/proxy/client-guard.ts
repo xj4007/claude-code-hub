@@ -15,13 +15,88 @@ import type { ProxySession } from "./session";
  */
 export class ProxyClientGuard {
   /**
+   * Build diagnostics for system/messages preview logging (safe, truncated).
+   */
+  private static buildSystemDiagnostics(
+    requestBody: Record<string, unknown>
+  ): {
+    systemType: string;
+    systemIsArray: boolean;
+    systemLen: number | null;
+    systemPreview: string | null;
+    system0Keys?: string[];
+    messages0Preview?: string | null;
+  } {
+    const system = requestBody.system;
+    const systemIsArray = Array.isArray(system);
+    const systemType = systemIsArray ? "array" : system === null ? "null" : typeof system;
+    const systemLen =
+      typeof system === "string" ? system.length : systemIsArray ? system.length : null;
+
+    const sanitize = (value: string): string => {
+      const normalized = value.replace(/[\r\n]+/g, " ").trim();
+      return normalized.length > 100 ? normalized.slice(0, 100) : normalized;
+    };
+
+    let systemPreview: string | null = null;
+    let system0Keys: string[] | undefined;
+
+    if (typeof system === "string") {
+      systemPreview = sanitize(system);
+    } else if (systemIsArray && system.length > 0) {
+      const first = system[0] as Record<string, unknown> | string;
+      if (typeof first === "string") {
+        systemPreview = sanitize(first);
+      } else if (first && typeof first === "object") {
+        system0Keys = Object.keys(first);
+        const text = (first as Record<string, unknown>).text;
+        if (typeof text === "string") {
+          systemPreview = sanitize(text);
+        } else {
+          try {
+            systemPreview = sanitize(JSON.stringify(first));
+          } catch {
+            systemPreview = null;
+          }
+        }
+      }
+    }
+
+    let messages0Preview: string | null = null;
+    const messages = requestBody.messages;
+    if (Array.isArray(messages) && messages.length > 0) {
+      const firstMessage = messages[0] as Record<string, unknown>;
+      const content = firstMessage?.content;
+      if (Array.isArray(content) && content.length > 0) {
+        const firstContent = content[0] as Record<string, unknown> | string;
+        const text =
+          typeof firstContent === "string"
+            ? firstContent
+            : (firstContent as Record<string, unknown>)?.text;
+        if (typeof text === "string") {
+          messages0Preview = sanitize(text);
+        }
+      }
+    }
+
+    return {
+      systemType,
+      systemIsArray,
+      systemLen,
+      systemPreview,
+      system0Keys,
+      messages0Preview,
+    };
+  }
+
+  /**
    * 检测请求是否为 Claude CLI 请求（组合判断：User-Agent + 请求体特征）
    *
    * Claude CLI 请求特征：
    * 1. User-Agent 包含 claude-cli 或 claude-vscode
-   * 2. messages[0].content[0] 包含 <system-reminder>
-   * 3. system[0] 包含 "You are Claude Code, Anthropic's official CLI for Claude."
-   * 4. metadata.user_id 符合 user_{64hex}_account__session_{uuid} 格式
+   * 2. system[0] 包含 "You are Claude Code, Anthropic's official CLI for Claude"
+   *    - 支持标准 CLI 和 Agent SDK 两种变体
+   * 3. metadata.user_id 符合 user_{64hex}_account__session_{uuid} 格式
    *
    * @param userAgent - User-Agent 头
    * @param requestBody - 请求体
@@ -46,24 +121,36 @@ export class ProxyClientGuard {
 
       reasons.push(`UA matched: ${clientInfo.clientType}`);
 
-      
+
       // 2. 检查 system[0] 是否包含 Claude Code 身份
+      // 支持两种变体：
+      // - 标准 CLI: "You are Claude Code, Anthropic's official CLI for Claude."
+      // - Agent SDK: "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
       const system = requestBody.system;
       let hasClaudeIdentity = false;
 
+      const checkClaudeIdentity = (text: string): boolean => {
+        return text.includes("You are Claude Code, Anthropic's official CLI for Claude");
+      };
+
       if (typeof system === "string") {
-        hasClaudeIdentity = system.includes(
-          "You are Claude Code, Anthropic's official CLI for Claude."
-        );
+        hasClaudeIdentity = checkClaudeIdentity(system);
       } else if (Array.isArray(system) && system.length > 0) {
         const firstSystem = system[0] as Record<string, unknown>;
         const text = firstSystem?.text;
-        hasClaudeIdentity =
-          typeof text === "string" &&
-          text.includes("You are Claude Code, Anthropic's official CLI for Claude.");
+        hasClaudeIdentity = typeof text === "string" && checkClaudeIdentity(text);
       }
 
       if (!hasClaudeIdentity) {
+        const systemDiagnostics = ProxyClientGuard.buildSystemDiagnostics(requestBody);
+        logger.debug("ProxyClientGuard: Missing Claude Code identity in system", {
+          systemType: systemDiagnostics.systemType,
+          systemIsArray: systemDiagnostics.systemIsArray,
+          systemLen: systemDiagnostics.systemLen,
+          systemPreview: systemDiagnostics.systemPreview,
+          system0Keys: systemDiagnostics.system0Keys,
+          messages0Preview: systemDiagnostics.messages0Preview,
+        });
         reasons.push("missing Claude Code identity in system");
         return { isCli: false, reasons };
       }
@@ -121,9 +208,13 @@ export class ProxyClientGuard {
 
       // 如果不是 Claude CLI 请求，强制路由到 2api 分组
       if (!cliDetection.isCli) {
+        const systemDiagnostics = ProxyClientGuard.buildSystemDiagnostics(
+          session.request.message as Record<string, unknown>
+        );
         logger.info("ProxyClientGuard: Non-Claude-CLI request detected, routing to 2api", {
           userName: user.name,
           reasons: cliDetection.reasons,
+          systemPreview: systemDiagnostics.systemPreview,
         });
 
         session.forcedProviderGroup = "2api";

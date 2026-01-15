@@ -39,7 +39,7 @@
 | 维度 | 检测方法 | 说明 |
 |------|---------|------|
 | **User-Agent** | 使用 `parseUserAgent()` 解析 | 检测 `claude-cli` 或 `claude-vscode` |
-| **system 特征** | 检查 `system[0]` 包含 Claude Code 身份标识 | "You are Claude Code, Anthropic's official CLI for Claude." |
+| **system 特征** | 检查 `system[0]` 包含 Claude Code 身份标识 | "You are Claude Code, Anthropic's official CLI for Claude" (支持标准 CLI 和 Agent SDK) |
 | **metadata.user_id 格式** | 检查符合 `user_{64hex}_account__session_{uuid}` 格式 | 符合 Claude Code 生成格式 |
 
 **检测流程**：
@@ -48,7 +48,7 @@
    ├─ 不符合 → 判定为非 CLI
    └─ 符合 → 继续检查请求体特征
 
-2. 检查 system[0] 是否包含 Claude Code 身份
+2. 检查 system[0] 是否包含 Claude Code 身份标识
    ├─ 不符合 → 判定为非 CLI
    └─ 符合 → 继续检查
 
@@ -279,8 +279,6 @@ ProxyForwarder
 | 原因 | 说明 |
 |------|------|
 | `UA not Claude CLI (parsed: xxx)` | User-Agent 不匹配 |
-| `messages array missing or empty` | messages 数组缺失或为空 |
-| `missing <system-reminder> in messages[0].content` | 缺少 system-reminder 标记 |
 | `missing Claude Code identity in system` | 缺少 Claude Code 身份标识 |
 | `metadata.user_id missing or not string` | metadata.user_id 缺失或格式错误 |
 | `metadata.user_id format invalid: xxx...` | metadata.user_id 格式无效 |
@@ -467,7 +465,8 @@ ProxyForwarder
 
 | 版本 | 日期 | 变更说明 |
 |------|------|---------|
-| **4.1** | **2026-01-13** | **修复：仅对 Claude 请求执行 CLI 检测（修复 Codex/Gemini 被误路由问题）** |
+| **4.2** | **2026-01-15** | **增强日志诊断 + 支持 Claude Agent SDK 变体** |
+| 4.1 | 2026-01-13 | 修复：仅对 Claude 请求执行 CLI 检测（修复 Codex/Gemini 被误路由问题） |
 | 4.0 | 2026-01-13 | 新增 Claude CLI 检测与强制路由功能 |
 | 3.0 | 2025-01-03 | 职责分离，移除强制路由（解决主分支合并冲突） |
 | 2.0 | 2025-01-02 | 增强校验与伪装（已废弃） |
@@ -620,6 +619,340 @@ ProxyClientGuard: Non-Claude request, skipping CLI detection
 
 ---
 
-**文档版本**: 4.1（修复 Codex/Gemini 误路由问题）
+**文档版本**: 4.2（增强日志诊断 + 支持 Claude Agent SDK）
 **维护者**: Team
-**上次更新**: 2026-01-13
+**上次更新**: 2026-01-15
+
+---
+
+## 13. 版本 4.2 增强说明（2026-01-15）
+
+### 13.1 问题背景
+
+**版本 4.1 的局限**：
+- 日志信息不足，无法快速判断为什么请求被判定为非 CLI
+- 不支持 Claude Agent SDK 的系统提示词变体
+- 真实的 Agent SDK 请求被错误路由到 2api
+
+**实际案例**：
+```json
+{
+  "userName": "cc多渠道",
+  "reasons": ["UA matched: claude-cli", "missing Claude Code identity in system"],
+  "msg": "ProxyClientGuard: Non-Claude-CLI request detected, routing to 2api"
+}
+```
+
+用户 UA 是 `claude-cli`，但被路由到 2api，无法从日志判断原因。
+
+---
+
+### 13.2 增强内容
+
+#### 13.2.1 日志诊断增强
+
+**新增辅助方法**：`buildSystemDiagnostics()`
+
+**功能**：安全地提取和截断 system/messages 字段信息
+
+**返回字段**：
+```typescript
+{
+  systemType: string;           // 类型（string/array/object/null/undefined）
+  systemIsArray: boolean;       // 是否数组
+  systemLen: number | null;     // 长度（字符串长度或数组长度）
+  systemPreview: string | null; // 前 100 字符（去换行、截断）
+  system0Keys?: string[];       // 如果是对象数组，显示 system[0] 的 keys
+  messages0Preview?: string | null; // messages[0].content[0] 的预览
+}
+```
+
+**安全措施**：
+- ✅ 所有文本截断到 100 字符
+- ✅ 去除换行符（避免日志混乱）
+- ✅ JSON.stringify 有 try-catch 保护
+- ✅ 不输出完整的敏感内容
+
+**日志输出位置**：
+
+1. **Debug 日志**（第 143 行）：missing identity 分支
+   ```typescript
+   logger.debug("ProxyClientGuard: Missing Claude Code identity in system", {
+     systemType: systemDiagnostics.systemType,
+     systemIsArray: systemDiagnostics.systemIsArray,
+     systemLen: systemDiagnostics.systemLen,
+     systemPreview: systemDiagnostics.systemPreview,
+     system0Keys: systemDiagnostics.system0Keys,
+     messages0Preview: systemDiagnostics.messages0Preview,
+   });
+   ```
+
+2. **Info 日志**（第 211 行）：路由到 2api
+   ```typescript
+   logger.info("ProxyClientGuard: Non-Claude-CLI request detected, routing to 2api", {
+     userName: user.name,
+     reasons: cliDetection.reasons,
+     systemPreview: systemDiagnostics.systemPreview, // 新增
+   });
+   ```
+
+**增强后的日志示例**：
+```json
+{
+  "level": "info",
+  "userName": "cc多渠道",
+  "reasons": ["UA matched: claude-cli", "missing Claude Code identity in system"],
+  "systemPreview": "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+  "msg": "ProxyClientGuard: Non-Claude-CLI request detected, routing to 2api"
+}
+```
+
+现在可以直接从日志看到 system 的实际内容！
+
+---
+
+#### 13.2.2 支持 Claude Agent SDK 变体
+
+**问题发现**：
+通过增强的日志，发现用户使用的是 **Claude Agent SDK**，系统提示词为：
+```
+"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+```
+
+**原检测逻辑**（严格匹配，失败）：
+```typescript
+text.includes("You are Claude Code, Anthropic's official CLI for Claude.")
+```
+
+**新检测逻辑**（前缀匹配，成功）：
+```typescript
+const checkClaudeIdentity = (text: string): boolean => {
+  return text.includes("You are Claude Code, Anthropic's official CLI for Claude");
+};
+```
+
+**支持的变体**：
+- ✅ 标准 CLI: `"You are Claude Code, Anthropic's official CLI for Claude."`
+- ✅ Agent SDK: `"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."`
+- ✅ 未来其他变体（只要包含核心身份标识）
+
+---
+
+### 13.3 代码修改
+
+**文件**：`src/app/v1/_lib/proxy/client-guard.ts`
+
+**修改点 1**：新增 `buildSystemDiagnostics` 方法（第 17-90 行）
+```typescript
+private static buildSystemDiagnostics(
+  requestBody: Record<string, unknown>
+): {
+  systemType: string;
+  systemIsArray: boolean;
+  systemLen: number | null;
+  systemPreview: string | null;
+  system0Keys?: string[];
+  messages0Preview?: string | null;
+} {
+  // ... 实现代码
+}
+```
+
+**修改点 2**：增强 missing identity 分支日志（第 141-150 行）
+```typescript
+if (!hasClaudeIdentity) {
+  const systemDiagnostics = ProxyClientGuard.buildSystemDiagnostics(requestBody);
+  logger.debug("ProxyClientGuard: Missing Claude Code identity in system", {
+    systemType: systemDiagnostics.systemType,
+    systemIsArray: systemDiagnostics.systemIsArray,
+    systemLen: systemDiagnostics.systemLen,
+    systemPreview: systemDiagnostics.systemPreview,
+    system0Keys: systemDiagnostics.system0Keys,
+    messages0Preview: systemDiagnostics.messages0Preview,
+  });
+  reasons.push("missing Claude Code identity in system");
+  return { isCli: false, reasons };
+}
+```
+
+**修改点 3**：增强路由到 2api 日志（第 207-215 行）
+```typescript
+if (!cliDetection.isCli) {
+  const systemDiagnostics = ProxyClientGuard.buildSystemDiagnostics(
+    session.request.message as Record<string, unknown>
+  );
+  logger.info("ProxyClientGuard: Non-Claude-CLI request detected, routing to 2api", {
+    userName: user.name,
+    reasons: cliDetection.reasons,
+    systemPreview: systemDiagnostics.systemPreview, // 新增
+  });
+  // ...
+}
+```
+
+**修改点 4**：放宽身份检测逻辑（第 125-142 行）
+```typescript
+// 2. 检查 system[0] 是否包含 Claude Code 身份
+// 支持两种变体：
+// - 标准 CLI: "You are Claude Code, Anthropic's official CLI for Claude."
+// - Agent SDK: "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+const system = requestBody.system;
+let hasClaudeIdentity = false;
+
+const checkClaudeIdentity = (text: string): boolean => {
+  return text.includes("You are Claude Code, Anthropic's official CLI for Claude");
+};
+
+if (typeof system === "string") {
+  hasClaudeIdentity = checkClaudeIdentity(system);
+} else if (Array.isArray(system) && system.length > 0) {
+  const firstSystem = system[0] as Record<string, unknown>;
+  const text = firstSystem?.text;
+  hasClaudeIdentity = typeof text === "string" && checkClaudeIdentity(text);
+}
+```
+
+**修改点 5**：更新注释文档（第 92-104 行）
+```typescript
+/**
+ * 检测请求是否为 Claude CLI 请求（组合判断：User-Agent + 请求体特征）
+ *
+ * Claude CLI 请求特征：
+ * 1. User-Agent 包含 claude-cli 或 claude-vscode
+ * 2. system[0] 包含 "You are Claude Code, Anthropic's official CLI for Claude"
+ *    - 支持标准 CLI 和 Agent SDK 两种变体
+ * 3. metadata.user_id 符合 user_{64hex}_account__session_{uuid} 格式
+ *
+ * @param userAgent - User-Agent 头
+ * @param requestBody - 请求体
+ * @returns { isCli: boolean, reasons: string[] } - 判定结果和原因
+ */
+```
+
+---
+
+### 13.4 行为对比
+
+| 场景 | 版本 4.1 | 版本 4.2 |
+|------|---------|---------|
+| **标准 Claude CLI** | ✅ 正常识别 | ✅ 正常识别（不变） |
+| **Agent SDK CLI** | ❌ 误判为非 CLI，路由到 2api | ✅ **正常识别** ✨ |
+| **日志诊断能力** | ❌ 信息不足，无法判断原因 | ✅ **显示 systemPreview，快速定位** ✨ |
+| **Debug 日志** | ❌ 无详细诊断 | ✅ **6 个字段完整诊断** ✨ |
+
+---
+
+### 13.5 测试验证
+
+#### 测试场景 1：Agent SDK 请求（修复验证）
+
+**输入**：
+- User-Agent: `claude-cli/2.0.31 (external, cli)`
+- system: `"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."`
+
+**版本 4.1 行为**：
+- ❌ 判定为非 CLI
+- ❌ 强制路由到 2api
+- ❌ 日志无 systemPreview
+
+**版本 4.2 行为**：
+- ✅ 判定为 CLI
+- ✅ 按正常分组策略路由
+- ✅ 日志显示完整 systemPreview（如果失败）
+
+---
+
+#### 测试场景 2：日志诊断（新功能验证）
+
+**输入**：
+- User-Agent: `curl/7.68.0`
+- system: `undefined` 或其他异常结构
+
+**版本 4.2 日志输出**：
+```json
+{
+  "level": "info",
+  "userName": "test_user",
+  "reasons": ["UA not Claude CLI (parsed: null)"],
+  "systemPreview": null,
+  "msg": "ProxyClientGuard: Non-Claude-CLI request detected, routing to 2api"
+}
+```
+
+**Debug 日志**（如果启用）：
+```json
+{
+  "level": "debug",
+  "systemType": "undefined",
+  "systemIsArray": false,
+  "systemLen": null,
+  "systemPreview": null,
+  "system0Keys": undefined,
+  "messages0Preview": "Hello, I need help...",
+  "msg": "ProxyClientGuard: Missing Claude Code identity in system"
+}
+```
+
+---
+
+### 13.6 监控建议
+
+#### 新增监控指标
+
+| 指标 | 说明 | 告警阈值 |
+|------|------|---------|
+| `systemPreview: null` 频率 | system 字段缺失的请求占比 | 突然飙升 |
+| Agent SDK 请求量 | 包含 "Agent SDK" 的请求数 | 监控趋势 |
+| 日志诊断命中率 | systemPreview 非 null 的比例 | < 80% |
+
+#### 日志关键词
+
+**INFO 级别**：
+- `systemPreview` - 快速查看 system 内容
+- `Non-Claude-CLI request detected, routing to 2api` - 强制路由事件
+
+**DEBUG 级别**：
+- `Missing Claude Code identity in system` - 详细诊断信息
+- `systemType`, `systemLen`, `messages0Preview` - 结构化诊断
+
+---
+
+### 13.7 未来优化建议
+
+1. **更灵活的身份检测**：
+   - 维护身份标识列表（支持多个版本）
+   - 使用正则表达式匹配
+   - 配置化身份检测规则
+
+2. **日志级别优化**：
+   - 生产环境可考虑将 systemPreview 提升到 info 级别
+   - 添加采样率控制（避免高频日志）
+
+3. **兼容性测试**：
+   - 收集更多 Claude CLI 版本的 system 提示词样本
+   - 建立自动化测试用例
+
+---
+
+### 13.8 总结
+
+**版本 4.2 解决的问题**：
+1. ✅ **日志诊断能力不足** → 新增 6 个诊断字段 + systemPreview
+2. ✅ **Agent SDK 误判** → 放宽检测逻辑，支持前缀匹配
+3. ✅ **排查效率低** → 从日志直接看到 system 内容
+
+**核心价值**：
+- 🔍 **快速定位**：从日志直接看到为什么被判定为非 CLI
+- 🛡️ **安全可靠**：所有输出截断 100 字符 + 去换行
+- 🚀 **向后兼容**：支持标准 CLI 和 Agent SDK 两种变体
+
+**影响范围**：
+- ✅ 不影响现有 CLI 请求
+- ✅ 修复 Agent SDK 误判问题
+- ✅ 提升日志可观测性
+
+---
+
+**文档版本**: 4.2（增强日志诊断 + 支持 Claude Agent SDK）
+**维护者**: Team
+**上次更新**: 2026-01-15
