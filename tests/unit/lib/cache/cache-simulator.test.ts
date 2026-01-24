@@ -61,12 +61,10 @@ describe("CacheSimulator", () => {
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
     const request = makeRequest("abcdefgh");
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_1",
-      makeSession(),
-      { input_tokens: 10, output_tokens: 2 }
-    );
+    const result = await CacheSimulator.calculate(request, "user_1", makeSession(), {
+      input_tokens: 10,
+      output_tokens: 2,
+    });
 
     expect(result).not.toBeNull();
     expect(result?.input_tokens).toBe(2);
@@ -159,12 +157,10 @@ describe("CacheSimulator", () => {
       ],
     };
 
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_5",
-      makeSession(),
-      { input_tokens: 50, output_tokens: 1 }
-    );
+    const result = await CacheSimulator.calculate(request, "user_5", makeSession(), {
+      input_tokens: 50,
+      output_tokens: 1,
+    });
 
     expect(result).toBeNull();
   });

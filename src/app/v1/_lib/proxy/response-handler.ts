@@ -115,11 +115,9 @@ export class ProxyResponseHandler {
     const shouldSimulateCache =
       provider.simulateCacheEnabled === true &&
       (provider.providerType === "claude" || provider.providerType === "claude-auth");
-    const cacheSignals = shouldSimulateCache
-      ? extractCacheSignals(requestMessage, session)
-      : null;
+    const cacheSignals = shouldSimulateCache ? extractCacheSignals(requestMessage, session) : null;
     const cacheSessionKey = shouldSimulateCache
-      ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
+      ? (session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage))
       : null;
     let simulatedUsageForOutput: SimulatedUsage | null = null;
 
@@ -659,11 +657,9 @@ export class ProxyResponseHandler {
     const shouldSimulateCache =
       provider.simulateCacheEnabled === true &&
       (provider.providerType === "claude" || provider.providerType === "claude-auth");
-    const cacheSignals = shouldSimulateCache
-      ? extractCacheSignals(requestMessage, session)
-      : null;
+    const cacheSignals = shouldSimulateCache ? extractCacheSignals(requestMessage, session) : null;
     const cacheSessionKey = shouldSimulateCache
-      ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
+      ? (session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage))
       : null;
     const simulationState: CacheSimulationState = {
       decision: shouldSimulateCache ? "pending" : "skip",
@@ -680,8 +676,7 @@ export class ProxyResponseHandler {
     let internalStreamOverride: ReadableStream<Uint8Array> | null = null;
 
     if (shouldSimulateCache) {
-      const cacheSignalsForSim =
-        cacheSignals ?? extractCacheSignals(requestMessage, session);
+      const cacheSignalsForSim = cacheSignals ?? extractCacheSignals(requestMessage, session);
       const [clientSource, internalSource] = processedStream.tee();
       processedStream = clientSource;
       internalStreamOverride = internalSource;
@@ -2641,11 +2636,13 @@ function createClaudeCacheSimulationStream(options: {
   });
 }
 
-function resolveCacheTtlFromUsage(usage: {
-  cache_ttl?: CacheTtlValue;
-  cache_creation_5m_input_tokens?: number;
-  cache_creation_1h_input_tokens?: number;
-} | null): CacheTtlValue | null {
+function resolveCacheTtlFromUsage(
+  usage: {
+    cache_ttl?: CacheTtlValue;
+    cache_creation_5m_input_tokens?: number;
+    cache_creation_1h_input_tokens?: number;
+  } | null
+): CacheTtlValue | null {
   if (!usage) return null;
   if (usage.cache_ttl) return usage.cache_ttl;
 

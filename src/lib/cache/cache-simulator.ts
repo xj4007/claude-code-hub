@@ -52,8 +52,7 @@ export class CacheSimulator {
     const currentOutputTokens = Math.max(0, upstreamUsage.output_tokens ?? 0);
     const lastState = await this.getLastCacheState(sessionKey);
     const lastInputTokens = lastState.lastInputTokens ?? lastState.lastCacheCreationTokens;
-    const lastCacheCreationTokens =
-      lastState.lastCacheCreationTokens ?? lastState.lastInputTokens;
+    const lastCacheCreationTokens = lastState.lastCacheCreationTokens ?? lastState.lastInputTokens;
 
     if (lastCacheCreationTokens == null) {
       const userTokens = this.countLastUserTextTokens(request);

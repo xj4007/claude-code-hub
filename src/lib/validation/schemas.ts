@@ -357,10 +357,7 @@ export const CreateProviderSchema = z.object({
   key: z.string().min(1, "API密钥不能为空").max(1024, "API密钥长度不能超过1024个字符"),
   // 数据库字段命名：下划线
   is_enabled: z.boolean().optional().default(PROVIDER_DEFAULTS.IS_ENABLED),
-  simulate_cache_enabled: z
-    .boolean()
-    .optional()
-    .default(PROVIDER_DEFAULTS.SIMULATE_CACHE_ENABLED),
+  simulate_cache_enabled: z.boolean().optional().default(PROVIDER_DEFAULTS.SIMULATE_CACHE_ENABLED),
   weight: z
     .number()
     .int("权重必须是整数")
