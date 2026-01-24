@@ -1,5 +1,6 @@
 import { logger } from "@/lib/logger";
 import { parseUserAgent } from "@/lib/ua-parser";
+import { extractCacheSignals, resolveCacheSessionKey } from "@/lib/cache/cache-signals";
 import { ProxyResponses } from "./responses";
 import type { ProxySession } from "./session";
 
@@ -188,6 +189,16 @@ export class ProxyClientGuard {
       return null;
     }
 
+    const recordCacheSignals = () => {
+      session.cacheSignals = extractCacheSignals(
+        session.request.message as Record<string, unknown>,
+        session
+      );
+      session.cacheSessionKey = resolveCacheSessionKey(
+        session.request.message as Record<string, unknown>
+      );
+    };
+
     // ⚠️ 仅对 Claude 请求执行 CLI 检测和强制路由
     // 其他请求类型（Codex、OpenAI、Gemini）不受影响
     if (session.originalFormat === "claude") {
@@ -217,6 +228,7 @@ export class ProxyClientGuard {
         session.forcedProviderGroup = "2api";
         session.needsClaudeDisguise = true;
 
+        recordCacheSignals();
         return null; // 继续管道执行
       }
 
@@ -227,6 +239,7 @@ export class ProxyClientGuard {
         logger.debug("ProxyClientGuard: Claude CLI request allowed (no restrictions)", {
           userName: user.name,
         });
+        recordCacheSignals();
         return null;
       }
 
@@ -266,6 +279,7 @@ export class ProxyClientGuard {
         userName: user.name,
         userAgent,
       });
+      recordCacheSignals();
       return null;
     }
 
@@ -274,6 +288,7 @@ export class ProxyClientGuard {
       userName: user.name,
       originalFormat: session.originalFormat,
     });
+    recordCacheSignals();
     return null;
   }
 }

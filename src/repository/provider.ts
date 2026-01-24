@@ -30,6 +30,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     mcpPassthroughUrl: providerData.mcp_passthrough_url ?? null,
     useUnifiedClientId: providerData.use_unified_client_id ?? false,
     unifiedClientId: providerData.unified_client_id ?? null,
+    simulateCacheEnabled: providerData.simulate_cache_enabled ?? false,
     limit5hUsd: providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null,
     limitDailyUsd:
       providerData.limit_daily_usd != null ? providerData.limit_daily_usd.toString() : null,
@@ -86,6 +87,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     mcpPassthroughUrl: providers.mcpPassthroughUrl,
     useUnifiedClientId: providers.useUnifiedClientId,
     unifiedClientId: providers.unifiedClientId,
+    simulateCacheEnabled: providers.simulateCacheEnabled,
     limit5hUsd: providers.limit5hUsd,
     limitDailyUsd: providers.limitDailyUsd,
     dailyResetMode: providers.dailyResetMode,
@@ -149,6 +151,7 @@ export async function findProviderList(
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
       useUnifiedClientId: providers.useUnifiedClientId,
       unifiedClientId: providers.unifiedClientId,
+      simulateCacheEnabled: providers.simulateCacheEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -226,6 +229,7 @@ export async function findAllProvidersFresh(): Promise<Provider[]> {
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
       useUnifiedClientId: providers.useUnifiedClientId,
       unifiedClientId: providers.unifiedClientId,
+      simulateCacheEnabled: providers.simulateCacheEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -307,6 +311,7 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
       useUnifiedClientId: providers.useUnifiedClientId,
       unifiedClientId: providers.unifiedClientId,
+      simulateCacheEnabled: providers.simulateCacheEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -388,6 +393,8 @@ export async function updateProvider(
     dbData.useUnifiedClientId = providerData.use_unified_client_id;
   if (providerData.unified_client_id !== undefined)
     dbData.unifiedClientId = providerData.unified_client_id;
+  if (providerData.simulate_cache_enabled !== undefined)
+    dbData.simulateCacheEnabled = providerData.simulate_cache_enabled;
   if (providerData.limit_5h_usd !== undefined)
     dbData.limit5hUsd =
       providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null;
@@ -470,6 +477,7 @@ export async function updateProvider(
       codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
+      simulateCacheEnabled: providers.simulateCacheEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,

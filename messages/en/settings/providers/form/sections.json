@@ -226,6 +226,11 @@
         "inherit": "Inherit (follow client request)"
       }
     },
+    "simulateCache": {
+      "label": "Simulate cache",
+      "desc": "Inject simulated cache usage fields for downstream clients (does not affect billing here).",
+      "help": "When enabled, responses include cache_creation_input_tokens and cache_read_input_tokens for downstream billing and display."
+    },
     "joinClaudePool": {
       "desc": "When enabled, this provider will participate in load balancing with Claude-type providers",
       "help": "Available only when there is a redirect mapping to claude-* models. When users request claude-* models, this provider also joins scheduling.",

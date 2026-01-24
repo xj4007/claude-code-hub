@@ -126,6 +126,11 @@
       "idLabel": "统一客户端 ID",
       "regenerate": "重新生成",
       "help": "ID 为 64 位十六进制字符串，建议保持默认自动生成，不要在不同实例之间复用。"
+    },
+    "simulateCache": {
+      "label": "模拟缓存",
+      "desc": "为下游客户端注入模拟的缓存 usage 字段（不影响本项目计费）",
+      "help": "启用后，响应中会包含 cache_creation_input_tokens 和 cache_read_input_tokens 等字段，用于下游客户端计费与展示"
     }
   },
   "rateLimit": {

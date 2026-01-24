@@ -245,6 +245,7 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         mcpPassthroughUrl: provider.mcpPassthroughUrl,
         useUnifiedClientId: provider.useUnifiedClientId,
         unifiedClientId: provider.unifiedClientId,
+        simulateCacheEnabled: provider.simulateCacheEnabled,
         limit5hUsd: provider.limit5hUsd,
         limitDailyUsd: provider.limitDailyUsd,
         dailyResetMode: provider.dailyResetMode,
@@ -471,6 +472,7 @@ export async function addProvider(data: {
   mcp_passthrough_url?: string | null;
   use_unified_client_id?: boolean;
   unified_client_id?: string | null;
+  simulate_cache_enabled?: boolean;
   tpm: number | null;
   rpm: number | null;
   rpd: number | null;
@@ -640,6 +642,7 @@ export async function editProvider(
     mcp_passthrough_url?: string | null;
     use_unified_client_id?: boolean;
     unified_client_id?: string | null;
+    simulate_cache_enabled?: boolean;
     tpm?: number | null;
     rpm?: number | null;
     rpd?: number | null;

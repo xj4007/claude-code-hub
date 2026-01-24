@@ -226,6 +226,11 @@
         "inherit": "継承（クライアントに従う）"
       }
     },
+    "simulateCache": {
+      "label": "キャッシュのシミュレート",
+      "desc": "下流クライアント向けに擬似キャッシュ usage フィールドを注入します（本プロジェクトの課金には影響しません）。",
+      "help": "有効にすると、レスポンスに cache_creation_input_tokens と cache_read_input_tokens などのフィールドが含まれ、下流の課金・表示に利用されます。"
+    },
     "joinClaudePool": {
       "desc": "有効にすると、Claude 系のプロバイダーと共に負荷分散に参加します",
       "help": "claude-* へのリダイレクトがある場合のみ利用できます。ユーザーが claude-* モデルを要求した際に本プロバイダーも選択対象になります。",

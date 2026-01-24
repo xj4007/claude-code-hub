@@ -84,6 +84,7 @@ export interface Provider {
   // Unified client id configuration (only for claude / claude-auth)
   useUnifiedClientId: boolean;
   unifiedClientId: string | null;
+  simulateCacheEnabled: boolean;
 
   // 金额限流配置
   limit5hUsd: number | null;
@@ -174,6 +175,7 @@ export interface ProviderDisplay {
   // Unified client id configuration
   useUnifiedClientId: boolean;
   unifiedClientId: string | null;
+  simulateCacheEnabled: boolean;
   // 金额限流配置
   limit5hUsd: number | null;
   limitDailyUsd: number | null;
@@ -259,6 +261,7 @@ export interface CreateProviderData {
   mcp_passthrough_url?: string | null;
   use_unified_client_id?: boolean;
   unified_client_id?: string | null;
+  simulate_cache_enabled?: boolean;
 
   // 金额限流配置
   limit_5h_usd?: number | null;
@@ -331,6 +334,7 @@ export interface UpdateProviderData {
   mcp_passthrough_url?: string | null;
   use_unified_client_id?: boolean;
   unified_client_id?: string | null;
+  simulate_cache_enabled?: boolean;
 
   // 金额限流配置
   limit_5h_usd?: number | null;

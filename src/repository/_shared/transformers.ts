@@ -104,6 +104,7 @@ export function toProvider(dbProvider: any): Provider {
     requestTimeoutNonStreamingMs: dbProvider?.requestTimeoutNonStreamingMs ?? 600000,
     websiteUrl: dbProvider?.websiteUrl ?? null,
     faviconUrl: dbProvider?.faviconUrl ?? null,
+    simulateCacheEnabled: dbProvider?.simulateCacheEnabled ?? false,
     cacheTtlPreference: dbProvider?.cacheTtlPreference ?? null,
     context1mPreference: dbProvider?.context1mPreference ?? null,
     codexReasoningEffortPreference: dbProvider?.codexReasoningEffortPreference ?? null,

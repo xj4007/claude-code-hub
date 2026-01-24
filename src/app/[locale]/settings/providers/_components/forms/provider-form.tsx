@@ -180,6 +180,9 @@ export function ProviderForm({
   const [unifiedClientId, setUnifiedClientId] = useState<string>(
     sourceProvider?.unifiedClientId ?? ""
   );
+  const [simulateCacheEnabled, setSimulateCacheEnabled] = useState<boolean>(
+    sourceProvider?.simulateCacheEnabled ?? false
+  );
 
   // 1M Context Window 偏好配置（仅对 Anthropic 类型供应商有效）
   const [context1mPreference, setContext1mPreference] = useState<
@@ -454,6 +457,7 @@ export function ProviderForm({
             mcp_passthrough_url?: string | null;
             use_unified_client_id?: boolean;
             unified_client_id?: string | null;
+            simulate_cache_enabled?: boolean;
             preserve_client_ip?: boolean;
             tpm?: number | null;
             rpm?: number | null;
@@ -509,6 +513,7 @@ export function ProviderForm({
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
             use_unified_client_id: useUnifiedClientId,
             unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
+            simulate_cache_enabled: simulateCacheEnabled,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -577,6 +582,7 @@ export function ProviderForm({
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
             use_unified_client_id: useUnifiedClientId,
             unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
+            simulate_cache_enabled: simulateCacheEnabled,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -601,6 +607,7 @@ export function ProviderForm({
           setJoinClaudePool(false);
           setUseUnifiedClientId(false);
           setUnifiedClientId("");
+          setSimulateCacheEnabled(PROVIDER_DEFAULTS.SIMULATE_CACHE_ENABLED);
           setPriority(0);
           setWeight(1);
           setCostMultiplier(1.0);
@@ -960,6 +967,31 @@ export function ProviderForm({
                         </p>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* 模拟缓存配置 - 仅 Claude/Claude-Auth 供应商显示 */}
+                {(providerType === "claude" || providerType === "claude-auth") && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label htmlFor={isEdit ? "edit-simulate-cache" : "simulate-cache"}>
+                          {t("sections.routing.simulateCache.label")}
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          {t("sections.routing.simulateCache.desc")}
+                        </p>
+                      </div>
+                      <Switch
+                        id={isEdit ? "edit-simulate-cache" : "simulate-cache"}
+                        checked={simulateCacheEnabled}
+                        onCheckedChange={setSimulateCacheEnabled}
+                        disabled={isPending}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {t("sections.routing.simulateCache.help")}
+                    </p>
                   </div>
                 )}
 

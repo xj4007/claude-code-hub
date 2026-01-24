@@ -1,5 +1,11 @@
 import { ResponseFixer } from "@/app/v1/_lib/proxy/response-fixer";
 import { AsyncTaskManager } from "@/lib/async-task-manager";
+import { CacheSimulator, type SimulatedUsage } from "@/lib/cache/cache-simulator";
+import {
+  extractCacheSignals,
+  resolveCacheSessionKey,
+  type CacheSignals,
+} from "@/lib/cache/cache-signals";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { logger } from "@/lib/logger";
 import { requestCloudPriceTableSync } from "@/lib/price-sync/cloud-price-updater";
@@ -35,6 +41,15 @@ export type UsageMetrics = {
   cache_ttl?: "5m" | "1h" | "mixed";
   cache_read_input_tokens?: number;
 };
+
+type CacheSimulationDecision = "pending" | "skip" | "applied";
+
+type CacheSimulationState = {
+  decision: CacheSimulationDecision;
+  simulatedUsage: SimulatedUsage | null;
+};
+
+type CacheTtlValue = "5m" | "1h" | "mixed";
 
 /**
  * 清理 Response headers 中的传输相关 header
@@ -96,6 +111,18 @@ export class ProxyResponseHandler {
       return response;
     }
 
+    const requestMessage = session.request.message as Record<string, unknown>;
+    const shouldSimulateCache =
+      provider.simulateCacheEnabled === true &&
+      (provider.providerType === "claude" || provider.providerType === "claude-auth");
+    const cacheSignals = shouldSimulateCache
+      ? extractCacheSignals(requestMessage, session)
+      : null;
+    const cacheSessionKey = shouldSimulateCache
+      ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
+      : null;
+    let simulatedUsageForOutput: SimulatedUsage | null = null;
+
     const responseForLog = response.clone();
     const statusCode = response.status;
 
@@ -106,6 +133,39 @@ export class ProxyResponseHandler {
     const toFormat: Format = mapClientFormatToTransformer(session.originalFormat);
     const needsTransform = fromFormat !== toFormat && fromFormat && toFormat;
     let finalResponse = response;
+    let outputModified = false;
+
+    const maybeSimulateUsageForOutput = async (
+      responseText: string,
+      responseData: Record<string, unknown>
+    ): Promise<void> => {
+      if (!shouldSimulateCache || simulatedUsageForOutput) {
+        return;
+      }
+
+      const { usageMetrics } = parseUsageFromResponseText(responseText, provider.providerType);
+      if (!usageMetrics || typeof usageMetrics.input_tokens !== "number") {
+        return;
+      }
+
+      const simulated = await CacheSimulator.calculate(
+        requestMessage,
+        cacheSessionKey,
+        session,
+        {
+          input_tokens: usageMetrics.input_tokens,
+          output_tokens: usageMetrics.output_tokens ?? 0,
+        },
+        cacheSignals ?? undefined
+      );
+
+      if (!simulated) {
+        return;
+      }
+
+      simulatedUsageForOutput = simulated;
+      applySimulatedUsageToResponsePayload(responseData, simulated);
+    };
 
     // --- GEMINI HANDLING ---
     if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
@@ -200,6 +260,7 @@ export class ProxyResponseHandler {
             statusText: response.statusText,
             headers: cleanResponseHeaders(response.headers),
           });
+          outputModified = true;
         } catch (error) {
           logger.error("[ResponseHandler] Failed to transform Gemini non-stream response:", error);
           finalResponse = response;
@@ -211,6 +272,8 @@ export class ProxyResponseHandler {
         const responseForTransform = response.clone();
         const responseText = await responseForTransform.text();
         const responseData = JSON.parse(responseText) as Record<string, unknown>;
+
+        await maybeSimulateUsageForOutput(responseText, responseData);
 
         // 使用转换器注册表进行转换
         const transformed = defaultRegistry.transformNonStreamResponse(
@@ -236,10 +299,34 @@ export class ProxyResponseHandler {
           statusText: response.statusText,
           headers: cleanResponseHeaders(response.headers),
         });
+        outputModified = true;
       } catch (error) {
         logger.error("[ResponseHandler] Failed to transform response:", error);
         // 转换失败时返回原始响应
         finalResponse = response;
+      }
+    }
+
+    if (shouldSimulateCache && !outputModified) {
+      try {
+        const responseForTransform = response.clone();
+        const responseText = await responseForTransform.text();
+        const responseData = JSON.parse(responseText) as Record<string, unknown>;
+
+        await maybeSimulateUsageForOutput(responseText, responseData);
+
+        if (simulatedUsageForOutput) {
+          finalResponse = new Response(JSON.stringify(responseData), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: cleanResponseHeaders(response.headers),
+          });
+          outputModified = true;
+        }
+      } catch (error) {
+        logger.error("[ResponseHandler] Failed to simulate cache usage for non-stream response:", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -313,6 +400,8 @@ export class ProxyResponseHandler {
         const usageResult = parseUsageFromResponseText(responseText, provider.providerType);
         usageRecord = usageResult.usageRecord;
         usageMetrics = usageResult.usageMetrics;
+        const usageForCost = usageMetrics;
+        const usageForOutput = simulatedUsageForOutput ?? usageMetrics;
 
         // Codex: Extract prompt_cache_key and update session binding
         if (provider.providerType === "codex" && session.sessionId && provider.id) {
@@ -344,30 +433,30 @@ export class ProxyResponseHandler {
           });
         }
 
-        if (usageRecord && usageMetrics && messageContext) {
+        if (usageRecord && usageForCost && messageContext) {
           await updateRequestCostFromUsage(
             messageContext.id,
             session.getOriginalModel(),
             session.getCurrentModel(),
-            usageMetrics,
+            usageForCost,
             provider.costMultiplier,
             session.getContext1mApplied()
           );
 
           // 追踪消费到 Redis（用于限流）
-          await trackCostToRedis(session, usageMetrics);
+          await trackCostToRedis(session, usageForCost);
         }
 
         // 更新 session 使用量到 Redis（用于实时监控）
-        if (session.sessionId && usageMetrics) {
+        if (session.sessionId && usageForOutput) {
           // 计算成本（复用相同逻辑）
           let costUsdStr: string | undefined;
           try {
-            if (session.request.model) {
+            if (session.request.model && usageForCost) {
               const priceData = await session.getCachedPriceDataByBillingSource();
               if (priceData) {
                 const cost = calculateRequestCost(
-                  usageMetrics,
+                  usageForCost,
                   priceData,
                   provider.costMultiplier,
                   session.getContext1mApplied()
@@ -384,10 +473,10 @@ export class ProxyResponseHandler {
           }
 
           void SessionManager.updateSessionUsage(session.sessionId, {
-            inputTokens: usageMetrics.input_tokens,
-            outputTokens: usageMetrics.output_tokens,
-            cacheCreationInputTokens: usageMetrics.cache_creation_input_tokens,
-            cacheReadInputTokens: usageMetrics.cache_read_input_tokens,
+            inputTokens: usageForOutput.input_tokens,
+            outputTokens: usageForOutput.output_tokens,
+            cacheCreationInputTokens: usageForOutput.cache_creation_input_tokens,
+            cacheReadInputTokens: usageForOutput.cache_read_input_tokens,
             costUsd: costUsdStr,
             status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
             statusCode: statusCode,
@@ -403,14 +492,14 @@ export class ProxyResponseHandler {
           // 保存扩展信息（status code, tokens, provider chain）
           await updateMessageRequestDetails(messageContext.id, {
             statusCode: statusCode,
-            inputTokens: usageMetrics?.input_tokens,
-            outputTokens: usageMetrics?.output_tokens,
+            inputTokens: usageForOutput?.input_tokens,
+            outputTokens: usageForOutput?.output_tokens,
             ttfbMs: session.ttfbMs ?? duration,
-            cacheCreationInputTokens: usageMetrics?.cache_creation_input_tokens,
-            cacheReadInputTokens: usageMetrics?.cache_read_input_tokens,
-            cacheCreation5mInputTokens: usageMetrics?.cache_creation_5m_input_tokens,
-            cacheCreation1hInputTokens: usageMetrics?.cache_creation_1h_input_tokens,
-            cacheTtlApplied: usageMetrics?.cache_ttl ?? null,
+            cacheCreationInputTokens: usageForOutput?.cache_creation_input_tokens,
+            cacheReadInputTokens: usageForOutput?.cache_read_input_tokens,
+            cacheCreation5mInputTokens: usageForOutput?.cache_creation_5m_input_tokens,
+            cacheCreation1hInputTokens: usageForOutput?.cache_creation_1h_input_tokens,
+            cacheTtlApplied: resolveCacheTtlFromUsage(usageForOutput),
             providerChain: session.getProviderChain(),
             model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
             providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
@@ -566,6 +655,21 @@ export class ProxyResponseHandler {
       return response;
     }
 
+    const requestMessage = session.request.message as Record<string, unknown>;
+    const shouldSimulateCache =
+      provider.simulateCacheEnabled === true &&
+      (provider.providerType === "claude" || provider.providerType === "claude-auth");
+    const cacheSignals = shouldSimulateCache
+      ? extractCacheSignals(requestMessage, session)
+      : null;
+    const cacheSessionKey = shouldSimulateCache
+      ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
+      : null;
+    const simulationState: CacheSimulationState = {
+      decision: shouldSimulateCache ? "pending" : "skip",
+      simulatedUsage: null,
+    };
+
     // 检查是否需要格式转换
     const fromFormat: Format | null = provider.providerType
       ? mapProviderTypeToTransformer(provider.providerType)
@@ -573,6 +677,24 @@ export class ProxyResponseHandler {
     const toFormat: Format = mapClientFormatToTransformer(session.originalFormat);
     const needsTransform = fromFormat !== toFormat && fromFormat && toFormat;
     let processedStream: ReadableStream<Uint8Array> = response.body;
+    let internalStreamOverride: ReadableStream<Uint8Array> | null = null;
+
+    if (shouldSimulateCache) {
+      const cacheSignalsForSim =
+        cacheSignals ?? extractCacheSignals(requestMessage, session);
+      const [clientSource, internalSource] = processedStream.tee();
+      processedStream = clientSource;
+      internalStreamOverride = internalSource;
+      processedStream = processedStream.pipeThrough(
+        createClaudeCacheSimulationStream({
+          requestMessage,
+          session,
+          cacheSessionKey,
+          cacheSignals: cacheSignalsForSim,
+          state: simulationState,
+        })
+      );
+    }
 
     // --- GEMINI STREAM HANDLING ---
     if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
@@ -778,7 +900,15 @@ export class ProxyResponseHandler {
       })
     );
 
-    const [clientStream, internalStream] = controllableStream.tee();
+    let clientStream: ReadableStream<Uint8Array>;
+    let internalStream: ReadableStream<Uint8Array>;
+
+    if (internalStreamOverride) {
+      clientStream = controllableStream;
+      internalStream = internalStreamOverride;
+    } else {
+      [clientStream, internalStream] = controllableStream.tee();
+    }
     const statusCode = response.status;
 
     // 使用 AsyncTaskManager 管理后台处理任务
@@ -933,6 +1063,17 @@ export class ProxyResponseHandler {
 
         const usageResult = parseUsageFromResponseText(allContent, provider.providerType);
         usageForCost = usageResult.usageMetrics;
+        if (
+          simulationState.decision === "applied" &&
+          simulationState.simulatedUsage &&
+          typeof usageForCost?.output_tokens === "number"
+        ) {
+          simulationState.simulatedUsage.output_tokens = usageForCost.output_tokens;
+        }
+        const usageForOutput =
+          simulationState.decision === "applied" && simulationState.simulatedUsage
+            ? simulationState.simulatedUsage
+            : usageForCost;
 
         // Codex: Extract prompt_cache_key from SSE events and update session binding
         if (provider.providerType === "codex" && session.sessionId && provider.id) {
@@ -973,10 +1114,10 @@ export class ProxyResponseHandler {
         await trackCostToRedis(session, usageForCost);
 
         // 更新 session 使用量到 Redis（用于实时监控）
-        if (session.sessionId && usageForCost) {
+        if (session.sessionId && usageForOutput) {
           let costUsdStr: string | undefined;
           try {
-            if (session.request.model) {
+            if (session.request.model && usageForCost) {
               const priceData = await session.getCachedPriceDataByBillingSource();
               if (priceData) {
                 const cost = calculateRequestCost(
@@ -997,10 +1138,10 @@ export class ProxyResponseHandler {
           }
 
           void SessionManager.updateSessionUsage(session.sessionId, {
-            inputTokens: usageForCost.input_tokens,
-            outputTokens: usageForCost.output_tokens,
-            cacheCreationInputTokens: usageForCost.cache_creation_input_tokens,
-            cacheReadInputTokens: usageForCost.cache_read_input_tokens,
+            inputTokens: usageForOutput.input_tokens,
+            outputTokens: usageForOutput.output_tokens,
+            cacheCreationInputTokens: usageForOutput.cache_creation_input_tokens,
+            cacheReadInputTokens: usageForOutput.cache_read_input_tokens,
             costUsd: costUsdStr,
             status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
             statusCode: statusCode,
@@ -1012,14 +1153,14 @@ export class ProxyResponseHandler {
         // 保存扩展信息（status code, tokens, provider chain）
         await updateMessageRequestDetails(messageContext.id, {
           statusCode: statusCode,
-          inputTokens: usageForCost?.input_tokens,
-          outputTokens: usageForCost?.output_tokens,
+          inputTokens: usageForOutput?.input_tokens,
+          outputTokens: usageForOutput?.output_tokens,
           ttfbMs: session.ttfbMs,
-          cacheCreationInputTokens: usageForCost?.cache_creation_input_tokens,
-          cacheReadInputTokens: usageForCost?.cache_read_input_tokens,
-          cacheCreation5mInputTokens: usageForCost?.cache_creation_5m_input_tokens,
-          cacheCreation1hInputTokens: usageForCost?.cache_creation_1h_input_tokens,
-          cacheTtlApplied: usageForCost?.cache_ttl ?? null,
+          cacheCreationInputTokens: usageForOutput?.cache_creation_input_tokens,
+          cacheReadInputTokens: usageForOutput?.cache_read_input_tokens,
+          cacheCreation5mInputTokens: usageForOutput?.cache_creation_5m_input_tokens,
+          cacheCreation1hInputTokens: usageForOutput?.cache_creation_1h_input_tokens,
+          cacheTtlApplied: resolveCacheTtlFromUsage(usageForOutput),
           providerChain: session.getProviderChain(),
           model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
           providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
@@ -2263,4 +2404,260 @@ function emitClientStreamError(
   } catch {
     // ignore enqueue errors
   }
+}
+
+function buildSimulatedUsagePayload(
+  simulatedUsage: SimulatedUsage,
+  options?: { includeOutputTokens?: boolean }
+): Record<string, unknown> {
+  const includeOutputTokens = options?.includeOutputTokens ?? true;
+  const payload: Record<string, unknown> = {
+    input_tokens: simulatedUsage.input_tokens,
+    cache_read_input_tokens: simulatedUsage.cache_read_input_tokens,
+    cache_creation_input_tokens: simulatedUsage.cache_creation_input_tokens,
+    cache_creation_5m_input_tokens: simulatedUsage.cache_creation_5m_input_tokens,
+    cache_creation_1h_input_tokens: simulatedUsage.cache_creation_1h_input_tokens,
+    cache_creation: {
+      ephemeral_5m_input_tokens: simulatedUsage.cache_creation.ephemeral_5m_input_tokens,
+      ephemeral_1h_input_tokens: simulatedUsage.cache_creation.ephemeral_1h_input_tokens,
+    },
+  };
+
+  if (includeOutputTokens) {
+    payload.output_tokens = simulatedUsage.output_tokens;
+  }
+
+  return payload;
+}
+
+function applySimulatedUsageToResponsePayload(
+  responseData: Record<string, unknown>,
+  simulatedUsage: SimulatedUsage
+): boolean {
+  const usagePayload = buildSimulatedUsagePayload(simulatedUsage);
+  let applied = false;
+
+  const replaceUsage = (container: Record<string, unknown>, key: string) => {
+    const value = container[key];
+    if (value && typeof value === "object" && extractUsageMetrics(value)) {
+      container[key] = usagePayload;
+      applied = true;
+    }
+  };
+
+  replaceUsage(responseData, "usage");
+
+  if (responseData.message && typeof responseData.message === "object") {
+    replaceUsage(responseData.message as Record<string, unknown>, "usage");
+  }
+
+  if (responseData.response && typeof responseData.response === "object") {
+    replaceUsage(responseData.response as Record<string, unknown>, "usage");
+  }
+
+  if (Array.isArray(responseData.output)) {
+    for (const item of responseData.output) {
+      if (!item || typeof item !== "object") continue;
+      replaceUsage(item as Record<string, unknown>, "usage");
+    }
+  }
+
+  return applied;
+}
+
+function createClaudeCacheSimulationStream(options: {
+  requestMessage: Record<string, unknown>;
+  session: ProxySession;
+  cacheSessionKey: string | null;
+  cacheSignals: CacheSignals;
+  state: CacheSimulationState;
+}): TransformStream<Uint8Array, Uint8Array> {
+  const { requestMessage, session, cacheSessionKey, cacheSignals, state } = options;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  const parseEvent = (rawEvent: string): { event?: string; data?: string } | null => {
+    const lines = rawEvent.split("\n");
+    let event: string | undefined;
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+
+    if (dataLines.length === 0) {
+      return null;
+    }
+
+    return { event, data: dataLines.join("\n") };
+  };
+
+  const resolveUsageContainer = (
+    eventType: string,
+    data: Record<string, unknown>
+  ): { container: Record<string, unknown>; key: string; usage: Record<string, unknown> } | null => {
+    if (eventType === "message_start") {
+      if (data.message && typeof data.message === "object") {
+        const message = data.message as Record<string, unknown>;
+        if (message.usage && typeof message.usage === "object") {
+          return {
+            container: message,
+            key: "usage",
+            usage: message.usage as Record<string, unknown>,
+          };
+        }
+      }
+      if (data.usage && typeof data.usage === "object") {
+        return { container: data, key: "usage", usage: data.usage as Record<string, unknown> };
+      }
+    }
+
+    if (eventType === "message_delta") {
+      if (data.usage && typeof data.usage === "object") {
+        return { container: data, key: "usage", usage: data.usage as Record<string, unknown> };
+      }
+      if (data.delta && typeof data.delta === "object") {
+        const delta = data.delta as Record<string, unknown>;
+        if (delta.usage && typeof delta.usage === "object") {
+          return { container: delta, key: "usage", usage: delta.usage as Record<string, unknown> };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const ensureSimulation = async (inputTokens: number, outputTokens: number): Promise<void> => {
+    if (state.decision !== "pending") {
+      return;
+    }
+
+    const simulated = await CacheSimulator.calculate(
+      requestMessage,
+      cacheSessionKey,
+      session,
+      {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+      },
+      cacheSignals
+    );
+
+    if (!simulated) {
+      state.decision = "skip";
+      return;
+    }
+
+    state.simulatedUsage = simulated;
+    state.decision = "applied";
+  };
+
+  const transformEvent = async (rawEvent: string): Promise<string> => {
+    if (!rawEvent.trim()) {
+      return `${rawEvent}\n\n`;
+    }
+
+    const parsed = parseEvent(rawEvent);
+    if (!parsed || !parsed.data) {
+      return `${rawEvent}\n\n`;
+    }
+
+    if (parsed.data === "[DONE]") {
+      return `${rawEvent}\n\n`;
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(parsed.data) as Record<string, unknown>;
+    } catch {
+      return `${rawEvent}\n\n`;
+    }
+
+    const eventType = parsed.event ?? (data.type as string) ?? "";
+    if (eventType !== "message_start" && eventType !== "message_delta") {
+      return `${rawEvent}\n\n`;
+    }
+
+    const usageContainer = resolveUsageContainer(eventType, data);
+    if (!usageContainer) {
+      return `${rawEvent}\n\n`;
+    }
+
+    const upstreamInputTokens =
+      typeof usageContainer.usage.input_tokens === "number"
+        ? usageContainer.usage.input_tokens
+        : null;
+    const upstreamOutputTokens =
+      typeof usageContainer.usage.output_tokens === "number"
+        ? usageContainer.usage.output_tokens
+        : null;
+
+    if (upstreamInputTokens !== null) {
+      await ensureSimulation(upstreamInputTokens, upstreamOutputTokens ?? 0);
+    }
+
+    if (state.decision !== "applied" || !state.simulatedUsage) {
+      return `${rawEvent}\n\n`;
+    }
+
+    if (upstreamOutputTokens !== null) {
+      state.simulatedUsage.output_tokens = upstreamOutputTokens;
+    }
+
+    const includeOutputTokens = typeof usageContainer.usage.output_tokens === "number";
+    usageContainer.container[usageContainer.key] = buildSimulatedUsagePayload(
+      state.simulatedUsage,
+      { includeOutputTokens }
+    );
+
+    const eventLine = parsed.event ? `event: ${parsed.event}\n` : "";
+    return `${eventLine}data: ${JSON.stringify(data)}\n\n`;
+  };
+
+  return new TransformStream<Uint8Array, Uint8Array>({
+    async transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let delimiterIndex = buffer.indexOf("\n\n");
+
+      while (delimiterIndex !== -1) {
+        const rawEvent = buffer.slice(0, delimiterIndex);
+        buffer = buffer.slice(delimiterIndex + 2);
+        const output = await transformEvent(rawEvent);
+        controller.enqueue(encoder.encode(output));
+        delimiterIndex = buffer.indexOf("\n\n");
+      }
+    },
+    flush(controller) {
+      if (buffer) {
+        controller.enqueue(encoder.encode(buffer));
+        buffer = "";
+      }
+    },
+  });
+}
+
+function resolveCacheTtlFromUsage(usage: {
+  cache_ttl?: CacheTtlValue;
+  cache_creation_5m_input_tokens?: number;
+  cache_creation_1h_input_tokens?: number;
+} | null): CacheTtlValue | null {
+  if (!usage) return null;
+  if (usage.cache_ttl) return usage.cache_ttl;
+
+  const has5m =
+    typeof usage.cache_creation_5m_input_tokens === "number" &&
+    usage.cache_creation_5m_input_tokens > 0;
+  const has1h =
+    typeof usage.cache_creation_1h_input_tokens === "number" &&
+    usage.cache_creation_1h_input_tokens > 0;
+
+  if (has5m && has1h) return "mixed";
+  if (has1h) return "1h";
+  if (has5m) return "5m";
+  return null;
 }

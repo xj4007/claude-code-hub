@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Context } from "hono";
+import type { CacheSignals } from "@/lib/cache/cache-signals";
 import { logger } from "@/lib/logger";
 import { clientRequestsContext1m as clientRequestsContext1mHelper } from "@/lib/special-attributes";
 import { hasValidPriceData } from "@/lib/utils/price-data";
@@ -104,6 +105,8 @@ export class ProxySession {
 
   // 是否需要伪装为 Claude Code 请求（用于非 CLI 请求）
   needsClaudeDisguise?: boolean;
+  cacheSignals?: CacheSignals;
+  cacheSessionKey?: string | null;
 
   // Cached price data (lazy loaded: undefined=not loaded, null=no data)
   private cachedPriceData?: ModelPriceData | null;
