@@ -112,12 +112,19 @@ export class ProxyResponseHandler {
     }
 
     const requestMessage = session.request.message as Record<string, unknown>;
-    const shouldSimulateCache =
-      provider.simulateCacheEnabled === true &&
-      (provider.providerType === "claude" || provider.providerType === "claude-auth");
-    const cacheSignals = shouldSimulateCache
-      ? extractCacheSignals(requestMessage, session)
-      : null;
+    const cacheSignals = session.cacheSignals ?? extractCacheSignals(requestMessage, session);
+    const isClaudeProvider =
+      provider.providerType === "claude" || provider.providerType === "claude-auth";
+    const shouldSimulateCache = provider.simulateCacheEnabled === true && isClaudeProvider;
+    logger.debug("[ResponseHandler] Cache simulation check (non-stream)", {
+      messageId: messageContext?.id ?? null,
+      providerId: provider.id,
+      providerType: provider.providerType,
+      simulateCacheEnabled: provider.simulateCacheEnabled,
+      shouldSimulateCache,
+      needsClaudeDisguise: session.needsClaudeDisguise ?? false,
+      cacheSignals,
+    });
     const cacheSessionKey = shouldSimulateCache
       ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
       : null;
@@ -656,12 +663,19 @@ export class ProxyResponseHandler {
     }
 
     const requestMessage = session.request.message as Record<string, unknown>;
-    const shouldSimulateCache =
-      provider.simulateCacheEnabled === true &&
-      (provider.providerType === "claude" || provider.providerType === "claude-auth");
-    const cacheSignals = shouldSimulateCache
-      ? extractCacheSignals(requestMessage, session)
-      : null;
+    const cacheSignals = session.cacheSignals ?? extractCacheSignals(requestMessage, session);
+    const isClaudeProvider =
+      provider.providerType === "claude" || provider.providerType === "claude-auth";
+    const shouldSimulateCache = provider.simulateCacheEnabled === true && isClaudeProvider;
+    logger.debug("[ResponseHandler] Cache simulation check (stream)", {
+      messageId: messageContext?.id ?? null,
+      providerId: provider.id,
+      providerType: provider.providerType,
+      simulateCacheEnabled: provider.simulateCacheEnabled,
+      shouldSimulateCache,
+      needsClaudeDisguise: session.needsClaudeDisguise ?? false,
+      cacheSignals,
+    });
     const cacheSessionKey = shouldSimulateCache
       ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
       : null;

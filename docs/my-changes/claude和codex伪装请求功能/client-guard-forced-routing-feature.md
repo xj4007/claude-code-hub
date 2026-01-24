@@ -82,6 +82,17 @@ forcedProviderGroup > key.providerGroup > user.providerGroup > default
    - 优先使用供应商的 `unifiedClientId`（如配置）
    - 否则使用默认 client ID
 
+### 2.4 与模拟缓存交互（新增）
+
+**目标**：避免伪装注入影响模拟缓存判定。
+
+**处理顺序**：
+1. **ProxyClientGuard** 在伪装前提取并保存 `session.cacheSignals`
+2. **ProxyForwarder** 依据 `needsClaudeDisguise` 可能注入 `<system-reminder>`
+3. **ProxyResponseHandler** 优先使用 `session.cacheSignals` 判断是否模拟缓存
+
+**结论**：即使后续将伪装标签改为非空 `<system-reminder>省略</system-reminder>`，模拟缓存判定仍基于伪装前快照，不受影响。
+
 ---
 
 ## 3. 代码落点
@@ -116,6 +127,7 @@ private static isClaudeCliRequest(
 - 新增 Claude CLI 检测逻辑（无论是否配置 `allowedClients`）
 - 非 CLI 请求 → 设置 `forcedProviderGroup = "2api"` + `needsClaudeDisguise = true`
 - CLI 请求 → 继续原有的 `allowedClients` 校验逻辑
+- 伪装前记录 `session.cacheSignals`（供模拟缓存判定使用）
 
 **日志记录**：
 - `ProxyClientGuard: CLI detection result` - 记录检测结果和原因
@@ -166,6 +178,12 @@ if (provider.providerType === "claude" || provider.providerType === "claude-auth
 
 **日志记录**：
 - `ProxyForwarder: Applied Claude Code disguise` - 记录伪装执行
+
+---
+
+#### **`src/app/v1/_lib/proxy/response-handler.ts`** ✅ 已修改
+**补充说明**：
+- 模拟缓存判定优先使用 `session.cacheSignals`（伪装前快照），避免注入 `<system-reminder>` 影响判断。
 
 ---
 

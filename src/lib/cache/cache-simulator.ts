@@ -102,14 +102,7 @@ export class CacheSimulator {
   }
 
   private static shouldSimulateCache(signals: CacheSignals): boolean {
-    if (signals.hasSystemReminder) {
-      return true;
-    }
-
-    const isSubAgent =
-      signals.hasTitlePrompt || signals.hasAssistantBrace || signals.hasEmptySystemReminder;
-
-    return !isSubAgent;
+    return signals.hasSystemReminder || signals.hasEmptySystemReminder;
   }
 
   private static splitDelta(delta: number): {

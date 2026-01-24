@@ -169,6 +169,32 @@ describe("CacheSimulator", () => {
     expect(result).toBeNull();
   });
 
+  it("skips simulation when system reminder tag is missing", async () => {
+    const { client } = makeFakeRedis();
+    redisClientRef = client;
+
+    const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
+
+    const request = {
+      model: "claude-haiku-20250212",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+        },
+      ],
+    };
+
+    const result = await CacheSimulator.calculate(
+      request,
+      "user_6",
+      makeSession({ model: "claude-haiku-20250212", needsClaudeDisguise: true }),
+      { input_tokens: 20, output_tokens: 1 }
+    );
+
+    expect(result).toBeNull();
+  });
+
   it("does not skip simulation when system reminder is present", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
@@ -187,7 +213,7 @@ describe("CacheSimulator", () => {
 
     const result = await CacheSimulator.calculate(
       request,
-      "user_6",
+      "user_7",
       makeSession({ model: "claude-haiku-20250212", needsClaudeDisguise: true }),
       { input_tokens: 20, output_tokens: 1 }
     );
@@ -195,7 +221,7 @@ describe("CacheSimulator", () => {
     expect(result).not.toBeNull();
   });
 
-  it("skips simulation when system reminder tag is empty", async () => {
+  it("does not skip simulation when system reminder tag is empty", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
@@ -213,11 +239,11 @@ describe("CacheSimulator", () => {
 
     const result = await CacheSimulator.calculate(
       request,
-      "user_7",
+      "user_8",
       makeSession({ model: "claude-haiku-20250212", needsClaudeDisguise: true }),
       { input_tokens: 20, output_tokens: 1 }
     );
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 });
