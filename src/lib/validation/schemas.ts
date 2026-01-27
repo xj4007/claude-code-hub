@@ -358,10 +358,6 @@ export const CreateProviderSchema = z.object({
   // 数据库字段命名：下划线
   is_enabled: z.boolean().optional().default(PROVIDER_DEFAULTS.IS_ENABLED),
   simulate_cache_enabled: z.boolean().optional().default(PROVIDER_DEFAULTS.SIMULATE_CACHE_ENABLED),
-  supplementary_prompt_enabled: z
-    .boolean()
-    .optional()
-    .default(PROVIDER_DEFAULTS.SUPPLEMENTARY_PROMPT_ENABLED),
   weight: z
     .number()
     .int("权重必须是整数")

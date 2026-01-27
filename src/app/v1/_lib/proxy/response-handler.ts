@@ -5,7 +5,10 @@ import {
   extractCacheSignals,
   resolveCacheSessionKey,
 } from "@/lib/cache/cache-signals";
-import { CacheSimulator, type SimulatedUsage } from "@/lib/cache/cache-simulator";
+import {
+  CacheSimulator,
+  type SimulatedUsage,
+} from "@/lib/cache/cache-simulator";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { logger } from "@/lib/logger";
 import { requestCloudPriceTableSync } from "@/lib/price-sync/cloud-price-updater";
@@ -29,7 +32,10 @@ import type { Format, TransformState } from "../converters/types";
 import { GeminiAdapter } from "../gemini/adapter";
 import type { GeminiResponse } from "../gemini/types";
 import { isClientAbortError } from "./errors";
-import { mapClientFormatToTransformer, mapProviderTypeToTransformer } from "./format-mapper";
+import {
+  mapClientFormatToTransformer,
+  mapProviderTypeToTransformer,
+} from "./format-mapper";
 import type { ProxySession } from "./session";
 
 export type UsageMetrics = {
@@ -74,7 +80,10 @@ function cleanResponseHeaders(headers: Headers): Headers {
 }
 
 export class ProxyResponseHandler {
-  static async dispatch(session: ProxySession, response: Response): Promise<Response> {
+  static async dispatch(
+    session: ProxySession,
+    response: Response,
+  ): Promise<Response> {
     let fixedResponse = response;
     try {
       fixedResponse = await ResponseFixer.process(session, response);
@@ -86,7 +95,7 @@ export class ProxyResponseHandler {
           sessionId: session.sessionId ?? null,
           messageRequestId: session.messageContext?.id ?? null,
           requestSequence: session.requestSequence ?? null,
-        }
+        },
       );
       fixedResponse = response;
     }
@@ -103,7 +112,7 @@ export class ProxyResponseHandler {
 
   private static async handleNonStream(
     session: ProxySession,
-    response: Response
+    response: Response,
   ): Promise<Response> {
     const messageContext = session.messageContext;
     const provider = session.provider;
@@ -112,10 +121,13 @@ export class ProxyResponseHandler {
     }
 
     const requestMessage = session.request.message as Record<string, unknown>;
-    const cacheSignals = session.cacheSignals ?? extractCacheSignals(requestMessage, session);
+    const cacheSignals =
+      session.cacheSignals ?? extractCacheSignals(requestMessage, session);
     const isClaudeProvider =
-      provider.providerType === "claude" || provider.providerType === "claude-auth";
-    const shouldSimulateCache = provider.simulateCacheEnabled === true && isClaudeProvider;
+      provider.providerType === "claude" ||
+      provider.providerType === "claude-auth";
+    const shouldSimulateCache =
+      provider.simulateCacheEnabled === true && isClaudeProvider;
     logger.debug("[ResponseHandler] Cache simulation check (non-stream)", {
       messageId: messageContext?.id ?? null,
       providerId: provider.id,
@@ -137,20 +149,25 @@ export class ProxyResponseHandler {
     const fromFormat: Format | null = provider.providerType
       ? mapProviderTypeToTransformer(provider.providerType)
       : null;
-    const toFormat: Format = mapClientFormatToTransformer(session.originalFormat);
+    const toFormat: Format = mapClientFormatToTransformer(
+      session.originalFormat,
+    );
     const needsTransform = fromFormat !== toFormat && fromFormat && toFormat;
     let finalResponse = response;
     let outputModified = false;
 
     const maybeSimulateUsageForOutput = async (
       responseText: string,
-      responseData: Record<string, unknown>
+      responseData: Record<string, unknown>,
     ): Promise<void> => {
       if (!shouldSimulateCache || simulatedUsageForOutput) {
         return;
       }
 
-      const { usageMetrics } = parseUsageFromResponseText(responseText, provider.providerType);
+      const { usageMetrics } = parseUsageFromResponseText(
+        responseText,
+        provider.providerType,
+      );
       if (!usageMetrics || typeof usageMetrics.input_tokens !== "number") {
         return;
       }
@@ -163,7 +180,7 @@ export class ProxyResponseHandler {
           input_tokens: usageMetrics.input_tokens,
           output_tokens: usageMetrics.output_tokens ?? 0,
         },
-        cacheSignals ?? undefined
+        cacheSignals ?? undefined,
       );
 
       if (!simulated) {
@@ -175,11 +192,16 @@ export class ProxyResponseHandler {
     };
 
     // --- GEMINI HANDLING ---
-    if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
+    if (
+      provider.providerType === "gemini" ||
+      provider.providerType === "gemini-cli"
+    ) {
       // 判断是否需要透传（客户端和提供商格式都必须是 Gemini）
       const isGeminiPassthrough =
-        (session.originalFormat === "gemini" || session.originalFormat === "gemini-cli") &&
-        (provider.providerType === "gemini" || provider.providerType === "gemini-cli");
+        (session.originalFormat === "gemini" ||
+          session.originalFormat === "gemini-cli") &&
+        (provider.providerType === "gemini" ||
+          provider.providerType === "gemini-cli");
 
       if (isGeminiPassthrough) {
         logger.debug(
@@ -190,7 +212,7 @@ export class ProxyResponseHandler {
             model: session.request.model,
             statusCode: response.status,
             reason: "Client receives untouched response, stats read from clone",
-          }
+          },
         );
 
         const responseForStats = response.clone();
@@ -213,20 +235,28 @@ export class ProxyResponseHandler {
               void SessionManager.storeSessionResponse(
                 session.sessionId,
                 responseText,
-                session.requestSequence
+                session.requestSequence,
               ).catch((err) => {
-                logger.error("[ResponseHandler] Failed to store response:", err);
+                logger.error(
+                  "[ResponseHandler] Failed to store response:",
+                  err,
+                );
               });
             }
 
             // 使用共享的统计处理方法
             const duration = Date.now() - session.startTime;
-            await finalizeRequestStats(session, responseText, statusCode, duration);
+            await finalizeRequestStats(
+              session,
+              responseText,
+              statusCode,
+              duration,
+            );
           } catch (error) {
             if (!isClientAbortError(error as Error)) {
               logger.error(
                 "[ResponseHandler] Gemini non-stream passthrough stats task failed:",
-                error
+                error,
               );
             }
           } finally {
@@ -234,11 +264,15 @@ export class ProxyResponseHandler {
           }
         })();
 
-        AsyncTaskManager.register(taskId, statsPromise, "non-stream-passthrough-stats");
+        AsyncTaskManager.register(
+          taskId,
+          statsPromise,
+          "non-stream-passthrough-stats",
+        );
         statsPromise.catch((error) => {
           logger.error(
             "[ResponseHandler] Gemini non-stream passthrough stats task uncaught error:",
-            error
+            error,
           );
         });
 
@@ -250,7 +284,10 @@ export class ProxyResponseHandler {
           const responseText = await responseForTransform.text();
           const responseData = JSON.parse(responseText) as GeminiResponse;
 
-          const transformed = GeminiAdapter.transformResponse(responseData, false);
+          const transformed = GeminiAdapter.transformResponse(
+            responseData,
+            false,
+          );
 
           logger.debug(
             "[ResponseHandler] Transformed Gemini non-stream response to client format",
@@ -258,7 +295,7 @@ export class ProxyResponseHandler {
               originalFormat: session.originalFormat,
               providerType: provider.providerType,
               model: session.request.model,
-            }
+            },
           );
 
           // ⭐ 清理传输 headers（body 已从流转为 JSON 字符串）
@@ -269,16 +306,25 @@ export class ProxyResponseHandler {
           });
           outputModified = true;
         } catch (error) {
-          logger.error("[ResponseHandler] Failed to transform Gemini non-stream response:", error);
+          logger.error(
+            "[ResponseHandler] Failed to transform Gemini non-stream response:",
+            error,
+          );
           finalResponse = response;
         }
       }
-    } else if (needsTransform && defaultRegistry.hasResponseTransformer(fromFormat, toFormat)) {
+    } else if (
+      needsTransform &&
+      defaultRegistry.hasResponseTransformer(fromFormat, toFormat)
+    ) {
       try {
         // 克隆一份用于转换
         const responseForTransform = response.clone();
         const responseText = await responseForTransform.text();
-        const responseData = JSON.parse(responseText) as Record<string, unknown>;
+        const responseData = JSON.parse(responseText) as Record<
+          string,
+          unknown
+        >;
 
         await maybeSimulateUsageForOutput(responseText, responseData);
 
@@ -290,7 +336,7 @@ export class ProxyResponseHandler {
           session.request.model || "",
           session.request.message, // original request
           session.request.message, // transformed request (same as original if no transform)
-          responseData
+          responseData,
         );
 
         logger.debug("[ResponseHandler] Transformed non-stream response", {
@@ -318,7 +364,10 @@ export class ProxyResponseHandler {
       try {
         const responseForTransform = response.clone();
         const responseText = await responseForTransform.text();
-        const responseData = JSON.parse(responseText) as Record<string, unknown>;
+        const responseData = JSON.parse(responseText) as Record<
+          string,
+          unknown
+        >;
 
         await maybeSimulateUsageForOutput(responseText, responseData);
 
@@ -331,9 +380,12 @@ export class ProxyResponseHandler {
           outputModified = true;
         }
       } catch (error) {
-        logger.error("[ResponseHandler] Failed to simulate cache usage for non-stream response:", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        logger.error(
+          "[ResponseHandler] Failed to simulate cache usage for non-stream response:",
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
       }
     }
 
@@ -360,33 +412,47 @@ export class ProxyResponseHandler {
 
         if (session.sessionId) {
           const sessionUsagePayload: SessionUsageUpdate = {
-            status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
+            status:
+              statusCode >= 200 && statusCode < 300 ? "completed" : "error",
             statusCode: statusCode,
           };
 
-          void SessionManager.updateSessionUsage(session.sessionId, sessionUsagePayload).catch(
-            (error: unknown) => {
-              logger.error("[ResponseHandler] Failed to update session usage:", error);
-            }
-          );
+          void SessionManager.updateSessionUsage(
+            session.sessionId,
+            sessionUsagePayload,
+          ).catch((error: unknown) => {
+            logger.error(
+              "[ResponseHandler] Failed to update session usage:",
+              error,
+            );
+          });
         }
       };
 
       try {
         // 检查客户端是否断开
-        if (session.clientAbortSignal?.aborted || abortController.signal.aborted) {
-          logger.info("ResponseHandler: Non-stream task cancelled (client disconnected)", {
-            taskId,
-            providerId: provider.id,
-          });
+        if (
+          session.clientAbortSignal?.aborted ||
+          abortController.signal.aborted
+        ) {
+          logger.info(
+            "ResponseHandler: Non-stream task cancelled (client disconnected)",
+            {
+              taskId,
+              providerId: provider.id,
+            },
+          );
           try {
             await finalizeNonStreamAbort();
           } catch (finalizeError) {
-            logger.error("ResponseHandler: Failed to finalize aborted non-stream response", {
-              taskId,
-              providerId: provider.id,
-              finalizeError,
-            });
+            logger.error(
+              "ResponseHandler: Failed to finalize aborted non-stream response",
+              {
+                taskId,
+                providerId: provider.id,
+                finalizeError,
+              },
+            );
           }
           return;
         }
@@ -404,28 +470,45 @@ export class ProxyResponseHandler {
         let usageRecord: Record<string, unknown> | null = null;
         let usageMetrics: UsageMetrics | null = null;
 
-        const usageResult = parseUsageFromResponseText(responseText, provider.providerType);
+        const usageResult = parseUsageFromResponseText(
+          responseText,
+          provider.providerType,
+        );
         usageRecord = usageResult.usageRecord;
         usageMetrics = usageResult.usageMetrics;
         const usageForCost = usageMetrics;
         const usageForOutput = simulatedUsageForOutput ?? usageMetrics;
 
         // Codex: Extract prompt_cache_key and update session binding
-        if (provider.providerType === "codex" && session.sessionId && provider.id) {
+        if (
+          provider.providerType === "codex" &&
+          session.sessionId &&
+          provider.id
+        ) {
           try {
-            const responseData = JSON.parse(responseText) as Record<string, unknown>;
-            const promptCacheKey = SessionManager.extractCodexPromptCacheKey(responseData);
+            const responseData = JSON.parse(responseText) as Record<
+              string,
+              unknown
+            >;
+            const promptCacheKey =
+              SessionManager.extractCodexPromptCacheKey(responseData);
             if (promptCacheKey) {
               void SessionManager.updateSessionWithCodexCacheKey(
                 session.sessionId,
                 promptCacheKey,
-                provider.id
+                provider.id,
               ).catch((err) => {
-                logger.error("[ResponseHandler] Failed to update Codex session:", err);
+                logger.error(
+                  "[ResponseHandler] Failed to update Codex session:",
+                  err,
+                );
               });
             }
           } catch (parseError) {
-            logger.trace("[ResponseHandler] Failed to parse JSON for Codex session:", parseError);
+            logger.trace(
+              "[ResponseHandler] Failed to parse JSON for Codex session:",
+              parseError,
+            );
           }
         }
 
@@ -434,7 +517,7 @@ export class ProxyResponseHandler {
           void SessionManager.storeSessionResponse(
             session.sessionId,
             responseText,
-            session.requestSequence
+            session.requestSequence,
           ).catch((err) => {
             logger.error("[ResponseHandler] Failed to store response:", err);
           });
@@ -447,7 +530,7 @@ export class ProxyResponseHandler {
             session.getCurrentModel(),
             usageForCost,
             provider.costMultiplier,
-            session.getContext1mApplied()
+            session.getContext1mApplied(),
           );
 
           // 追踪消费到 Redis（用于限流）
@@ -460,13 +543,14 @@ export class ProxyResponseHandler {
           let costUsdStr: string | undefined;
           try {
             if (session.request.model && usageForCost) {
-              const priceData = await session.getCachedPriceDataByBillingSource();
+              const priceData =
+                await session.getCachedPriceDataByBillingSource();
               if (priceData) {
                 const cost = calculateRequestCost(
                   usageForCost,
                   priceData,
                   provider.costMultiplier,
-                  session.getContext1mApplied()
+                  session.getContext1mApplied(),
                 );
                 if (cost.gt(0)) {
                   costUsdStr = cost.toString();
@@ -474,21 +558,29 @@ export class ProxyResponseHandler {
               }
             }
           } catch (error) {
-            logger.error("[ResponseHandler] Failed to calculate session cost, skipping", {
-              error: error instanceof Error ? error.message : String(error),
-            });
+            logger.error(
+              "[ResponseHandler] Failed to calculate session cost, skipping",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
           }
 
           void SessionManager.updateSessionUsage(session.sessionId, {
             inputTokens: usageForOutput.input_tokens,
             outputTokens: usageForOutput.output_tokens,
-            cacheCreationInputTokens: usageForOutput.cache_creation_input_tokens,
+            cacheCreationInputTokens:
+              usageForOutput.cache_creation_input_tokens,
             cacheReadInputTokens: usageForOutput.cache_read_input_tokens,
             costUsd: costUsdStr,
-            status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
+            status:
+              statusCode >= 200 && statusCode < 300 ? "completed" : "error",
             statusCode: statusCode,
           }).catch((error: unknown) => {
-            logger.error("[ResponseHandler] Failed to update session usage:", error);
+            logger.error(
+              "[ResponseHandler] Failed to update session usage:",
+              error,
+            );
           });
         }
 
@@ -502,10 +594,13 @@ export class ProxyResponseHandler {
             inputTokens: usageForOutput?.input_tokens,
             outputTokens: usageForOutput?.output_tokens,
             ttfbMs: session.ttfbMs ?? duration,
-            cacheCreationInputTokens: usageForOutput?.cache_creation_input_tokens,
+            cacheCreationInputTokens:
+              usageForOutput?.cache_creation_input_tokens,
             cacheReadInputTokens: usageForOutput?.cache_read_input_tokens,
-            cacheCreation5mInputTokens: usageForOutput?.cache_creation_5m_input_tokens,
-            cacheCreation1hInputTokens: usageForOutput?.cache_creation_1h_input_tokens,
+            cacheCreation5mInputTokens:
+              usageForOutput?.cache_creation_5m_input_tokens,
+            cacheCreation1hInputTokens:
+              usageForOutput?.cache_creation_1h_input_tokens,
             cacheTtlApplied: resolveCacheTtlFromUsage(usageForOutput),
             providerChain: session.getProviderChain(),
             model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
@@ -540,25 +635,34 @@ export class ProxyResponseHandler {
 
           if (isResponseTimeout) {
             // ⚠️ 响应超时：计入熔断器并记录错误日志
-            logger.error("ResponseHandler: Response timeout during non-stream body read", {
-              taskId,
-              providerId: provider.id,
-              providerName: provider.name,
-              errorName: err.name,
-            });
+            logger.error(
+              "ResponseHandler: Response timeout during non-stream body read",
+              {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                errorName: err.name,
+              },
+            );
 
             // 计入熔断器（动态导入避免循环依赖）
             try {
               const { recordFailure } = await import("@/lib/circuit-breaker");
               await recordFailure(provider.id, err);
-              logger.debug("ResponseHandler: Response timeout recorded in circuit breaker", {
-                providerId: provider.id,
-              });
+              logger.debug(
+                "ResponseHandler: Response timeout recorded in circuit breaker",
+                {
+                  providerId: provider.id,
+                },
+              );
             } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
-              });
+              logger.warn(
+                "ResponseHandler: Failed to record timeout in circuit breaker",
+                {
+                  providerId: provider.id,
+                  error: cbError,
+                },
+              );
             }
 
             // 注意：无法重试，因为客户端已收到 HTTP 200
@@ -578,32 +682,41 @@ export class ProxyResponseHandler {
             try {
               await finalizeNonStreamAbort();
             } catch (finalizeError) {
-              logger.error("ResponseHandler: Failed to finalize aborted non-stream response", {
-                taskId,
-                providerId: provider.id,
-                finalizeError,
-              });
+              logger.error(
+                "ResponseHandler: Failed to finalize aborted non-stream response",
+                {
+                  taskId,
+                  providerId: provider.id,
+                  finalizeError,
+                },
+              );
             }
           } else {
             // 客户端主动中断：正常日志，不抛出错误
-            logger.warn("ResponseHandler: Non-stream processing aborted by client", {
-              taskId,
-              providerId: provider.id,
-              providerName: provider.name,
-              errorName: err.name,
-              reason:
-                err.name === "ResponseAborted"
-                  ? "Response transmission interrupted"
-                  : "Client disconnected",
-            });
+            logger.warn(
+              "ResponseHandler: Non-stream processing aborted by client",
+              {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                errorName: err.name,
+                reason:
+                  err.name === "ResponseAborted"
+                    ? "Response transmission interrupted"
+                    : "Client disconnected",
+              },
+            );
             try {
               await finalizeNonStreamAbort();
             } catch (finalizeError) {
-              logger.error("ResponseHandler: Failed to finalize aborted non-stream response", {
-                taskId,
-                providerId: provider.id,
-                finalizeError,
-              });
+              logger.error(
+                "ResponseHandler: Failed to finalize aborted non-stream response",
+                {
+                  taskId,
+                  providerId: provider.id,
+                  finalizeError,
+                },
+              );
             }
           }
         } else {
@@ -625,7 +738,11 @@ export class ProxyResponseHandler {
     })();
 
     // 注册任务并添加全局错误捕获
-    AsyncTaskManager.register(taskId, processingPromise, "non-stream-processing");
+    AsyncTaskManager.register(
+      taskId,
+      processingPromise,
+      "non-stream-processing",
+    );
     processingPromise.catch(async (error) => {
       logger.error("ResponseHandler: Uncaught error in non-stream processing", {
         taskId,
@@ -654,7 +771,10 @@ export class ProxyResponseHandler {
     return finalResponse;
   }
 
-  private static async handleStream(session: ProxySession, response: Response): Promise<Response> {
+  private static async handleStream(
+    session: ProxySession,
+    response: Response,
+  ): Promise<Response> {
     const messageContext = session.messageContext;
     const provider = session.provider;
 
@@ -663,10 +783,13 @@ export class ProxyResponseHandler {
     }
 
     const requestMessage = session.request.message as Record<string, unknown>;
-    const cacheSignals = session.cacheSignals ?? extractCacheSignals(requestMessage, session);
+    const cacheSignals =
+      session.cacheSignals ?? extractCacheSignals(requestMessage, session);
     const isClaudeProvider =
-      provider.providerType === "claude" || provider.providerType === "claude-auth";
-    const shouldSimulateCache = provider.simulateCacheEnabled === true && isClaudeProvider;
+      provider.providerType === "claude" ||
+      provider.providerType === "claude-auth";
+    const shouldSimulateCache =
+      provider.simulateCacheEnabled === true && isClaudeProvider;
     logger.debug("[ResponseHandler] Cache simulation check (stream)", {
       messageId: messageContext?.id ?? null,
       providerId: provider.id,
@@ -688,13 +811,16 @@ export class ProxyResponseHandler {
     const fromFormat: Format | null = provider.providerType
       ? mapProviderTypeToTransformer(provider.providerType)
       : null;
-    const toFormat: Format = mapClientFormatToTransformer(session.originalFormat);
+    const toFormat: Format = mapClientFormatToTransformer(
+      session.originalFormat,
+    );
     const needsTransform = fromFormat !== toFormat && fromFormat && toFormat;
     let processedStream: ReadableStream<Uint8Array> = response.body;
     let internalStreamOverride: ReadableStream<Uint8Array> | null = null;
 
     if (shouldSimulateCache) {
-      const cacheSignalsForSim = cacheSignals ?? extractCacheSignals(requestMessage, session);
+      const cacheSignalsForSim =
+        cacheSignals ?? extractCacheSignals(requestMessage, session);
       const [clientSource, internalSource] = processedStream.tee();
       processedStream = clientSource;
       internalStreamOverride = internalSource;
@@ -705,16 +831,21 @@ export class ProxyResponseHandler {
           cacheSessionKey,
           cacheSignals: cacheSignalsForSim,
           state: simulationState,
-        })
+        }),
       );
     }
 
     // --- GEMINI STREAM HANDLING ---
-    if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
+    if (
+      provider.providerType === "gemini" ||
+      provider.providerType === "gemini-cli"
+    ) {
       // 判断是否需要透传（客户端和提供商格式都必须是 Gemini）
       const isGeminiPassthrough =
-        (session.originalFormat === "gemini" || session.originalFormat === "gemini-cli") &&
-        (provider.providerType === "gemini" || provider.providerType === "gemini-cli");
+        (session.originalFormat === "gemini" ||
+          session.originalFormat === "gemini-cli") &&
+        (provider.providerType === "gemini" ||
+          provider.providerType === "gemini-cli");
 
       if (isGeminiPassthrough) {
         // 完全透传：clone 用于后台统计，返回原始 response
@@ -726,7 +857,7 @@ export class ProxyResponseHandler {
             model: session.request.model,
             statusCode: response.status,
             reason: "Client receives untouched response, stats read from clone",
-          }
+          },
         );
 
         // ⭐ gemini 透传立即清除首字节超时：透传路径收到响应即视为首字节到达
@@ -742,7 +873,7 @@ export class ProxyResponseHandler {
             {
               providerId: provider.id,
               providerName: provider.name,
-            }
+            },
           );
         }
 
@@ -782,37 +913,58 @@ export class ProxyResponseHandler {
               void SessionManager.storeSessionResponse(
                 session.sessionId,
                 allContent,
-                session.requestSequence
+                session.requestSequence,
               ).catch((err) => {
-                logger.error("[ResponseHandler] Failed to store stream passthrough response:", err);
+                logger.error(
+                  "[ResponseHandler] Failed to store stream passthrough response:",
+                  err,
+                );
               });
             }
 
             // 使用共享的统计处理方法
             const duration = Date.now() - session.startTime;
-            await finalizeRequestStats(session, allContent, statusCode, duration);
+            await finalizeRequestStats(
+              session,
+              allContent,
+              statusCode,
+              duration,
+            );
           } catch (error) {
             if (!isClientAbortError(error as Error)) {
-              logger.error("[ResponseHandler] Gemini passthrough stats task failed:", error);
+              logger.error(
+                "[ResponseHandler] Gemini passthrough stats task failed:",
+                error,
+              );
             }
           } finally {
             AsyncTaskManager.cleanup(taskId);
           }
         })();
 
-        AsyncTaskManager.register(taskId, statsPromise, "stream-passthrough-stats");
+        AsyncTaskManager.register(
+          taskId,
+          statsPromise,
+          "stream-passthrough-stats",
+        );
         statsPromise.catch((error) => {
-          logger.error("[ResponseHandler] Gemini passthrough stats task uncaught error:", error);
+          logger.error(
+            "[ResponseHandler] Gemini passthrough stats task uncaught error:",
+            error,
+          );
         });
 
         return response;
       } else {
         // ❌ 需要转换：客户端不是 Gemini 格式（如 OpenAI/Claude）
-        logger.debug("[ResponseHandler] Transforming Gemini stream to client format", {
-          originalFormat: session.originalFormat,
-          providerType: provider.providerType,
-          model: session.request.model,
-        });
+        logger.debug(
+          "[ResponseHandler] Transforming Gemini stream to client format",
+          {
+            originalFormat: session.originalFormat,
+            providerType: provider.providerType,
+            model: session.request.model,
+          },
+        );
 
         let buffer = "";
         const transformStream = new TransformStream<Uint8Array, Uint8Array>({
@@ -832,7 +984,10 @@ export class ProxyResponseHandler {
                 if (!jsonStr) continue;
                 try {
                   const geminiResponse = JSON.parse(jsonStr) as GeminiResponse;
-                  const openAIChunk = GeminiAdapter.transformResponse(geminiResponse, true);
+                  const openAIChunk = GeminiAdapter.transformResponse(
+                    geminiResponse,
+                    true,
+                  );
                   const output = `data: ${JSON.stringify(openAIChunk)}\n\n`;
                   controller.enqueue(new TextEncoder().encode(output));
                 } catch {
@@ -846,7 +1001,10 @@ export class ProxyResponseHandler {
               try {
                 const jsonStr = buffer.trim().slice(5).trim();
                 const geminiResponse = JSON.parse(jsonStr) as GeminiResponse;
-                const openAIChunk = GeminiAdapter.transformResponse(geminiResponse, true);
+                const openAIChunk = GeminiAdapter.transformResponse(
+                  geminiResponse,
+                  true,
+                );
                 const output = `data: ${JSON.stringify(openAIChunk)}\n\n`;
                 controller.enqueue(new TextEncoder().encode(output));
               } catch {}
@@ -855,7 +1013,10 @@ export class ProxyResponseHandler {
         });
         processedStream = response.body.pipeThrough(transformStream);
       }
-    } else if (needsTransform && defaultRegistry.hasResponseTransformer(fromFormat, toFormat)) {
+    } else if (
+      needsTransform &&
+      defaultRegistry.hasResponseTransformer(fromFormat, toFormat)
+    ) {
       logger.debug("[ResponseHandler] Transforming stream response", {
         from: fromFormat,
         to: toFormat,
@@ -879,7 +1040,7 @@ export class ProxyResponseHandler {
               session.request.message, // original request
               session.request.message, // transformed request (same as original if no transform)
               text,
-              transformState
+              transformState,
             );
 
             // transformedChunks 是字符串数组
@@ -896,12 +1057,15 @@ export class ProxyResponseHandler {
         },
       });
 
-      processedStream = response.body.pipeThrough(transformStream) as ReadableStream<Uint8Array>;
+      processedStream = response.body.pipeThrough(
+        transformStream,
+      ) as ReadableStream<Uint8Array>;
     }
 
     // ⭐ 使用 TransformStream 包装流，以便在 idle timeout 时能关闭客户端流
     // 这解决了 tee() 后 internalStream abort 不影响 clientStream 的问题
-    let streamController: TransformStreamDefaultController<Uint8Array> | null = null;
+    let streamController: TransformStreamDefaultController<Uint8Array> | null =
+      null;
     const controllableStream = processedStream.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
         start(controller) {
@@ -910,7 +1074,7 @@ export class ProxyResponseHandler {
         transform(chunk, controller) {
           controller.enqueue(chunk); // 透传数据
         },
-      })
+      }),
     );
 
     let clientStream: ReadableStream<Uint8Array>;
@@ -938,7 +1102,8 @@ export class ProxyResponseHandler {
       let usageForCost: UsageMetrics | null = null;
       let isFirstChunk = true; // ⭐ 标记是否为第一块数据
       const isAnthropicProvider =
-        provider.providerType === "claude" || provider.providerType === "claude-auth";
+        provider.providerType === "claude" ||
+        provider.providerType === "claude-auth";
       let hasAnthropicTerminalChunk = !isAnthropicProvider; // 非 Anthropic 默认视为已结束
       let lastChunkText = "";
 
@@ -968,16 +1133,21 @@ export class ProxyResponseHandler {
                 streamController,
                 "stream_total_timeout",
                 "anthropic stream exceeded 180s without completion",
-                504
+                504,
               );
-              (streamController as TransformStreamDefaultController<Uint8Array>).error(err);
+              (
+                streamController as TransformStreamDefaultController<Uint8Array>
+              ).error(err);
             }
           } catch (e) {
-            logger.warn("ResponseHandler: Failed to close client stream on total timeout", {
-              taskId,
-              providerId: provider.id,
-              error: e,
-            });
+            logger.warn(
+              "ResponseHandler: Failed to close client stream on total timeout",
+              {
+                taskId,
+                providerId: provider.id,
+                error: e,
+              },
+            );
           }
           abortController.abort(err);
         }, totalTimeoutMs);
@@ -985,7 +1155,9 @@ export class ProxyResponseHandler {
 
       // ⭐ 静默期 Watchdog：监控流式请求中途卡住（无新数据推送）
       const idleTimeoutMs =
-        provider.streamingIdleTimeoutMs > 0 ? provider.streamingIdleTimeoutMs : Infinity;
+        provider.streamingIdleTimeoutMs > 0
+          ? provider.streamingIdleTimeoutMs
+          : Infinity;
       const startIdleTimer = () => {
         if (idleTimeoutMs === Infinity) return; // 禁用时跳过
         clearIdleTimer(); // 清除旧的
@@ -1001,10 +1173,13 @@ export class ProxyResponseHandler {
           try {
             if (streamController) {
               streamController.error(new Error("Streaming idle timeout"));
-              logger.debug("ResponseHandler: Client stream closed due to idle timeout", {
-                taskId,
-                providerId: provider.id,
-              });
+              logger.debug(
+                "ResponseHandler: Client stream closed due to idle timeout",
+                {
+                  taskId,
+                  providerId: provider.id,
+                },
+              );
             }
           } catch (e) {
             logger.warn("ResponseHandler: Failed to close client stream", {
@@ -1020,18 +1195,26 @@ export class ProxyResponseHandler {
               responseController?: AbortController;
             };
             if (sessionWithController.responseController) {
-              sessionWithController.responseController.abort(new Error("streaming_idle"));
-              logger.debug("ResponseHandler: Upstream connection aborted due to idle timeout", {
-                taskId,
-                providerId: provider.id,
-              });
+              sessionWithController.responseController.abort(
+                new Error("streaming_idle"),
+              );
+              logger.debug(
+                "ResponseHandler: Upstream connection aborted due to idle timeout",
+                {
+                  taskId,
+                  providerId: provider.id,
+                },
+              );
             }
           } catch (e) {
-            logger.warn("ResponseHandler: Failed to abort upstream connection", {
-              taskId,
-              providerId: provider.id,
-              error: e,
-            });
+            logger.warn(
+              "ResponseHandler: Failed to abort upstream connection",
+              {
+                taskId,
+                providerId: provider.id,
+                error: e,
+              },
+            );
           }
 
           // ⭐ 3. 终止后台读取任务
@@ -1062,9 +1245,12 @@ export class ProxyResponseHandler {
           void SessionManager.storeSessionResponse(
             session.sessionId,
             allContent,
-            session.requestSequence
+            session.requestSequence,
           ).catch((err) => {
-            logger.error("[ResponseHandler] Failed to store stream response:", err);
+            logger.error(
+              "[ResponseHandler] Failed to store stream response:",
+              err,
+            );
           });
         }
 
@@ -1074,43 +1260,59 @@ export class ProxyResponseHandler {
         const tracker = ProxyStatusTracker.getInstance();
         tracker.endRequest(messageContext.user.id, messageContext.id);
 
-        const usageResult = parseUsageFromResponseText(allContent, provider.providerType);
+        const usageResult = parseUsageFromResponseText(
+          allContent,
+          provider.providerType,
+        );
         usageForCost = usageResult.usageMetrics;
         if (
           simulationState.decision === "applied" &&
           simulationState.simulatedUsage &&
           typeof usageForCost?.output_tokens === "number"
         ) {
-          simulationState.simulatedUsage.output_tokens = usageForCost.output_tokens;
+          simulationState.simulatedUsage.output_tokens =
+            usageForCost.output_tokens;
         }
         const usageForOutput =
-          simulationState.decision === "applied" && simulationState.simulatedUsage
+          simulationState.decision === "applied" &&
+          simulationState.simulatedUsage
             ? simulationState.simulatedUsage
             : usageForCost;
 
         // Codex: Extract prompt_cache_key from SSE events and update session binding
-        if (provider.providerType === "codex" && session.sessionId && provider.id) {
+        if (
+          provider.providerType === "codex" &&
+          session.sessionId &&
+          provider.id
+        ) {
           try {
             const sseEvents = parseSSEData(allContent);
             for (const event of sseEvents) {
               if (typeof event.data === "object" && event.data) {
-                const promptCacheKey = SessionManager.extractCodexPromptCacheKey(
-                  event.data as Record<string, unknown>
-                );
+                const promptCacheKey =
+                  SessionManager.extractCodexPromptCacheKey(
+                    event.data as Record<string, unknown>,
+                  );
                 if (promptCacheKey) {
                   void SessionManager.updateSessionWithCodexCacheKey(
                     session.sessionId,
                     promptCacheKey,
-                    provider.id
+                    provider.id,
                   ).catch((err) => {
-                    logger.error("[ResponseHandler] Failed to update Codex session (stream):", err);
+                    logger.error(
+                      "[ResponseHandler] Failed to update Codex session (stream):",
+                      err,
+                    );
                   });
                   break; // Only need first prompt_cache_key
                 }
               }
             }
           } catch (parseError) {
-            logger.trace("[ResponseHandler] Failed to parse SSE for Codex session:", parseError);
+            logger.trace(
+              "[ResponseHandler] Failed to parse SSE for Codex session:",
+              parseError,
+            );
           }
         }
 
@@ -1120,7 +1322,7 @@ export class ProxyResponseHandler {
           session.getCurrentModel(),
           usageForCost,
           provider.costMultiplier,
-          session.getContext1mApplied()
+          session.getContext1mApplied(),
         );
 
         // 追踪消费到 Redis（用于限流）
@@ -1131,13 +1333,14 @@ export class ProxyResponseHandler {
           let costUsdStr: string | undefined;
           try {
             if (session.request.model && usageForCost) {
-              const priceData = await session.getCachedPriceDataByBillingSource();
+              const priceData =
+                await session.getCachedPriceDataByBillingSource();
               if (priceData) {
                 const cost = calculateRequestCost(
                   usageForCost,
                   priceData,
                   provider.costMultiplier,
-                  session.getContext1mApplied()
+                  session.getContext1mApplied(),
                 );
                 if (cost.gt(0)) {
                   costUsdStr = cost.toString();
@@ -1145,21 +1348,29 @@ export class ProxyResponseHandler {
               }
             }
           } catch (error) {
-            logger.error("[ResponseHandler] Failed to calculate session cost (stream), skipping", {
-              error: error instanceof Error ? error.message : String(error),
-            });
+            logger.error(
+              "[ResponseHandler] Failed to calculate session cost (stream), skipping",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
           }
 
           void SessionManager.updateSessionUsage(session.sessionId, {
             inputTokens: usageForOutput.input_tokens,
             outputTokens: usageForOutput.output_tokens,
-            cacheCreationInputTokens: usageForOutput.cache_creation_input_tokens,
+            cacheCreationInputTokens:
+              usageForOutput.cache_creation_input_tokens,
             cacheReadInputTokens: usageForOutput.cache_read_input_tokens,
             costUsd: costUsdStr,
-            status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
+            status:
+              statusCode >= 200 && statusCode < 300 ? "completed" : "error",
             statusCode: statusCode,
           }).catch((error: unknown) => {
-            logger.error("[ResponseHandler] Failed to update session usage:", error);
+            logger.error(
+              "[ResponseHandler] Failed to update session usage:",
+              error,
+            );
           });
         }
 
@@ -1171,8 +1382,10 @@ export class ProxyResponseHandler {
           ttfbMs: session.ttfbMs,
           cacheCreationInputTokens: usageForOutput?.cache_creation_input_tokens,
           cacheReadInputTokens: usageForOutput?.cache_read_input_tokens,
-          cacheCreation5mInputTokens: usageForOutput?.cache_creation_5m_input_tokens,
-          cacheCreation1hInputTokens: usageForOutput?.cache_creation_1h_input_tokens,
+          cacheCreation5mInputTokens:
+            usageForOutput?.cache_creation_5m_input_tokens,
+          cacheCreation1hInputTokens:
+            usageForOutput?.cache_creation_1h_input_tokens,
           cacheTtlApplied: resolveCacheTtlFromUsage(usageForOutput),
           providerChain: session.getProviderChain(),
           model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
@@ -1184,7 +1397,10 @@ export class ProxyResponseHandler {
       try {
         while (true) {
           // 检查取消信号
-          if (session.clientAbortSignal?.aborted || abortController.signal.aborted) {
+          if (
+            session.clientAbortSignal?.aborted ||
+            abortController.signal.aborted
+          ) {
             logger.info("ResponseHandler: Stream processing cancelled", {
               taskId,
               providerId: provider.id,
@@ -1202,7 +1418,10 @@ export class ProxyResponseHandler {
             const chunkText = decoder.decode(value, { stream: true });
             chunks.push(chunkText);
             lastChunkText = chunkText;
-            if (isAnthropicProvider && detectAnthropicTerminalChunk(chunkText)) {
+            if (
+              isAnthropicProvider &&
+              detectAnthropicTerminalChunk(chunkText)
+            ) {
               hasAnthropicTerminalChunk = true;
             }
 
@@ -1213,7 +1432,8 @@ export class ProxyResponseHandler {
               providerId: provider.id,
               chunksCollected: chunks.length,
               lastChunkSize: chunkSize,
-              idleTimeoutMs: idleTimeoutMs === Infinity ? "disabled" : idleTimeoutMs,
+              idleTimeoutMs:
+                idleTimeoutMs === Infinity ? "disabled" : idleTimeoutMs,
             });
 
             // ⭐ 流式：读到第一块数据后立即清除响应超时定时器
@@ -1226,11 +1446,14 @@ export class ProxyResponseHandler {
               };
               if (sessionWithCleanup.clearResponseTimeout) {
                 sessionWithCleanup.clearResponseTimeout();
-                logger.debug("ResponseHandler: First chunk received, response timeout cleared", {
-                  taskId,
-                  providerId: provider.id,
-                  firstChunkSize: chunkSize,
-                });
+                logger.debug(
+                  "ResponseHandler: First chunk received, response timeout cleared",
+                  {
+                    taskId,
+                    providerId: provider.id,
+                    firstChunkSize: chunkSize,
+                  },
+                );
               }
             }
           }
@@ -1244,15 +1467,18 @@ export class ProxyResponseHandler {
         // Anthropic：缺少终止包则判定失败，向客户端显式发送错误事件
         if (isAnthropicProvider && !hasAnthropicTerminalChunk) {
           const err = new Error("anthropic_missing_terminal_chunk");
-          logger.error("ResponseHandler: Anthropic stream finished without terminal chunk", {
-            taskId,
-            providerId: provider.id,
-            providerName: provider.name,
-            messageId: messageContext.id,
-            durationMs: Date.now() - session.startTime,
-            chunksCollected: chunks.length,
-            lastChunkPreview: summarizeChunkForLog(lastChunkText),
-          });
+          logger.error(
+            "ResponseHandler: Anthropic stream finished without terminal chunk",
+            {
+              taskId,
+              providerId: provider.id,
+              providerName: provider.name,
+              messageId: messageContext.id,
+              durationMs: Date.now() - session.startTime,
+              chunksCollected: chunks.length,
+              lastChunkPreview: summarizeChunkForLog(lastChunkText),
+            },
+          );
 
           try {
             if (streamController) {
@@ -1260,9 +1486,11 @@ export class ProxyResponseHandler {
                 streamController,
                 "stream_incomplete",
                 "anthropic stream ended without terminal chunk",
-                502
+                502,
               );
-              (streamController as TransformStreamDefaultController<Uint8Array>).error(err);
+              (
+                streamController as TransformStreamDefaultController<Uint8Array>
+              ).error(err);
             }
           } catch (e) {
             logger.warn("ResponseHandler: Failed to emit client stream error", {
@@ -1276,10 +1504,13 @@ export class ProxyResponseHandler {
             const { recordFailure } = await import("@/lib/circuit-breaker");
             await recordFailure(provider.id, err);
           } catch (cbError) {
-            logger.warn("ResponseHandler: Failed to record missing terminal chunk", {
-              providerId: provider.id,
-              error: cbError,
-            });
+            logger.warn(
+              "ResponseHandler: Failed to record missing terminal chunk",
+              {
+                providerId: provider.id,
+                error: cbError,
+              },
+            );
           }
 
           await persistRequestFailure({
@@ -1307,32 +1538,42 @@ export class ProxyResponseHandler {
 
         if (isClientAbortError(err)) {
           // 区分不同的超时来源
-          const isResponseTimeout = isResponseControllerAborted && !clientAborted;
+          const isResponseTimeout =
+            isResponseControllerAborted && !clientAborted;
           const isIdleTimeout = err.message?.includes("streaming_idle");
 
           if (isResponseTimeout && !isIdleTimeout) {
             // ⚠️ 响应超时（首字节超时）：计入熔断器并记录错误日志
-            logger.error("ResponseHandler: Response timeout during stream body read", {
-              taskId,
-              providerId: provider.id,
-              providerName: provider.name,
-              messageId: messageContext.id,
-              chunksCollected: chunks.length,
-              errorName: err.name,
-            });
+            logger.error(
+              "ResponseHandler: Response timeout during stream body read",
+              {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                messageId: messageContext.id,
+                chunksCollected: chunks.length,
+                errorName: err.name,
+              },
+            );
 
             // ⚠️ 计入熔断器（动态导入避免循环依赖）
             try {
               const { recordFailure } = await import("@/lib/circuit-breaker");
               await recordFailure(provider.id, err);
-              logger.debug("ResponseHandler: Response timeout recorded in circuit breaker", {
-                providerId: provider.id,
-              });
+              logger.debug(
+                "ResponseHandler: Response timeout recorded in circuit breaker",
+                {
+                  providerId: provider.id,
+                },
+              );
             } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
-              });
+              logger.warn(
+                "ResponseHandler: Failed to record timeout in circuit breaker",
+                {
+                  providerId: provider.id,
+                  error: cbError,
+                },
+              );
             }
 
             // 注意：无法重试，因为客户端已收到 HTTP 200
@@ -1361,14 +1602,20 @@ export class ProxyResponseHandler {
             try {
               const { recordFailure } = await import("@/lib/circuit-breaker");
               await recordFailure(provider.id, err);
-              logger.debug("ResponseHandler: Streaming idle timeout recorded in circuit breaker", {
-                providerId: provider.id,
-              });
+              logger.debug(
+                "ResponseHandler: Streaming idle timeout recorded in circuit breaker",
+                {
+                  providerId: provider.id,
+                },
+              );
             } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
-              });
+              logger.warn(
+                "ResponseHandler: Failed to record timeout in circuit breaker",
+                {
+                  providerId: provider.id,
+                  error: cbError,
+                },
+              );
             }
 
             // 注意：无法重试，因为客户端已收到 HTTP 200
@@ -1385,22 +1632,28 @@ export class ProxyResponseHandler {
             });
           } else if (isTotalTimeout) {
             // 总时长超时：计入熔断 + 502/504 失败记录
-            logger.error("ResponseHandler: Anthropic stream total timeout (forced abort)", {
-              taskId,
-              providerId: provider.id,
-              providerName: provider.name,
-              messageId: messageContext.id,
-              chunksCollected: chunks.length,
-            });
+            logger.error(
+              "ResponseHandler: Anthropic stream total timeout (forced abort)",
+              {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                messageId: messageContext.id,
+                chunksCollected: chunks.length,
+              },
+            );
 
             try {
               const { recordFailure } = await import("@/lib/circuit-breaker");
               await recordFailure(provider.id, err);
             } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record total timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
-              });
+              logger.warn(
+                "ResponseHandler: Failed to record total timeout in circuit breaker",
+                {
+                  providerId: provider.id,
+                  error: cbError,
+                },
+              );
             }
 
             await persistRequestFailure({
@@ -1413,15 +1666,18 @@ export class ProxyResponseHandler {
             });
           } else if (!clientAborted) {
             // 上游在流式过程中意外中断：视为供应商/网络错误
-            logger.error("ResponseHandler: Upstream stream aborted unexpectedly", {
-              taskId,
-              providerId: provider.id,
-              providerName: provider.name,
-              messageId: messageContext.id,
-              chunksCollected: chunks.length,
-              errorName: err.name,
-              errorMessage: err.message || "(empty message)",
-            });
+            logger.error(
+              "ResponseHandler: Upstream stream aborted unexpectedly",
+              {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                messageId: messageContext.id,
+                chunksCollected: chunks.length,
+                errorName: err.name,
+                errorMessage: err.message || "(empty message)",
+              },
+            );
 
             await persistRequestFailure({
               session,
@@ -1449,11 +1705,14 @@ export class ProxyResponseHandler {
               const allContent = flushAndJoin();
               await finalizeStream(allContent);
             } catch (finalizeError) {
-              logger.error("ResponseHandler: Failed to finalize aborted stream response", {
-                taskId,
-                messageId: messageContext.id,
-                finalizeError,
-              });
+              logger.error(
+                "ResponseHandler: Failed to finalize aborted stream response",
+                {
+                  taskId,
+                  messageId: messageContext.id,
+                  finalizeError,
+                },
+              );
             }
           }
         } else {
@@ -1517,10 +1776,13 @@ export class ProxyResponseHandler {
         if (idleTimeoutId) {
           clearTimeout(idleTimeoutId);
           idleTimeoutId = null;
-          logger.debug("ResponseHandler: Idle timeout cleared due to client disconnect", {
-            taskId,
-            providerId: provider.id,
-          });
+          logger.debug(
+            "ResponseHandler: Idle timeout cleared due to client disconnect",
+            {
+              taskId,
+              providerId: provider.id,
+            },
+          );
         }
 
         // 2. 取消后台任务
@@ -1562,7 +1824,9 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
   //          cache = cachedContentTokenCount × cache_price
   if (typeof usage.promptTokenCount === "number") {
     const cachedTokens =
-      typeof usage.cachedContentTokenCount === "number" ? usage.cachedContentTokenCount : 0;
+      typeof usage.cachedContentTokenCount === "number"
+        ? usage.cachedContentTokenCount
+        : 0;
     result.input_tokens = Math.max(usage.promptTokenCount - cachedTokens, 0);
     hasAny = true;
   }
@@ -1585,8 +1849,12 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
   // 注意：放在 output_tokens 赋值之后，避免被覆盖
   // output_tokens 是转换的时候才存在的，gemini原生接口的没有该值
   // 通常存在 output_tokens的时候，thoughtsTokenCount=0
-  if (typeof usage.thoughtsTokenCount === "number" && usage.thoughtsTokenCount > 0) {
-    result.output_tokens = (result.output_tokens ?? 0) + usage.thoughtsTokenCount;
+  if (
+    typeof usage.thoughtsTokenCount === "number" &&
+    usage.thoughtsTokenCount > 0
+  ) {
+    result.output_tokens =
+      (result.output_tokens ?? 0) + usage.thoughtsTokenCount;
     hasAny = true;
   }
 
@@ -1595,18 +1863,24 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     hasAny = true;
   }
 
-  const cacheCreationDetails = usage.cache_creation as Record<string, unknown> | undefined;
+  const cacheCreationDetails = usage.cache_creation as
+    | Record<string, unknown>
+    | undefined;
   let cacheCreationDetailedTotal = 0;
 
   if (cacheCreationDetails) {
     if (typeof cacheCreationDetails.ephemeral_5m_input_tokens === "number") {
-      result.cache_creation_5m_input_tokens = cacheCreationDetails.ephemeral_5m_input_tokens;
-      cacheCreationDetailedTotal += cacheCreationDetails.ephemeral_5m_input_tokens;
+      result.cache_creation_5m_input_tokens =
+        cacheCreationDetails.ephemeral_5m_input_tokens;
+      cacheCreationDetailedTotal +=
+        cacheCreationDetails.ephemeral_5m_input_tokens;
       hasAny = true;
     }
     if (typeof cacheCreationDetails.ephemeral_1h_input_tokens === "number") {
-      result.cache_creation_1h_input_tokens = cacheCreationDetails.ephemeral_1h_input_tokens;
-      cacheCreationDetailedTotal += cacheCreationDetails.ephemeral_1h_input_tokens;
+      result.cache_creation_1h_input_tokens =
+        cacheCreationDetails.ephemeral_1h_input_tokens;
+      cacheCreationDetailedTotal +=
+        cacheCreationDetails.ephemeral_1h_input_tokens;
       hasAny = true;
     }
   }
@@ -1618,7 +1892,8 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     result.cache_creation_5m_input_tokens === undefined &&
     typeof usage.cache_creation_5m_input_tokens === "number"
   ) {
-    result.cache_creation_5m_input_tokens = usage.cache_creation_5m_input_tokens;
+    result.cache_creation_5m_input_tokens =
+      usage.cache_creation_5m_input_tokens;
     cacheCreationDetailedTotal += usage.cache_creation_5m_input_tokens;
     hasAny = true;
   }
@@ -1626,7 +1901,8 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     result.cache_creation_1h_input_tokens === undefined &&
     typeof usage.cache_creation_1h_input_tokens === "number"
   ) {
-    result.cache_creation_1h_input_tokens = usage.cache_creation_1h_input_tokens;
+    result.cache_creation_1h_input_tokens =
+      usage.cache_creation_1h_input_tokens;
     cacheCreationDetailedTotal += usage.cache_creation_1h_input_tokens;
     hasAny = true;
   }
@@ -1637,7 +1913,8 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     result.cache_creation_5m_input_tokens === undefined &&
     typeof usage.claude_cache_creation_5_m_tokens === "number"
   ) {
-    result.cache_creation_5m_input_tokens = usage.claude_cache_creation_5_m_tokens;
+    result.cache_creation_5m_input_tokens =
+      usage.claude_cache_creation_5_m_tokens;
     cacheCreationDetailedTotal += usage.claude_cache_creation_5_m_tokens;
     hasAny = true;
   }
@@ -1645,17 +1922,24 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     result.cache_creation_1h_input_tokens === undefined &&
     typeof usage.claude_cache_creation_1_h_tokens === "number"
   ) {
-    result.cache_creation_1h_input_tokens = usage.claude_cache_creation_1_h_tokens;
+    result.cache_creation_1h_input_tokens =
+      usage.claude_cache_creation_1_h_tokens;
     cacheCreationDetailedTotal += usage.claude_cache_creation_1_h_tokens;
     hasAny = true;
   }
 
-  if (result.cache_creation_input_tokens === undefined && cacheCreationDetailedTotal > 0) {
+  if (
+    result.cache_creation_input_tokens === undefined &&
+    cacheCreationDetailedTotal > 0
+  ) {
     result.cache_creation_input_tokens = cacheCreationDetailedTotal;
   }
 
   if (!result.cache_ttl) {
-    if (result.cache_creation_1h_input_tokens && result.cache_creation_5m_input_tokens) {
+    if (
+      result.cache_creation_1h_input_tokens &&
+      result.cache_creation_5m_input_tokens
+    ) {
       result.cache_ttl = "mixed";
     } else if (result.cache_creation_1h_input_tokens) {
       result.cache_ttl = "1h";
@@ -1673,13 +1957,21 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
   // OpenAI Response API 格式：input_tokens_details.cached_tokens（嵌套结构）
   // 仅在顶层字段不存在时使用（避免重复计算）
   if (!result.cache_read_input_tokens) {
-    const inputTokensDetails = usage.input_tokens_details as Record<string, unknown> | undefined;
-    if (inputTokensDetails && typeof inputTokensDetails.cached_tokens === "number") {
+    const inputTokensDetails = usage.input_tokens_details as
+      | Record<string, unknown>
+      | undefined;
+    if (
+      inputTokensDetails &&
+      typeof inputTokensDetails.cached_tokens === "number"
+    ) {
       result.cache_read_input_tokens = inputTokensDetails.cached_tokens;
       hasAny = true;
-      logger.debug("[UsageMetrics] Extracted cached tokens from OpenAI Response API format", {
-        cachedTokens: inputTokensDetails.cached_tokens,
-      });
+      logger.debug(
+        "[UsageMetrics] Extracted cached tokens from OpenAI Response API format",
+        {
+          cachedTokens: inputTokensDetails.cached_tokens,
+        },
+      );
     }
   }
 
@@ -1688,7 +1980,7 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
 
 export function parseUsageFromResponseText(
   responseText: string,
-  providerType: string | null | undefined
+  providerType: string | null | undefined,
 ): {
   usageRecord: Record<string, unknown> | null;
   usageMetrics: UsageMetrics | null;
@@ -1723,7 +2015,11 @@ export function parseUsageFromResponseText(
   try {
     const parsedValue = JSON.parse(responseText);
 
-    if (parsedValue && typeof parsedValue === "object" && !Array.isArray(parsedValue)) {
+    if (
+      parsedValue &&
+      typeof parsedValue === "object" &&
+      !Array.isArray(parsedValue)
+    ) {
       const parsed = parsedValue as Record<string, unknown>;
 
       // Standard usage fields
@@ -1736,7 +2032,10 @@ export function parseUsageFromResponseText(
       if (parsed.response && typeof parsed.response === "object") {
         const responseObj = parsed.response as Record<string, unknown>;
         applyUsageValue(responseObj.usage, "json.response.usage");
-        applyUsageValue(responseObj.usageMetadata, "json.response.usageMetadata");
+        applyUsageValue(
+          responseObj.usageMetadata,
+          "json.response.usageMetadata",
+        );
       }
 
       if (Array.isArray(parsed.output)) {
@@ -1759,7 +2058,10 @@ export function parseUsageFromResponseText(
         applyUsageValue(record.usage, "json.array");
 
         if (record.data && typeof record.data === "object") {
-          applyUsageValue((record.data as Record<string, unknown>).usage, "json.array.data");
+          applyUsageValue(
+            (record.data as Record<string, unknown>).usage,
+            "json.array.data",
+          );
         }
       }
     }
@@ -1779,7 +2081,10 @@ export function parseUsageFromResponseText(
     let messageStartUsage: UsageMetrics | null = null;
     let messageDeltaUsage: UsageMetrics | null = null;
 
-    const mergeUsageMetrics = (base: UsageMetrics | null, patch: UsageMetrics): UsageMetrics => {
+    const mergeUsageMetrics = (
+      base: UsageMetrics | null,
+      patch: UsageMetrics,
+    ): UsageMetrics => {
       if (!base) {
         return { ...patch };
       }
@@ -1790,11 +2095,14 @@ export function parseUsageFromResponseText(
         cache_creation_input_tokens:
           patch.cache_creation_input_tokens ?? base.cache_creation_input_tokens,
         cache_creation_5m_input_tokens:
-          patch.cache_creation_5m_input_tokens ?? base.cache_creation_5m_input_tokens,
+          patch.cache_creation_5m_input_tokens ??
+          base.cache_creation_5m_input_tokens,
         cache_creation_1h_input_tokens:
-          patch.cache_creation_1h_input_tokens ?? base.cache_creation_1h_input_tokens,
+          patch.cache_creation_1h_input_tokens ??
+          base.cache_creation_1h_input_tokens,
         cache_ttl: patch.cache_ttl ?? base.cache_ttl,
-        cache_read_input_tokens: patch.cache_read_input_tokens ?? base.cache_read_input_tokens,
+        cache_read_input_tokens:
+          patch.cache_read_input_tokens ?? base.cache_read_input_tokens,
       };
     };
 
@@ -1821,13 +2129,16 @@ export function parseUsageFromResponseText(
           const extracted = extractUsageMetrics(usageValue);
           if (extracted) {
             messageStartUsage = mergeUsageMetrics(messageStartUsage, extracted);
-            logger.debug("[ResponseHandler] Extracted usage from message_start", {
-              source:
-                usageValue === data.usage
-                  ? "sse.message_start.usage"
-                  : "sse.message_start.message.usage",
-              usage: extracted,
-            });
+            logger.debug(
+              "[ResponseHandler] Extracted usage from message_start",
+              {
+                source:
+                  usageValue === data.usage
+                    ? "sse.message_start.usage"
+                    : "sse.message_start.message.usage",
+                usage: extracted,
+              },
+            );
           }
         }
       }
@@ -1843,10 +2154,13 @@ export function parseUsageFromResponseText(
           const extracted = extractUsageMetrics(usageValue);
           if (extracted) {
             messageDeltaUsage = mergeUsageMetrics(messageDeltaUsage, extracted);
-            logger.debug("[ResponseHandler] Extracted usage from message_delta", {
-              source: "sse.message_delta.usage",
-              usage: extracted,
-            });
+            logger.debug(
+              "[ResponseHandler] Extracted usage from message_delta",
+              {
+                source: "sse.message_delta.usage",
+                usage: extracted,
+              },
+            );
           }
         }
       }
@@ -1860,10 +2174,20 @@ export function parseUsageFromResponseText(
         applyUsageValue(data.usageMetadata, `sse.${event.event}.usageMetadata`);
 
         // Handle response wrapping in SSE
-        if (!usageMetrics && data.response && typeof data.response === "object") {
+        if (
+          !usageMetrics &&
+          data.response &&
+          typeof data.response === "object"
+        ) {
           const responseObj = data.response as Record<string, unknown>;
-          applyUsageValue(responseObj.usage, `sse.${event.event}.response.usage`);
-          applyUsageValue(responseObj.usageMetadata, `sse.${event.event}.response.usageMetadata`);
+          applyUsageValue(
+            responseObj.usage,
+            `sse.${event.event}.response.usage`,
+          );
+          applyUsageValue(
+            responseObj.usageMetadata,
+            `sse.${event.event}.response.usageMetadata`,
+          );
         }
       }
     }
@@ -1877,7 +2201,10 @@ export function parseUsageFromResponseText(
     })();
 
     if (mergedClaudeUsage) {
-      usageMetrics = adjustUsageForProviderType(mergedClaudeUsage, providerType);
+      usageMetrics = adjustUsageForProviderType(
+        mergedClaudeUsage,
+        providerType,
+      );
       usageRecord = mergedClaudeUsage as unknown as Record<string, unknown>;
       logger.debug("[ResponseHandler] Final merged usage from Claude SSE", {
         providerType,
@@ -1891,7 +2218,7 @@ export function parseUsageFromResponseText(
 
 function adjustUsageForProviderType(
   usage: UsageMetrics,
-  providerType: string | null | undefined
+  providerType: string | null | undefined,
 ): UsageMetrics {
   if (providerType !== "codex") {
     return usage;
@@ -1909,12 +2236,15 @@ function adjustUsageForProviderType(
     return usage;
   }
 
-  logger.debug("[UsageMetrics] Adjusted codex input tokens to exclude cached tokens", {
-    providerType,
-    originalInputTokens: inputTokens,
-    cachedTokens,
-    adjustedInputTokens: adjustedInput,
-  });
+  logger.debug(
+    "[UsageMetrics] Adjusted codex input tokens to exclude cached tokens",
+    {
+      providerType,
+      originalInputTokens: inputTokens,
+      cachedTokens,
+      adjustedInputTokens: adjustedInput,
+    },
+  );
 
   return {
     ...usage,
@@ -1928,7 +2258,7 @@ async function updateRequestCostFromUsage(
   redirectedModel: string | null,
   usage: UsageMetrics | null,
   costMultiplier: number = 1.0,
-  context1mApplied: boolean = false
+  context1mApplied: boolean = false,
 ): Promise<void> {
   if (!usage) {
     logger.warn("[CostCalculation] No usage data, skipping cost update", {
@@ -2001,12 +2331,15 @@ async function updateRequestCostFromUsage(
       if (resolved) {
         priceData = resolved;
         usedModelForPricing = fallbackModel;
-        logger.warn("[CostCalculation] Primary model price not found, using fallback model", {
-          messageId,
-          primaryModel,
-          fallbackModel,
-          billingModelSource,
-        });
+        logger.warn(
+          "[CostCalculation] Primary model price not found, using fallback model",
+          {
+            messageId,
+            primaryModel,
+            fallbackModel,
+            billingModelSource,
+          },
+        );
       }
     }
 
@@ -2024,7 +2357,12 @@ async function updateRequestCostFromUsage(
     }
 
     // 计算费用
-    const cost = calculateRequestCost(usage, priceData.priceData, costMultiplier, context1mApplied);
+    const cost = calculateRequestCost(
+      usage,
+      priceData.priceData,
+      costMultiplier,
+      context1mApplied,
+    );
 
     logger.info("[CostCalculation] Cost calculated successfully", {
       messageId,
@@ -2049,10 +2387,13 @@ async function updateRequestCostFromUsage(
       });
     }
   } catch (error) {
-    logger.error("[CostCalculation] Failed to update request cost, skipping billing", {
-      messageId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error(
+      "[CostCalculation] Failed to update request cost, skipping billing",
+      {
+        messageId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
   }
 }
 
@@ -2064,7 +2405,7 @@ export async function finalizeRequestStats(
   session: ProxySession,
   responseText: string,
   statusCode: number,
-  duration: number
+  duration: number,
 ): Promise<void> {
   const { messageContext, provider } = session;
   if (!provider || !messageContext) {
@@ -2072,13 +2413,19 @@ export async function finalizeRequestStats(
   }
 
   // 1. 结束请求状态追踪
-  ProxyStatusTracker.getInstance().endRequest(messageContext.user.id, messageContext.id);
+  ProxyStatusTracker.getInstance().endRequest(
+    messageContext.user.id,
+    messageContext.id,
+  );
 
   // 2. 更新请求时长
   await updateMessageRequestDuration(messageContext.id, duration);
 
   // 3. 解析 usage metrics
-  const { usageMetrics } = parseUsageFromResponseText(responseText, provider.providerType);
+  const { usageMetrics } = parseUsageFromResponseText(
+    responseText,
+    provider.providerType,
+  );
 
   if (!usageMetrics) {
     // 即使没有 usageMetrics，也需要更新状态码和 provider chain
@@ -2094,15 +2441,21 @@ export async function finalizeRequestStats(
   }
 
   // 4. 更新成本
-  const resolvedCacheTtl = usageMetrics.cache_ttl ?? session.getCacheTtlResolved?.() ?? null;
+  const resolvedCacheTtl =
+    usageMetrics.cache_ttl ?? session.getCacheTtlResolved?.() ?? null;
   const cache5m =
     usageMetrics.cache_creation_5m_input_tokens ??
-    (resolvedCacheTtl === "1h" ? undefined : usageMetrics.cache_creation_input_tokens);
+    (resolvedCacheTtl === "1h"
+      ? undefined
+      : usageMetrics.cache_creation_input_tokens);
   const cache1h =
     usageMetrics.cache_creation_1h_input_tokens ??
-    (resolvedCacheTtl === "1h" ? usageMetrics.cache_creation_input_tokens : undefined);
+    (resolvedCacheTtl === "1h"
+      ? usageMetrics.cache_creation_input_tokens
+      : undefined);
   const cacheTotal =
-    usageMetrics.cache_creation_input_tokens ?? ((cache5m ?? 0) + (cache1h ?? 0) || undefined);
+    usageMetrics.cache_creation_input_tokens ??
+    ((cache5m ?? 0) + (cache1h ?? 0) || undefined);
 
   const normalizedUsage: UsageMetrics = {
     ...usageMetrics,
@@ -2118,7 +2471,7 @@ export async function finalizeRequestStats(
     session.getCurrentModel(),
     normalizedUsage,
     provider.costMultiplier,
-    session.getContext1mApplied()
+    session.getContext1mApplied(),
   );
 
   // 5. 追踪消费到 Redis（用于限流）
@@ -2135,7 +2488,7 @@ export async function finalizeRequestStats(
             normalizedUsage,
             priceData,
             provider.costMultiplier,
-            session.getContext1mApplied()
+            session.getContext1mApplied(),
           );
           if (cost.gt(0)) {
             costUsdStr = cost.toString();
@@ -2143,9 +2496,12 @@ export async function finalizeRequestStats(
         }
       }
     } catch (error) {
-      logger.error("[ResponseHandler] Failed to calculate session cost (finalize), skipping", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      logger.error(
+        "[ResponseHandler] Failed to calculate session cost (finalize), skipping",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
 
     void SessionManager.updateSessionUsage(session.sessionId, {
@@ -2182,7 +2538,10 @@ export async function finalizeRequestStats(
 /**
  * 追踪消费到 Redis（用于限流）
  */
-async function trackCostToRedis(session: ProxySession, usage: UsageMetrics | null): Promise<void> {
+async function trackCostToRedis(
+  session: ProxySession,
+  usage: UsageMetrics | null,
+): Promise<void> {
   if (!usage || !session.sessionId) return;
 
   try {
@@ -2204,7 +2563,7 @@ async function trackCostToRedis(session: ProxySession, usage: UsageMetrics | nul
       usage,
       priceData,
       provider.costMultiplier,
-      session.getContext1mApplied()
+      session.getContext1mApplied(),
     );
     if (cost.lte(0)) return;
 
@@ -2223,7 +2582,7 @@ async function trackCostToRedis(session: ProxySession, usage: UsageMetrics | nul
         providerResetMode: provider.dailyResetMode,
         requestId: messageContext.id,
         createdAtMs: messageContext.createdAt.getTime(),
-      }
+      },
     );
 
     // 新增：追踪用户层每日消费
@@ -2235,12 +2594,19 @@ async function trackCostToRedis(session: ProxySession, usage: UsageMetrics | nul
       {
         requestId: messageContext.id,
         createdAtMs: messageContext.createdAt.getTime(),
-      }
+      },
     );
 
     // 刷新 session 时间戳（滑动窗口）
-    void SessionTracker.refreshSession(session.sessionId, key.id, provider.id).catch((error) => {
-      logger.error("[ResponseHandler] Failed to refresh session tracker:", error);
+    void SessionTracker.refreshSession(
+      session.sessionId,
+      key.id,
+      provider.id,
+    ).catch((error) => {
+      logger.error(
+        "[ResponseHandler] Failed to refresh session tracker:",
+        error,
+      );
     });
   } catch (error) {
     logger.error("[ResponseHandler] Failed to track cost to Redis, skipping", {
@@ -2265,10 +2631,13 @@ async function persistRequestFailure(options: {
   const { session, messageContext, statusCode, error, taskId, phase } = options;
 
   if (!messageContext) {
-    logger.warn("ResponseHandler: Cannot persist failure without messageContext", {
-      taskId,
-      phase,
-    });
+    logger.warn(
+      "ResponseHandler: Cannot persist failure without messageContext",
+      {
+        taskId,
+        phase,
+      },
+    );
     return;
   }
 
@@ -2290,7 +2659,10 @@ async function persistRequestFailure(options: {
     try {
       // 序列化错误原因链，保留所有属性
       const cause = (error as NodeJS.ErrnoException).cause;
-      errorCause = JSON.stringify(cause, Object.getOwnPropertyNames(cause as object));
+      errorCause = JSON.stringify(
+        cause,
+        Object.getOwnPropertyNames(cause as object),
+      );
     } catch {
       // 如果序列化失败，使用简单字符串
       errorCause = String((error as NodeJS.ErrnoException).cause);
@@ -2311,7 +2683,8 @@ async function persistRequestFailure(options: {
       errorMessage,
       errorStack,
       errorCause,
-      ttfbMs: phase === "non-stream" ? (session.ttfbMs ?? duration) : session.ttfbMs,
+      ttfbMs:
+        phase === "non-stream" ? (session.ttfbMs ?? duration) : session.ttfbMs,
       providerChain: session.getProviderChain(),
       model: session.getCurrentModel() ?? undefined,
       providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
@@ -2330,7 +2703,7 @@ async function persistRequestFailure(options: {
         duration,
         statusCode,
         errorMessage,
-      }
+      },
     );
   } catch (dbError) {
     logger.error("ResponseHandler: Failed to persist request failure", {
@@ -2405,10 +2778,13 @@ function emitClientStreamError(
   controller: TransformStreamDefaultController<Uint8Array>,
   code: string,
   message: string,
-  status?: number
+  status?: number,
 ) {
   try {
-    const payload: Record<string, unknown> = { type: "error", error: { code, message } };
+    const payload: Record<string, unknown> = {
+      type: "error",
+      error: { code, message },
+    };
     if (status) {
       (payload.error as Record<string, unknown>).status = status;
     }
@@ -2421,18 +2797,22 @@ function emitClientStreamError(
 
 function buildSimulatedUsagePayload(
   simulatedUsage: SimulatedUsage,
-  options?: { includeOutputTokens?: boolean }
+  options?: { includeOutputTokens?: boolean },
 ): Record<string, unknown> {
   const includeOutputTokens = options?.includeOutputTokens ?? true;
   const payload: Record<string, unknown> = {
     input_tokens: simulatedUsage.input_tokens,
     cache_read_input_tokens: simulatedUsage.cache_read_input_tokens,
     cache_creation_input_tokens: simulatedUsage.cache_creation_input_tokens,
-    cache_creation_5m_input_tokens: simulatedUsage.cache_creation_5m_input_tokens,
-    cache_creation_1h_input_tokens: simulatedUsage.cache_creation_1h_input_tokens,
+    cache_creation_5m_input_tokens:
+      simulatedUsage.cache_creation_5m_input_tokens,
+    cache_creation_1h_input_tokens:
+      simulatedUsage.cache_creation_1h_input_tokens,
     cache_creation: {
-      ephemeral_5m_input_tokens: simulatedUsage.cache_creation.ephemeral_5m_input_tokens,
-      ephemeral_1h_input_tokens: simulatedUsage.cache_creation.ephemeral_1h_input_tokens,
+      ephemeral_5m_input_tokens:
+        simulatedUsage.cache_creation.ephemeral_5m_input_tokens,
+      ephemeral_1h_input_tokens:
+        simulatedUsage.cache_creation.ephemeral_1h_input_tokens,
     },
   };
 
@@ -2445,7 +2825,7 @@ function buildSimulatedUsagePayload(
 
 function applySimulatedUsageToResponsePayload(
   responseData: Record<string, unknown>,
-  simulatedUsage: SimulatedUsage
+  simulatedUsage: SimulatedUsage,
 ): boolean {
   const usagePayload = buildSimulatedUsagePayload(simulatedUsage);
   let applied = false;
@@ -2485,12 +2865,15 @@ function createClaudeCacheSimulationStream(options: {
   cacheSignals: CacheSignals;
   state: CacheSimulationState;
 }): TransformStream<Uint8Array, Uint8Array> {
-  const { requestMessage, session, cacheSessionKey, cacheSignals, state } = options;
+  const { requestMessage, session, cacheSessionKey, cacheSignals, state } =
+    options;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
 
-  const parseEvent = (rawEvent: string): { event?: string; data?: string } | null => {
+  const parseEvent = (
+    rawEvent: string,
+  ): { event?: string; data?: string } | null => {
     const lines = rawEvent.split("\n");
     let event: string | undefined;
     const dataLines: string[] = [];
@@ -2512,8 +2895,12 @@ function createClaudeCacheSimulationStream(options: {
 
   const resolveUsageContainer = (
     eventType: string,
-    data: Record<string, unknown>
-  ): { container: Record<string, unknown>; key: string; usage: Record<string, unknown> } | null => {
+    data: Record<string, unknown>,
+  ): {
+    container: Record<string, unknown>;
+    key: string;
+    usage: Record<string, unknown>;
+  } | null => {
     if (eventType === "message_start") {
       if (data.message && typeof data.message === "object") {
         const message = data.message as Record<string, unknown>;
@@ -2526,18 +2913,30 @@ function createClaudeCacheSimulationStream(options: {
         }
       }
       if (data.usage && typeof data.usage === "object") {
-        return { container: data, key: "usage", usage: data.usage as Record<string, unknown> };
+        return {
+          container: data,
+          key: "usage",
+          usage: data.usage as Record<string, unknown>,
+        };
       }
     }
 
     if (eventType === "message_delta") {
       if (data.usage && typeof data.usage === "object") {
-        return { container: data, key: "usage", usage: data.usage as Record<string, unknown> };
+        return {
+          container: data,
+          key: "usage",
+          usage: data.usage as Record<string, unknown>,
+        };
       }
       if (data.delta && typeof data.delta === "object") {
         const delta = data.delta as Record<string, unknown>;
         if (delta.usage && typeof delta.usage === "object") {
-          return { container: delta, key: "usage", usage: delta.usage as Record<string, unknown> };
+          return {
+            container: delta,
+            key: "usage",
+            usage: delta.usage as Record<string, unknown>,
+          };
         }
       }
     }
@@ -2545,7 +2944,10 @@ function createClaudeCacheSimulationStream(options: {
     return null;
   };
 
-  const ensureSimulation = async (inputTokens: number, outputTokens: number): Promise<void> => {
+  const ensureSimulation = async (
+    inputTokens: number,
+    outputTokens: number,
+  ): Promise<void> => {
     if (state.decision !== "pending") {
       return;
     }
@@ -2558,7 +2960,7 @@ function createClaudeCacheSimulationStream(options: {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
       },
-      cacheSignals
+      cacheSignals,
     );
 
     if (!simulated) {
@@ -2622,10 +3024,11 @@ function createClaudeCacheSimulationStream(options: {
       state.simulatedUsage.output_tokens = upstreamOutputTokens;
     }
 
-    const includeOutputTokens = typeof usageContainer.usage.output_tokens === "number";
+    const includeOutputTokens =
+      typeof usageContainer.usage.output_tokens === "number";
     usageContainer.container[usageContainer.key] = buildSimulatedUsagePayload(
       state.simulatedUsage,
-      { includeOutputTokens }
+      { includeOutputTokens },
     );
 
     const eventLine = parsed.event ? `event: ${parsed.event}\n` : "";
@@ -2659,7 +3062,7 @@ function resolveCacheTtlFromUsage(
     cache_ttl?: CacheTtlValue;
     cache_creation_5m_input_tokens?: number;
     cache_creation_1h_input_tokens?: number;
-  } | null
+  } | null,
 ): CacheTtlValue | null {
   if (!usage) return null;
   if (usage.cache_ttl) return usage.cache_ttl;
