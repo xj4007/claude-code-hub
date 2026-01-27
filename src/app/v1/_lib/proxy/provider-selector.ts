@@ -677,7 +677,7 @@ export class ProxyProviderResolver {
     const requestedModel = session?.getCurrentModel() || "";
 
     // === Step 1: 分组预过滤（静默，用户只能看到自己分组内的供应商）===
-    let effectiveGroupPick = getEffectiveProviderGroup(session);
+    const effectiveGroupPick = getEffectiveProviderGroup(session);
     const keyGroupPick = session?.authState?.key?.providerGroup;
 
     let visibleProviders = allProviders;

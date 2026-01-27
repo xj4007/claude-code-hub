@@ -191,6 +191,7 @@ export const providers = pgTable('providers', {
   useUnifiedClientId: boolean('use_unified_client_id').default(false),
   unifiedClientId: varchar('unified_client_id', { length: 64 }),
   simulateCacheEnabled: boolean('simulate_cache_enabled').notNull().default(false),
+  supplementaryPromptEnabled: boolean('supplementary_prompt_enabled').notNull().default(false),
 
   // 金额限流配置
   limit5hUsd: numeric('limit_5h_usd', { precision: 10, scale: 2 }),

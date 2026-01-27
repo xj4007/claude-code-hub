@@ -23,8 +23,18 @@ function makeFakeRedis() {
 }
 
 function makeRequest(text: string): Record<string, unknown> {
-  return {
-    model: "claude-sonnet-4-20250212",
+  return makeRequestWithOptions(text);
+}
+
+type RequestOptions = {
+  model?: string;
+  tools?: unknown;
+  system?: unknown;
+};
+
+function makeRequestWithOptions(text: string, options?: RequestOptions): Record<string, unknown> {
+  const request: Record<string, unknown> = {
+    model: options?.model ?? "claude-sonnet-4-20250212",
     messages: [
       {
         role: "user",
@@ -37,6 +47,16 @@ function makeRequest(text: string): Record<string, unknown> {
       },
     ],
   };
+
+  if (options && "tools" in options) {
+    request.tools = options.tools;
+  }
+
+  if (options && "system" in options) {
+    request.system = options.system;
+  }
+
+  return request;
 }
 
 function makeSession(overrides?: Partial<{ needsClaudeDisguise: boolean; model: string }>) {
@@ -61,12 +81,10 @@ describe("CacheSimulator", () => {
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
     const request = makeRequest("abcdefgh");
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_1",
-      makeSession(),
-      { input_tokens: 10, output_tokens: 2 }
-    );
+    const result = await CacheSimulator.calculate(request, "user_1", makeSession(), {
+      input_tokens: 10,
+      output_tokens: 2,
+    });
 
     expect(result).not.toBeNull();
     expect(result?.input_tokens).toBe(2);
@@ -143,104 +161,108 @@ describe("CacheSimulator", () => {
     expect(result?.cache_read_input_tokens).toBe(27);
   });
 
-  it("skips simulation for title prompt sub-agent", async () => {
+  it("skips simulation when haiku model has empty tools", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
-    const request = {
-      model: "claude-sonnet-4-20250212",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "Please write a 5-10 word title" }],
-        },
-      ],
-    };
+    const request = makeRequestWithOptions("hello", {
+      model: "claude-haiku-20250212",
+      tools: [],
+      system: [{ type: "text", text: "system" }],
+    });
 
     const result = await CacheSimulator.calculate(
       request,
       "user_5",
-      makeSession(),
+      makeSession({ model: "claude-haiku-20250212" }),
       { input_tokens: 50, output_tokens: 1 }
     );
 
     expect(result).toBeNull();
   });
 
-  it("skips simulation when system reminder tag is missing", async () => {
+  it("skips simulation when haiku model is missing system", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
-    const request = {
+    const request = makeRequestWithOptions("hello", {
       model: "claude-haiku-20250212",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-    };
+      tools: [{ name: "tool_a" }],
+    });
 
     const result = await CacheSimulator.calculate(
       request,
       "user_6",
-      makeSession({ model: "claude-haiku-20250212", needsClaudeDisguise: true }),
+      makeSession({ model: "claude-haiku-20250212" }),
       { input_tokens: 20, output_tokens: 1 }
     );
 
     expect(result).toBeNull();
   });
 
-  it("does not skip simulation when system reminder is present", async () => {
+  it("skips simulation when haiku model has empty system array", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
-    const request = {
+    const request = makeRequestWithOptions("hello", {
       model: "claude-haiku-20250212",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "<system-reminder> hello" }],
-        },
-      ],
-    };
+      tools: [{ name: "tool_a" }],
+      system: [],
+    });
 
     const result = await CacheSimulator.calculate(
       request,
       "user_7",
-      makeSession({ model: "claude-haiku-20250212", needsClaudeDisguise: true }),
+      makeSession({ model: "claude-haiku-20250212" }),
+      { input_tokens: 20, output_tokens: 1 }
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("does not skip simulation when haiku model has tools and system", async () => {
+    const { client } = makeFakeRedis();
+    redisClientRef = client;
+
+    const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
+
+    const request = makeRequestWithOptions("hello", {
+      model: "claude-haiku-20250212",
+      tools: [{ name: "tool_a" }],
+      system: [{ type: "text", text: "system" }],
+    });
+
+    const result = await CacheSimulator.calculate(
+      request,
+      "user_8",
+      makeSession({ model: "claude-haiku-20250212" }),
       { input_tokens: 20, output_tokens: 1 }
     );
 
     expect(result).not.toBeNull();
   });
 
-  it("does not skip simulation when system reminder tag is empty", async () => {
+  it("does not skip simulation when non-haiku model is missing system", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
-    const request = {
-      model: "claude-haiku-20250212",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "<system-reminder></system-reminder>" }],
-        },
-      ],
-    };
+    const request = makeRequestWithOptions("hello", {
+      model: "claude-sonnet-4-20250212",
+      tools: [],
+    });
 
     const result = await CacheSimulator.calculate(
       request,
-      "user_8",
-      makeSession({ model: "claude-haiku-20250212", needsClaudeDisguise: true }),
+      "user_9",
+      makeSession({ model: "claude-sonnet-4-20250212" }),
       { input_tokens: 20, output_tokens: 1 }
     );
 

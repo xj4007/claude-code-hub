@@ -1,6 +1,6 @@
+import { extractCacheSignals, resolveCacheSessionKey } from "@/lib/cache/cache-signals";
 import { logger } from "@/lib/logger";
 import { parseUserAgent } from "@/lib/ua-parser";
-import { extractCacheSignals, resolveCacheSessionKey } from "@/lib/cache/cache-signals";
 import { ProxyResponses } from "./responses";
 import type { ProxySession } from "./session";
 

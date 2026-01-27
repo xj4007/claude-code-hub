@@ -1,5 +1,5 @@
 "use client";
-import { ChevronDown, Info } from "lucide-react";
+import { ChevronDown, FileText, Info } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -182,6 +182,9 @@ export function ProviderForm({
   );
   const [simulateCacheEnabled, setSimulateCacheEnabled] = useState<boolean>(
     sourceProvider?.simulateCacheEnabled ?? false
+  );
+  const [supplementaryPromptEnabled, setSupplementaryPromptEnabled] = useState<boolean>(
+    sourceProvider?.supplementaryPromptEnabled ?? false
   );
 
   // 1M Context Window 偏好配置（仅对 Anthropic 类型供应商有效）
@@ -458,6 +461,7 @@ export function ProviderForm({
             use_unified_client_id?: boolean;
             unified_client_id?: string | null;
             simulate_cache_enabled?: boolean;
+            supplementary_prompt_enabled?: boolean;
             preserve_client_ip?: boolean;
             tpm?: number | null;
             rpm?: number | null;
@@ -514,6 +518,7 @@ export function ProviderForm({
             use_unified_client_id: useUnifiedClientId,
             unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
             simulate_cache_enabled: simulateCacheEnabled,
+            supplementary_prompt_enabled: supplementaryPromptEnabled,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -583,6 +588,7 @@ export function ProviderForm({
             use_unified_client_id: useUnifiedClientId,
             unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
             simulate_cache_enabled: simulateCacheEnabled,
+            supplementary_prompt_enabled: supplementaryPromptEnabled,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -991,6 +997,36 @@ export function ProviderForm({
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {t("sections.routing.simulateCache.help")}
+                    </p>
+                  </div>
+                )}
+
+                {/* 补充提示词注入配置 - 仅 Claude/Claude-Auth 供应商显示 */}
+                {(providerType === "claude" || providerType === "claude-auth") && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4" />
+                          <Label
+                            htmlFor={isEdit ? "edit-supplementary-prompt" : "supplementary-prompt"}
+                          >
+                            {t("sections.routing.supplementaryPrompt.label")}
+                          </Label>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {t("sections.routing.supplementaryPrompt.desc")}
+                        </p>
+                      </div>
+                      <Switch
+                        id={isEdit ? "edit-supplementary-prompt" : "supplementary-prompt"}
+                        checked={supplementaryPromptEnabled}
+                        onCheckedChange={setSupplementaryPromptEnabled}
+                        disabled={isPending}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {t("sections.routing.supplementaryPrompt.help")}
                     </p>
                   </div>
                 )}

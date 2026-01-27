@@ -105,6 +105,7 @@ export function toProvider(dbProvider: any): Provider {
     websiteUrl: dbProvider?.websiteUrl ?? null,
     faviconUrl: dbProvider?.faviconUrl ?? null,
     simulateCacheEnabled: dbProvider?.simulateCacheEnabled ?? false,
+    supplementaryPromptEnabled: dbProvider?.supplementaryPromptEnabled ?? false,
     cacheTtlPreference: dbProvider?.cacheTtlPreference ?? null,
     context1mPreference: dbProvider?.context1mPreference ?? null,
     codexReasoningEffortPreference: dbProvider?.codexReasoningEffortPreference ?? null,

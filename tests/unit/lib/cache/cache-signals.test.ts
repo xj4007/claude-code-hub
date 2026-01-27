@@ -130,6 +130,44 @@ describe("cache-signals", () => {
     expect(signals.hasTitlePrompt).toBe(false);
   });
 
+  it("detects tools and system presence", () => {
+    const request = {
+      model: "claude-haiku-4-5-20251001",
+      tools: [{ name: "tool_a" }],
+      system: [{ type: "text", text: "system" }],
+      messages: [{ role: "user", content: "hello" }],
+    };
+
+    const signals = extractCacheSignals(request, {
+      getOriginalModel: () => "claude-haiku-4-5-20251001",
+      needsClaudeDisguise: false,
+    });
+
+    expect(signals.hasTools).toBe(true);
+    expect(signals.hasNonEmptyTools).toBe(true);
+    expect(signals.hasSystem).toBe(true);
+    expect(signals.hasNonEmptySystem).toBe(true);
+  });
+
+  it("treats empty tools and system arrays as empty", () => {
+    const request = {
+      model: "claude-haiku-4-5-20251001",
+      tools: [],
+      system: [],
+      messages: [{ role: "user", content: "hello" }],
+    };
+
+    const signals = extractCacheSignals(request, {
+      getOriginalModel: () => "claude-haiku-4-5-20251001",
+      needsClaudeDisguise: false,
+    });
+
+    expect(signals.hasTools).toBe(true);
+    expect(signals.hasNonEmptyTools).toBe(false);
+    expect(signals.hasSystem).toBe(true);
+    expect(signals.hasNonEmptySystem).toBe(false);
+  });
+
   it("resolves cache session key from metadata.user_id only", () => {
     expect(resolveCacheSessionKey({})).toBeNull();
     expect(resolveCacheSessionKey({ metadata: { user_id: 123 } })).toBeNull();

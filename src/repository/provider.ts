@@ -31,6 +31,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     useUnifiedClientId: providerData.use_unified_client_id ?? false,
     unifiedClientId: providerData.unified_client_id ?? null,
     simulateCacheEnabled: providerData.simulate_cache_enabled ?? false,
+    supplementaryPromptEnabled: providerData.supplementary_prompt_enabled ?? false,
     limit5hUsd: providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null,
     limitDailyUsd:
       providerData.limit_daily_usd != null ? providerData.limit_daily_usd.toString() : null,
@@ -88,6 +89,7 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     useUnifiedClientId: providers.useUnifiedClientId,
     unifiedClientId: providers.unifiedClientId,
     simulateCacheEnabled: providers.simulateCacheEnabled,
+    supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
     limit5hUsd: providers.limit5hUsd,
     limitDailyUsd: providers.limitDailyUsd,
     dailyResetMode: providers.dailyResetMode,
@@ -395,6 +397,8 @@ export async function updateProvider(
     dbData.unifiedClientId = providerData.unified_client_id;
   if (providerData.simulate_cache_enabled !== undefined)
     dbData.simulateCacheEnabled = providerData.simulate_cache_enabled;
+  if (providerData.supplementary_prompt_enabled !== undefined)
+    dbData.supplementaryPromptEnabled = providerData.supplementary_prompt_enabled;
   if (providerData.limit_5h_usd !== undefined)
     dbData.limit5hUsd =
       providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null;
@@ -478,6 +482,7 @@ export async function updateProvider(
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
       simulateCacheEnabled: providers.simulateCacheEnabled,
+      supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,

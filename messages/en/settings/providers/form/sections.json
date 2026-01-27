@@ -231,6 +231,11 @@
       "desc": "Inject simulated cache usage fields for downstream clients (does not affect billing here).",
       "help": "When enabled, responses include cache_creation_input_tokens and cache_read_input_tokens for downstream billing and display."
     },
+    "supplementaryPrompt": {
+      "label": "Supplementary Prompt Injection",
+      "desc": "Inject custom instructions into requests (e.g., file chunking hints for large outputs).",
+      "help": "When enabled, injects custom instructions into the <system-reminder> tag in the request body. Note: Only applies to main agent requests; sub-agent requests are excluded."
+    },
     "joinClaudePool": {
       "desc": "When enabled, this provider will participate in load balancing with Claude-type providers",
       "help": "Available only when there is a redirect mapping to claude-* models. When users request claude-* models, this provider also joins scheduling.",

@@ -85,6 +85,7 @@ export interface Provider {
   useUnifiedClientId: boolean;
   unifiedClientId: string | null;
   simulateCacheEnabled: boolean;
+  supplementaryPromptEnabled: boolean;
 
   // 金额限流配置
   limit5hUsd: number | null;
@@ -176,6 +177,7 @@ export interface ProviderDisplay {
   useUnifiedClientId: boolean;
   unifiedClientId: string | null;
   simulateCacheEnabled: boolean;
+  supplementaryPromptEnabled: boolean;
   // 金额限流配置
   limit5hUsd: number | null;
   limitDailyUsd: number | null;
@@ -262,6 +264,7 @@ export interface CreateProviderData {
   use_unified_client_id?: boolean;
   unified_client_id?: string | null;
   simulate_cache_enabled?: boolean;
+  supplementary_prompt_enabled?: boolean;
 
   // 金额限流配置
   limit_5h_usd?: number | null;
@@ -335,6 +338,7 @@ export interface UpdateProviderData {
   use_unified_client_id?: boolean;
   unified_client_id?: string | null;
   simulate_cache_enabled?: boolean;
+  supplementary_prompt_enabled?: boolean;
 
   // 金额限流配置
   limit_5h_usd?: number | null;

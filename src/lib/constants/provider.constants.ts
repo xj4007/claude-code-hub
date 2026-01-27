@@ -21,6 +21,7 @@ export const PROVIDER_DEFAULTS = {
   WEIGHT: 1,
   MAX_RETRY_ATTEMPTS: 2,
   SIMULATE_CACHE_ENABLED: false,
+  SUPPLEMENTARY_PROMPT_ENABLED: false,
 } as const;
 
 export const PROVIDER_GROUP = {

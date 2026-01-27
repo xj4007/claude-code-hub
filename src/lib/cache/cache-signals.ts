@@ -8,6 +8,10 @@ export type CacheSignalContext = {
 export type CacheSignals = {
   hasSystemReminder: boolean;
   hasEmptySystemReminder: boolean;
+  hasTools: boolean;
+  hasNonEmptyTools: boolean;
+  hasSystem: boolean;
+  hasNonEmptySystem: boolean;
   hasTitlePrompt: boolean;
   hasAssistantBrace: boolean;
   modelFamily: "haiku" | "sonnet" | "opus" | "other";
@@ -26,9 +30,11 @@ export function extractCacheSignals(
   const model = session.getOriginalModel() || (request.model as string) || "";
   const modelFamily = getModelFamily(model);
   const isDisguised = session.needsClaudeDisguise === true;
+  const toolSystemSignals = analyzeToolsAndSystem(request);
 
   return {
     ...analyzeSystemReminder(request),
+    ...toolSystemSignals,
     hasTitlePrompt: containsTitlePrompt(request),
     hasAssistantBrace: containsAssistantBrace(request),
     modelFamily,
@@ -48,10 +54,27 @@ export function resolveCacheSessionKey(request: Record<string, unknown>): string
 
 function getModelFamily(model: string): "haiku" | "sonnet" | "opus" | "other" {
   const normalized = model.toLowerCase();
-  if (normalized.startsWith("claude-haiku-")) return "haiku";
-  if (normalized.startsWith("claude-sonnet-")) return "sonnet";
-  if (normalized.startsWith("claude-opus-")) return "opus";
+  if (normalized.includes("haiku")) return "haiku";
+  if (normalized.includes("sonnet")) return "sonnet";
+  if (normalized.includes("opus")) return "opus";
   return "other";
+}
+
+function analyzeToolsAndSystem(request: Record<string, unknown>): {
+  hasTools: boolean;
+  hasNonEmptyTools: boolean;
+  hasSystem: boolean;
+  hasNonEmptySystem: boolean;
+} {
+  const hasTools = Object.hasOwn(request, "tools");
+  const tools = request.tools;
+  const hasNonEmptyTools = Array.isArray(tools) && tools.length > 0;
+
+  const hasSystem = Object.hasOwn(request, "system");
+  const system = request.system;
+  const hasNonEmptySystem = Array.isArray(system) && system.length > 0;
+
+  return { hasTools, hasNonEmptyTools, hasSystem, hasNonEmptySystem };
 }
 
 function analyzeSystemReminder(request: Record<string, unknown>): {

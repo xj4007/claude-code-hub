@@ -246,6 +246,7 @@ export async function getProviders(): Promise<ProviderDisplay[]> {
         useUnifiedClientId: provider.useUnifiedClientId,
         unifiedClientId: provider.unifiedClientId,
         simulateCacheEnabled: provider.simulateCacheEnabled,
+        supplementaryPromptEnabled: provider.supplementaryPromptEnabled,
         limit5hUsd: provider.limit5hUsd,
         limitDailyUsd: provider.limitDailyUsd,
         dailyResetMode: provider.dailyResetMode,
@@ -473,6 +474,7 @@ export async function addProvider(data: {
   use_unified_client_id?: boolean;
   unified_client_id?: string | null;
   simulate_cache_enabled?: boolean;
+  supplementary_prompt_enabled?: boolean;
   tpm: number | null;
   rpm: number | null;
   rpd: number | null;
@@ -643,6 +645,7 @@ export async function editProvider(
     use_unified_client_id?: boolean;
     unified_client_id?: string | null;
     simulate_cache_enabled?: boolean;
+    supplementary_prompt_enabled?: boolean;
     tpm?: number | null;
     rpm?: number | null;
     rpd?: number | null;

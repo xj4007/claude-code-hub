@@ -131,6 +131,11 @@
       "label": "模拟缓存",
       "desc": "为下游客户端注入模拟的缓存 usage 字段（不影响本项目计费）",
       "help": "启用后，响应中会包含 cache_creation_input_tokens 和 cache_read_input_tokens 等字段，用于下游客户端计费与展示"
+    },
+    "supplementaryPrompt": {
+      "label": "补充提示词注入",
+      "desc": "向请求中注入自定义指令（如大文件输出分块提示等）",
+      "help": "启用后，将在请求体的 <system-reminder> 标签中注入自定义指令。注意：仅对主代理请求生效，子代理请求不注入"
     }
   },
   "rateLimit": {

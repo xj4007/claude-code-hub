@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getRedisClient } from "@/lib/redis";
-import { extractCacheSignals, type CacheSignals, type CacheSignalContext } from "./cache-signals";
+import { type CacheSignalContext, type CacheSignals, extractCacheSignals } from "./cache-signals";
 
 export type UpstreamUsage = {
   input_tokens?: number;
@@ -44,25 +44,24 @@ export class CacheSimulator {
   ): Promise<SimulatedUsage | null> {
     const signals = cacheSignals ?? extractCacheSignals(request, session);
 
-    if (!this.shouldSimulateCache(signals)) {
+    if (!CacheSimulator.shouldSimulateCache(signals)) {
       return null;
     }
 
     const currentInputTokens = Math.max(0, upstreamUsage.input_tokens ?? 0);
     const currentOutputTokens = Math.max(0, upstreamUsage.output_tokens ?? 0);
-    const lastState = await this.getLastCacheState(sessionKey);
+    const lastState = await CacheSimulator.getLastCacheState(sessionKey);
     const lastInputTokens = lastState.lastInputTokens ?? lastState.lastCacheCreationTokens;
-    const lastCacheCreationTokens =
-      lastState.lastCacheCreationTokens ?? lastState.lastInputTokens;
+    const lastCacheCreationTokens = lastState.lastCacheCreationTokens ?? lastState.lastInputTokens;
 
     if (lastCacheCreationTokens == null) {
-      const userTokens = this.countLastUserTextTokens(request);
+      const userTokens = CacheSimulator.countLastUserTextTokens(request);
       const cacheCreation = Math.max(0, currentInputTokens - userTokens);
-      await this.setLastCacheState(sessionKey, {
+      await CacheSimulator.setLastCacheState(sessionKey, {
         lastInputTokens: currentInputTokens,
         lastCacheCreationTokens: cacheCreation,
       });
-      return this.buildUsage({
+      return CacheSimulator.buildUsage({
         inputTokens: userTokens,
         outputTokens: currentOutputTokens,
         cacheReadTokens: 0,
@@ -75,11 +74,11 @@ export class CacheSimulator {
     if (currentInputTokens < baselineInputTokens) {
       const cacheCreationTokens = Math.floor(currentInputTokens * 0.1);
       const cacheReadTokens = Math.max(0, currentInputTokens - cacheCreationTokens);
-      await this.setLastCacheState(sessionKey, {
+      await CacheSimulator.setLastCacheState(sessionKey, {
         lastInputTokens: currentInputTokens,
         lastCacheCreationTokens: cacheReadTokens + cacheCreationTokens,
       });
-      return this.buildUsage({
+      return CacheSimulator.buildUsage({
         inputTokens: 0,
         outputTokens: currentOutputTokens,
         cacheReadTokens,
@@ -88,12 +87,12 @@ export class CacheSimulator {
     }
 
     const delta = Math.max(0, currentInputTokens - lastCacheCreationTokens);
-    const { inputTokens, cacheCreationTokens } = this.splitDelta(delta);
-    await this.setLastCacheState(sessionKey, {
+    const { inputTokens, cacheCreationTokens } = CacheSimulator.splitDelta(delta);
+    await CacheSimulator.setLastCacheState(sessionKey, {
       lastInputTokens: currentInputTokens,
       lastCacheCreationTokens: lastCacheCreationTokens + cacheCreationTokens,
     });
-    return this.buildUsage({
+    return CacheSimulator.buildUsage({
       inputTokens,
       outputTokens: currentOutputTokens,
       cacheReadTokens: lastCacheCreationTokens,
@@ -102,7 +101,12 @@ export class CacheSimulator {
   }
 
   private static shouldSimulateCache(signals: CacheSignals): boolean {
-    return signals.hasSystemReminder || signals.hasEmptySystemReminder;
+    const isHaiku = signals.modelFamily === "haiku";
+    const toolsMissingOrEmpty = !signals.hasNonEmptyTools;
+    const systemMissingOrEmpty = !signals.hasNonEmptySystem;
+    const isSubAgent = isHaiku && (toolsMissingOrEmpty || systemMissingOrEmpty);
+
+    return !isSubAgent;
   }
 
   private static splitDelta(delta: number): {
@@ -116,7 +120,7 @@ export class CacheSimulator {
       return { inputTokens: 0, cacheCreationTokens: delta };
     }
 
-    const cacheCreationTokens = this.randomInt(MIN_CACHE_CREATION, delta);
+    const cacheCreationTokens = CacheSimulator.randomInt(MIN_CACHE_CREATION, delta);
     const inputTokens = Math.max(0, delta - cacheCreationTokens);
     return { inputTokens, cacheCreationTokens };
   }
@@ -150,8 +154,8 @@ export class CacheSimulator {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const message = messages[i] as Record<string, unknown>;
       if (message?.role !== "user") continue;
-      const textLength = this.countTextLength(message?.content);
-      return this.estimateTokensFromLength(textLength);
+      const textLength = CacheSimulator.countTextLength(message?.content);
+      return CacheSimulator.estimateTokensFromLength(textLength);
     }
 
     return 0;

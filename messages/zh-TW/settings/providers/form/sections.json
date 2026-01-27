@@ -231,6 +231,11 @@
       "desc": "為下游客戶端注入模擬的快取 usage 欄位（不影響本專案計費）",
       "help": "啟用後，回應中會包含 cache_creation_input_tokens 與 cache_read_input_tokens 等欄位，用於下游客戶端計費與展示"
     },
+    "supplementaryPrompt": {
+      "label": "補充提示詞注入",
+      "desc": "向請求中注入自訂指令（如大檔案輸出分塊提示等）",
+      "help": "啟用後，將在請求體的 <system-reminder> 標籤中注入自訂指令。注意：僅對主代理請求生效，子代理請求不注入"
+    },
     "joinClaudePool": {
       "desc": "啟用後，此供應商將與 Claude 類型供應商共同參與負載均衡",
       "help": "僅當存在映射至 claude-* 的規則時可用。當用戶請求 claude-* 模型時，此供應商也會被納入調度。",

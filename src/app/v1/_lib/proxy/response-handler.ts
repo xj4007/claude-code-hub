@@ -1,11 +1,11 @@
 import { ResponseFixer } from "@/app/v1/_lib/proxy/response-fixer";
 import { AsyncTaskManager } from "@/lib/async-task-manager";
-import { CacheSimulator, type SimulatedUsage } from "@/lib/cache/cache-simulator";
 import {
+  type CacheSignals,
   extractCacheSignals,
   resolveCacheSessionKey,
-  type CacheSignals,
 } from "@/lib/cache/cache-signals";
+import { CacheSimulator, type SimulatedUsage } from "@/lib/cache/cache-simulator";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { logger } from "@/lib/logger";
 import { requestCloudPriceTableSync } from "@/lib/price-sync/cloud-price-updater";
@@ -126,7 +126,7 @@ export class ProxyResponseHandler {
       cacheSignals,
     });
     const cacheSessionKey = shouldSimulateCache
-      ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
+      ? (session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage))
       : null;
     let simulatedUsageForOutput: SimulatedUsage | null = null;
 
@@ -677,7 +677,7 @@ export class ProxyResponseHandler {
       cacheSignals,
     });
     const cacheSessionKey = shouldSimulateCache
-      ? session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage)
+      ? (session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage))
       : null;
     const simulationState: CacheSimulationState = {
       decision: shouldSimulateCache ? "pending" : "skip",
@@ -694,8 +694,7 @@ export class ProxyResponseHandler {
     let internalStreamOverride: ReadableStream<Uint8Array> | null = null;
 
     if (shouldSimulateCache) {
-      const cacheSignalsForSim =
-        cacheSignals ?? extractCacheSignals(requestMessage, session);
+      const cacheSignalsForSim = cacheSignals ?? extractCacheSignals(requestMessage, session);
       const [clientSource, internalSource] = processedStream.tee();
       processedStream = clientSource;
       internalStreamOverride = internalSource;
@@ -2655,11 +2654,13 @@ function createClaudeCacheSimulationStream(options: {
   });
 }
 
-function resolveCacheTtlFromUsage(usage: {
-  cache_ttl?: CacheTtlValue;
-  cache_creation_5m_input_tokens?: number;
-  cache_creation_1h_input_tokens?: number;
-} | null): CacheTtlValue | null {
+function resolveCacheTtlFromUsage(
+  usage: {
+    cache_ttl?: CacheTtlValue;
+    cache_creation_5m_input_tokens?: number;
+    cache_creation_1h_input_tokens?: number;
+  } | null
+): CacheTtlValue | null {
   if (!usage) return null;
   if (usage.cache_ttl) return usage.cache_ttl;
 
