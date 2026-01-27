@@ -32,10 +32,7 @@ type RequestOptions = {
   system?: unknown;
 };
 
-function makeRequestWithOptions(
-  text: string,
-  options?: RequestOptions,
-): Record<string, unknown> {
+function makeRequestWithOptions(text: string, options?: RequestOptions): Record<string, unknown> {
   const request: Record<string, unknown> = {
     model: options?.model ?? "claude-sonnet-4-20250212",
     messages: [
@@ -62,9 +59,7 @@ function makeRequestWithOptions(
   return request;
 }
 
-function makeSession(
-  overrides?: Partial<{ needsClaudeDisguise: boolean; model: string }>,
-) {
+function makeSession(overrides?: Partial<{ needsClaudeDisguise: boolean; model: string }>) {
   const model = overrides?.model ?? "claude-sonnet-4-20250212";
   return {
     getOriginalModel: () => model,
@@ -86,15 +81,10 @@ describe("CacheSimulator", () => {
     const { CacheSimulator } = await import("@/lib/cache/cache-simulator");
 
     const request = makeRequest("abcdefgh");
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_1",
-      makeSession(),
-      {
-        input_tokens: 10,
-        output_tokens: 2,
-      },
-    );
+    const result = await CacheSimulator.calculate(request, "user_1", makeSession(), {
+      input_tokens: 10,
+      output_tokens: 2,
+    });
 
     expect(result).not.toBeNull();
     expect(result?.input_tokens).toBe(2);
@@ -115,15 +105,10 @@ describe("CacheSimulator", () => {
       output_tokens: 1,
     });
 
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_2",
-      makeSession(),
-      {
-        input_tokens: 200,
-        output_tokens: 2,
-      },
-    );
+    const result = await CacheSimulator.calculate(request, "user_2", makeSession(), {
+      input_tokens: 200,
+      output_tokens: 2,
+    });
 
     expect(result?.cache_read_input_tokens).toBe(90);
     expect(result?.cache_creation_input_tokens).toBe(50);
@@ -144,15 +129,10 @@ describe("CacheSimulator", () => {
       output_tokens: 1,
     });
 
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_3",
-      makeSession(),
-      {
-        input_tokens: 120,
-        output_tokens: 1,
-      },
-    );
+    const result = await CacheSimulator.calculate(request, "user_3", makeSession(), {
+      input_tokens: 120,
+      output_tokens: 1,
+    });
 
     expect(result?.cache_read_input_tokens).toBe(90);
     expect(result?.cache_creation_input_tokens).toBe(30);
@@ -171,15 +151,10 @@ describe("CacheSimulator", () => {
       output_tokens: 1,
     });
 
-    const result = await CacheSimulator.calculate(
-      request,
-      "user_4",
-      makeSession(),
-      {
-        input_tokens: 30,
-        output_tokens: 1,
-      },
-    );
+    const result = await CacheSimulator.calculate(request, "user_4", makeSession(), {
+      input_tokens: 30,
+      output_tokens: 1,
+    });
 
     expect(result?.input_tokens).toBe(0);
     expect(result?.cache_creation_input_tokens).toBe(3);
@@ -202,7 +177,7 @@ describe("CacheSimulator", () => {
       request,
       "user_5",
       makeSession({ model: "claude-haiku-20250212" }),
-      { input_tokens: 50, output_tokens: 1 },
+      { input_tokens: 50, output_tokens: 1 }
     );
 
     expect(result).toBeNull();
@@ -223,7 +198,7 @@ describe("CacheSimulator", () => {
       request,
       "user_6",
       makeSession({ model: "claude-haiku-20250212" }),
-      { input_tokens: 20, output_tokens: 1 },
+      { input_tokens: 20, output_tokens: 1 }
     );
 
     expect(result).toBeNull();
@@ -245,7 +220,7 @@ describe("CacheSimulator", () => {
       request,
       "user_7",
       makeSession({ model: "claude-haiku-20250212" }),
-      { input_tokens: 20, output_tokens: 1 },
+      { input_tokens: 20, output_tokens: 1 }
     );
 
     expect(result).toBeNull();
@@ -267,7 +242,7 @@ describe("CacheSimulator", () => {
       request,
       "user_8",
       makeSession({ model: "claude-haiku-20250212" }),
-      { input_tokens: 20, output_tokens: 1 },
+      { input_tokens: 20, output_tokens: 1 }
     );
 
     expect(result).not.toBeNull();
@@ -288,7 +263,7 @@ describe("CacheSimulator", () => {
       request,
       "user_9",
       makeSession({ model: "claude-sonnet-4-20250212" }),
-      { input_tokens: 20, output_tokens: 1 },
+      { input_tokens: 20, output_tokens: 1 }
     );
 
     expect(result).not.toBeNull();
