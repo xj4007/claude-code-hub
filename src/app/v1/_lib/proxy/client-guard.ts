@@ -134,9 +134,17 @@ export class ProxyClientGuard {
       if (typeof system === "string") {
         hasClaudeIdentity = checkClaudeIdentity(system);
       } else if (Array.isArray(system) && system.length > 0) {
-        const firstSystem = system[0] as Record<string, unknown>;
-        const text = firstSystem?.text;
-        hasClaudeIdentity = typeof text === "string" && checkClaudeIdentity(text);
+        // Compatible with old and new versions:
+        // - Old version: Claude Code identity in system[0]
+        // - New version: system[0] is billing header, Claude Code identity in system[1]
+        for (let i = 0; i < Math.min(system.length, 2); i++) {
+          const item = system[i] as Record<string, unknown>;
+          const text = item?.text;
+          if (typeof text === "string" && checkClaudeIdentity(text)) {
+            hasClaudeIdentity = true;
+            break;
+          }
+        }
       }
 
       if (!hasClaudeIdentity) {
