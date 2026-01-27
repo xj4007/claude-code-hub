@@ -88,10 +88,14 @@ forcedProviderGroup > key.providerGroup > user.providerGroup > default
 
 **处理顺序**：
 1. **ProxyClientGuard** 在伪装前提取并保存 `session.cacheSignals`
-2. **ProxyForwarder** 依据 `needsClaudeDisguise` 可能注入 `<system-reminder>`
+2. **ProxyForwarder** 依据 `needsClaudeDisguise` 可能注入 `<system-reminder>` 并补齐 system
 3. **ProxyResponseHandler** 优先使用 `session.cacheSignals` 判断是否模拟缓存
 
-**结论**：即使后续将伪装标签改为非空 `<system-reminder>省略</system-reminder>`，模拟缓存判定仍基于伪装前快照，不受影响。
+**判定依据**：
+- **子代理**：model 含 `haiku` 且 (tools 为空/缺失 或 system 为空/缺失)
+- **主进程**：tools 与 system 均为非空数组（且开启 `simulate_cache_enabled` 则模拟缓存）
+
+**结论**：即使后续将伪装标签改为非空 `<system-reminder>省略</system-reminder>`，或补齐 system，模拟缓存判定仍基于伪装前快照，不受影响。
 
 ---
 
@@ -183,7 +187,7 @@ if (provider.providerType === "claude" || provider.providerType === "claude-auth
 
 #### **`src/app/v1/_lib/proxy/response-handler.ts`** ✅ 已修改
 **补充说明**：
-- 模拟缓存判定优先使用 `session.cacheSignals`（伪装前快照），避免注入 `<system-reminder>` 影响判断。
+- 模拟缓存判定优先使用 `session.cacheSignals`（伪装前快照），避免伪装补齐 system/注入标签影响判断。
 
 ---
 

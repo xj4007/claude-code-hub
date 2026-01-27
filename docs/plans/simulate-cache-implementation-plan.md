@@ -1,7 +1,7 @@
 # 模拟缓存功能实施计划
 
 > **创建时间**: 2026-01-21
-> **更新时间**: 2026-01-22 (v3.2 - 去除 sess_mko 规则 + 移除资格判定)
+> **更新时间**: 2026-01-26 (v4.3 - haiku + tools/system 判定)
 > **技术方案**: 方案 A（进程内 CacheSimulator + Redis 前缀状态管理）
 > **预计工作量**: 4-5 天
 
@@ -13,8 +13,8 @@
 - 在 Claude Code Hub 中实现 Claude API 兼容的"模拟缓存" usage 字段注入。
 - 在不影响当前项目计费的前提下，确保下游客户端计费与展示使用完整的缓存字段。
 - 支持主进程/子代理识别（以请求体特征为主，降低会话推断复杂度）：
-  - **子代理**：messages 中完全没有 `<system-reminder>`（CLI 与非 CLI 一致）
-  - **主进程**：messages 中包含 `<system-reminder>`（空或非空都视为存在）
+  - **子代理**：model 含 `haiku` 且 (tools 为空/缺失 或 system 为空/缺失)
+  - **主进程**：tools 与 system 均为非空数组
 
 ### 技术方案选择
 - 采用方案 A：进程内 CacheSimulator + Redis 前缀状态管理。
@@ -22,20 +22,20 @@
 - Redis 存储：
   - 会话级缓存状态（用于 Cache Read 累积增长）
 - 进程内保存：
-  - cacheSignals（伪装前请求特征，避免 `<system-reminder>` 注入造成误判）
+  - cacheSignals（伪装前请求特征，避免伪装补齐 system/标签造成误判）
 
 ### 关键约束条件
 - 模拟缓存不参与本项目计费计算（成本基于真实 usage）。
 - 数据库存储模拟缓存字段（用于日志展示和下游客户端计费）。
-- 主/子代理判定基于请求体特征，且需在伪装前完成（避免 `<system-reminder>` 注入后误判）。
+- 主/子代理判定基于请求体特征，且需在伪装前完成（避免补齐 system/标签后误判）。
 - 缓存会话键优先使用 `metadata.user_id`（若缺失则回退 sessionId）。
 - 假设同一会话内 `metadata.user_id` 稳定一致。
 - 保持 Claude usage 字段结构完整性（非流式 + SSE）。
 
 ### 真实日志验证依据
 基于用户提供的真实消费日志分析：
-- **主进程特征**：messages 中含 `<system-reminder>`（空或非空）
-- **子代理特征**：messages 中完全无 `<system-reminder>`，且这些请求无缓存
+- **主进程特征**：tools 与 system 均为非空数组（且 `simulate_cache_enabled=true` 时才模拟）
+- **子代理特征**：model 含 `haiku` 且 (tools 为空/缺失 或 system 为空/缺失)
 - **Cache Read 累积**：同一 Session 的 Cache Read 持续增长
 
 ---
@@ -232,7 +232,7 @@ export class CacheSimulator {
   }
 
   /**
-   * 缓存判定（⭐ 核心方法 v3.2）
+   * 缓存判定（⭐ 核心方法 v4.3）
    *
    * 规则：
    * 1. 子代理特征命中 → 不缓存
@@ -242,10 +242,12 @@ export class CacheSimulator {
     request: MessageRequest,
     signals: CacheSignals
   ): boolean {
-    // 仅依赖 messages 是否包含 <system-reminder>
-    // 缺失标签 => 子代理（不模拟）
-    // 存在标签（空/非空） => 主进程（模拟）
-    return signals.hasSystemReminder || signals.hasEmptySystemReminder;
+    const isHaiku = signals.modelFamily === "haiku";
+    const toolsMissingOrEmpty = !signals.hasNonEmptyTools;
+    const systemMissingOrEmpty = !signals.hasNonEmptySystem;
+    const isSubAgent = isHaiku && (toolsMissingOrEmpty || systemMissingOrEmpty);
+
+    return !isSubAgent;
   }
 
   /**
@@ -428,11 +430,11 @@ export class CacheSimulator {
 
 **默认 TTL**: 5 分钟（仅生成 5m 字段，1h 默认为 0）
 
-### 子代理识别规则（⚠️ 关键修正 v4.2）
+### 子代理识别规则（⚠️ 关键修正 v4.3）
 
 **规则**：
-- messages 中完全没有 `<system-reminder>` → 子代理（不模拟）
-- messages 中包含 `<system-reminder>`（空或非空）→ 主进程（模拟）
+- model 含 `haiku` 且 (tools 为空/缺失 或 system 为空/缺失) → 子代理（不模拟）
+- tools 与 system 均为非空数组 → 主进程（模拟）
 
 ```typescript
 /**
@@ -443,13 +445,16 @@ export function isSubAgentRequest(
   session: ProxySession
 ): boolean {
   const signals = extractCacheSignals(request, session);
-  return !signals.hasSystemReminder && !signals.hasEmptySystemReminder;
+  const isHaiku = signals.modelFamily === "haiku";
+  const toolsMissingOrEmpty = !signals.hasNonEmptyTools;
+  const systemMissingOrEmpty = !signals.hasNonEmptySystem;
+  return isHaiku && (toolsMissingOrEmpty || systemMissingOrEmpty);
 }
 ```
 
 ### 主/子代理模型识别
 
-说明：当前模拟缓存判定不再依赖 modelFamily；以下模型族工具仅作为通用能力保留。
+说明：模拟缓存判定使用 modelFamily 识别 haiku；以下模型族工具用于统一模型族判断。
 
 在 `src/lib/special-attributes/index.ts` 增加：
 
@@ -458,21 +463,21 @@ export function isSubAgentRequest(
  * 判断是否为 Haiku 模型
  */
 export function isHaikuModel(model: string): boolean {
-  return model.startsWith("claude-haiku-");
+  return model.toLowerCase().includes("haiku");
 }
 
 /**
  * 判断是否为 Sonnet 模型
  */
 export function isSonnetModel(model: string): boolean {
-  return model.startsWith("claude-sonnet-");
+  return model.toLowerCase().includes("sonnet");
 }
 
 /**
  * 判断是否为 Opus 模型
  */
 export function isOpusModel(model: string): boolean {
-  return model.startsWith("claude-opus-");
+  return model.toLowerCase().includes("opus");
 }
 
 /**
@@ -490,22 +495,25 @@ export function getModelFamily(model: string): "haiku" | "sonnet" | "opus" | "ot
 
 ### 请求特征提取与存储（替代会话级主模型锁定）
 
-目标：在 `ensureClaudeRequestDefaults()` 伪装前提取特征，避免 `<system-reminder>` 注入导致误判。
+目标：在 `ensureClaudeRequestDefaults()` 伪装前提取特征，避免补齐 system/标签导致误判。
 同时在 ResponseHandler 中优先使用 `session.cacheSignals`，确保判断基于伪装前请求体。
 
 落点建议：
 - `src/app/v1/_lib/proxy/session.ts` 或 `src/app/v1/_lib/proxy/client-guard.ts`（解析原始请求）
 - 新增轻量工具：`src/lib/cache/cache-signals.ts`（仅解析文本块）
 
-执行时机建议：Session ID 已确定且 Forwarder 未执行伪装之前（避免 `<system-reminder>` 被注入）。
+执行时机建议：Session ID 已确定且 Forwarder 未执行伪装之前（避免补齐 system/标签）。
 
 需要新增字段：
 - `ProxySession.cacheSignals?: CacheSignals`
 
 ```typescript
 export type CacheSignals = {
-  hasSystemReminder: boolean;
-  hasEmptySystemReminder: boolean;
+  modelFamily: "haiku" | "sonnet" | "opus" | "other";
+  hasTools: boolean;
+  hasNonEmptyTools: boolean;
+  hasSystem: boolean;
+  hasNonEmptySystem: boolean;
   isDisguised: boolean;
 };
 
@@ -514,33 +522,31 @@ export function extractCacheSignals(
   session: ProxySession
 ): CacheSignals {
   const model = session.getOriginalModel() || request.model || "";
+  const modelFamily = getModelFamily(model);
   const isDisguised = session.needsClaudeDisguise === true;
 
   return {
-    ...analyzeSystemReminder(request),
+    ...analyzeToolsAndSystem(request),
+    modelFamily,
     isDisguised,
   };
 }
 
-function containsSystemReminder(request: MessageRequest): boolean {
-  const messages = request.messages;
-  if (!Array.isArray(messages) || messages.length === 0) return false;
-
-  const first = messages[0] as Record<string, unknown>;
-  const content = Array.isArray(first.content) ? first.content : [first.content];
-
-  return content.some((block) => {
-    if (typeof block === "string") {
-      return block.includes("<system-reminder>");
-    }
-    if (!block || typeof block !== "object") return false;
-    const text = (block as Record<string, unknown>).text;
-    return typeof text === "string" && text.includes("<system-reminder>");
-  });
+function analyzeToolsAndSystem(request: MessageRequest): {
+  hasTools: boolean;
+  hasNonEmptyTools: boolean;
+  hasSystem: boolean;
+  hasNonEmptySystem: boolean;
+} {
+  const hasTools = Object.prototype.hasOwnProperty.call(request, "tools");
+  const hasNonEmptyTools = Array.isArray(request.tools) && request.tools.length > 0;
+  const hasSystem = Object.prototype.hasOwnProperty.call(request, "system");
+  const hasNonEmptySystem = Array.isArray(request.system) && request.system.length > 0;
+  return { hasTools, hasNonEmptyTools, hasSystem, hasNonEmptySystem };
 }
 
 // 注意：实际 CacheSignals 可能包含更多字段，但模拟缓存判定仅依赖
-// hasSystemReminder / hasEmptySystemReminder。
+// modelFamily / hasNonEmptyTools / hasNonEmptySystem。
 
 // 在 ProxySession 创建后（伪装前）记录信号
 session.cacheSignals = extractCacheSignals(session.request.message, session);
@@ -608,7 +614,7 @@ export function resolveCacheSessionKey(
 ## 8. 响应处理注入（⚠️ 关键修正）
 
 **涉及文件**：
-- `src/lib/cache/cache-simulator.ts`：判定仅依据 `<system-reminder>` 是否出现
+- `src/lib/cache/cache-simulator.ts`：判定依据 `haiku + tools/system` 特征
 - `src/app/v1/_lib/proxy/response-handler.ts`：优先使用 `session.cacheSignals`（伪装前快照）
 
 ### 日志记录策略
@@ -618,7 +624,7 @@ export function resolveCacheSessionKey(
 - **成本计算**：真实 usage（不受模拟影响）
 
 **新增调试日志（建议 debug 级别，可采样）**：
-- `CacheSim: signals`：记录 `hasSystemReminder/hasEmptySystemReminder/isDisguised`
+- `CacheSim: signals`：记录 `modelFamily/hasNonEmptyTools/hasNonEmptySystem/isDisguised`
 - `CacheSim: decision`：记录 `shouldSimulateCache` 结果与原因（sub-agent / normal）
 - `CacheSim: usage`：记录 `realUsage` vs `simulatedUsage` 的差异摘要
 - `CacheSim: response_inject`：记录最终写入响应与 DB 的 usage 字段
@@ -728,17 +734,17 @@ export interface Usage {
 - 增量请求（cache_read>0, cache_creation>0）
 - Session 隔离
 - TTL 过期
-- **⭐ 子代理不模拟**（messages 缺失 `<system-reminder>`）
-- **⭐ 主进程模拟**（messages 含非空 `<system-reminder>`）
-- **⭐ 主进程模拟**（messages 含空 `<system-reminder></system-reminder>`）
+- **⭐ 子代理不模拟**（haiku + tools 为空/缺失）
+- **⭐ 子代理不模拟**（haiku + system 为空/缺失）
+- **⭐ 主进程模拟**（tools 与 system 均为非空数组）
 - **⭐ 伪装注入不影响判断**（使用伪装前 cacheSignals）
 
 **缓存判定**:
 - `shouldSimulateCache()` 子代理规则独立测试
-- `extractCacheSignals()` / `containsSystemReminder()` / `containsTitlePrompt()` 覆盖多种结构
+- `extractCacheSignals()` / `analyzeToolsAndSystem()` / `containsTitlePrompt()` 覆盖多种结构
 
 **模型识别**:
-- haiku/sonnet/opus 前缀匹配（模型族工具仍可复用，但不参与子代理判定）
+- haiku/sonnet/opus 关键字匹配（haiku 参与子代理判定）
 - 模型重定向后仍识别主模型族（使用 `session.getOriginalModel()`）
 
 ### 集成测试
@@ -754,10 +760,10 @@ export interface Usage {
 - cost_usd 基于真实 usage
 
 **主/子代理场景**（⭐ 关键）:
-- **场景 1**: messages 无 `<system-reminder>` → 不模拟缓存
-- **场景 2**: messages 含 `<system-reminder>`（空） → 模拟缓存
-- **场景 3**: messages 含 `<system-reminder>`（非空） → 模拟缓存
-- **场景 4**: needsClaudeDisguise=true 且 Forwarder 注入标签 → 仍使用伪装前 cacheSignals 判定
+- **场景 1**: haiku + tools 为空/缺失 → 不模拟缓存
+- **场景 2**: haiku + system 为空/缺失 → 不模拟缓存
+- **场景 3**: tools 与 system 均为非空数组 → 模拟缓存
+- **场景 4**: needsClaudeDisguise=true 且 Forwarder 补齐 system/注入标签 → 仍使用伪装前 cacheSignals 判定
 
 **缓存判定场景**（⭐ 简化）:
 - **场景 5**: 子代理特征命中 → 不模拟缓存
@@ -867,7 +873,7 @@ export interface Usage {
 
 ---
 
-**文档版本**: 3.2 (去除 sess_mko 规则 + 移除资格判定)
+**文档版本**: 4.3 (haiku + tools/system 判定)
 **作者**: Claude (Codex 协助)
 **审核状态**: ✅ 多模型分析通过（评分 90/100 → 预期 98/100）
 **实施状态**: 待用户批准后开始实施
@@ -875,6 +881,12 @@ export interface Usage {
 ---
 
 ## 修订历史
+
+### v4.3 (2026-01-26) - haiku + tools/system 判定
+**关键更新**：
+1. 子代理判定改为 `haiku + (tools 为空/缺失 或 system 为空/缺失)`
+2. 主进程判定改为 tools 与 system 均为非空数组
+3. cacheSignals 记录 tools/system/model，伪装前快照仍为唯一判定来源
 
 ### v4.2 (2026-01-24) - 子代理判定简化 + 伪装顺序固定
 **关键更新**：

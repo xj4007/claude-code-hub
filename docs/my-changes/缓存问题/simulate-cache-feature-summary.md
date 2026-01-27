@@ -1,7 +1,7 @@
 # 模拟缓存功能总结文档
 
 > **创建时间**: 2026-01-24
-> **功能版本**: v4.1
+> **功能版本**: v4.3
 > **开发依据**: `docs/plans/simulate-cache-implementation-plan-simple.md`
 
 ---
@@ -13,7 +13,8 @@
 
 ### 关键特性
 - ✅ **计费隔离**：模拟缓存不影响本项目的真实成本计算
-- ✅ **智能识别**：以 `<system-reminder>` 是否存在为唯一判断依据，子代理不模拟缓存
+- ✅ **智能识别**：仅当模型包含 `haiku` 且 (tools 为空/缺失 或 system 为空/缺失) 视为子代理
+- ✅ **主进程判定**：tools 与 system 均为非空数组时才模拟缓存
 - ✅ **会话缓存**：基于 Redis 存储上一次请求的 token 状态
 - ✅ **增量拆分**：根据上游返回的 `usage.input_tokens` 进行智能拆分
 - ✅ **完整字段**：生成符合 Claude API 规范的完整缓存字段结构
@@ -45,7 +46,7 @@ src/types/
 客户端请求
     ↓
 [1] 请求特征提取 (cache-signals.ts)
-    └─ 检测 <system-reminder> 标签
+    └─ 检测 model/tools/system 特征
     ↓
 [2] 上游 API 调用
     ↓
@@ -75,13 +76,15 @@ src/types/
 ### 0. 本次关键修改（判定逻辑与顺序）
 
 **修改文件**：
-- `src/lib/cache/cache-simulator.ts`：仅以 `<system-reminder>` 是否出现作为判定依据（缺失则不模拟）
+- `src/lib/cache/cache-signals.ts`：补充 tools/system/model 信号（非空数组判定 + haiku 识别）
+- `src/lib/cache/cache-simulator.ts`：以 `haiku + (tools 为空/缺失 或 system 为空/缺失)` 判定子代理
 - `src/app/v1/_lib/proxy/response-handler.ts`：优先使用 `session.cacheSignals`（伪装前快照）
-- `tests/unit/lib/cache/cache-simulator.test.ts`：新增缺失标签不模拟、空标签仍模拟的用例
+- `tests/unit/lib/cache/cache-simulator.test.ts`：新增 haiku + tools/system 组合用例
+- `tests/unit/lib/cache/cache-signals.test.ts`：补充 tools/system 识别用例
 
 **处理顺序**：
 1. **ProxyClientGuard**（伪装前）提取 `cacheSignals` 并保存到 `session.cacheSignals`
-2. **ProxyForwarder** 按 `needsClaudeDisguise` 可能注入 `<system-reminder>`
+2. **ProxyForwarder** 按 `needsClaudeDisguise` 可能注入 `<system-reminder>` 并补齐 system
 3. **ProxyResponseHandler** 使用 `session.cacheSignals` 进行模拟缓存判定（避免注入影响）
 4. **CacheSimulator** 根据判定结果执行模拟或跳过
 
@@ -104,16 +107,19 @@ ALTER TABLE providers
 
 | 特征 | 说明 | 用途 |
 |------|------|------|
-| `hasSystemReminder` | 包含非空 `<system-reminder>` 标签 | 主代理标识 |
-| `hasEmptySystemReminder` | 包含空 `<system-reminder>` 标签 | 主代理标识（只要存在即为主进程） |
+| `modelFamily` | 模型族（haiku/sonnet/opus/other） | 子代理判定（仅 haiku 进入判断） |
+| `hasNonEmptyTools` | tools 为非空数组 | 主进程条件之一 |
+| `hasNonEmptySystem` | system 为非空数组 | 主进程条件之一 |
 | `isDisguised` | 是否需要伪装为 CLI | 顺序说明用（不参与判定） |
 
-> 说明：cache-signals 仍可能包含其他信号（标题提示词、assistant brace、modelFamily），但当前模拟缓存判定不再使用。
+> 说明：cache-signals 仍包含 `<system-reminder>`、标题提示词、assistant brace 等信号，但当前模拟缓存判定不再使用。
 
 **子代理判定规则**：
 ```typescript
-// 仅缺失 <system-reminder> 才视为子代理（不模拟缓存）
-const isSubAgent = !signals.hasSystemReminder && !signals.hasEmptySystemReminder;
+const isHaiku = signals.modelFamily === "haiku";
+const toolsMissingOrEmpty = !signals.hasNonEmptyTools;
+const systemMissingOrEmpty = !signals.hasNonEmptySystem;
+const isSubAgent = isHaiku && (toolsMissingOrEmpty || systemMissingOrEmpty);
 ```
 
 **会话键生成**：
@@ -506,17 +512,12 @@ const transformedStream = originalStream.pipeThrough(
 
 ### 示例 2：子代理请求（不模拟）
 
-**子代理请求（messages 缺失 `<system-reminder>`）**：
+**子代理请求（haiku + tools 空数组 + system 缺失）**：
 ```json
 // 客户端请求
 {
-  "model": "claude-haiku-4-20250116",
-  "system": [
-    {
-      "type": "text",
-      "text": "You are Claude Code, Anthropic's official CLI for Claude."
-    }
-  ],
+  "model": "claude-haiku-4-5-20251001",
+  "tools": [],
   "messages": [
     {
       "role": "user",
@@ -535,9 +536,9 @@ const transformedStream = originalStream.pipeThrough(
 
 // 特征识别
 {
-  "hasSystemReminder": false,
-  "hasEmptySystemReminder": false,
-  "isDisguised": false
+  "modelFamily": "haiku",
+  "hasNonEmptyTools": false,
+  "hasNonEmptySystem": false
 }
 
 // 判定：子代理，不模拟缓存
@@ -612,6 +613,7 @@ const transformedStream = originalStream.pipeThrough(
 **方案**：
 - 仅使用 `metadata.user_id` 作为会话键
 - 无 `user_id` 时不模拟缓存（返回 null）
+- 无 `user_id` 时不模拟缓存（返回 null）
 
 ### 3. 为什么子代理不模拟缓存？
 **原因**：
@@ -620,7 +622,7 @@ const transformedStream = originalStream.pipeThrough(
 - 保持上游 usage 原样，避免混淆
 
 **识别规则**：
-- messages 中完全没有 `<system-reminder>`
+- model 包含 `haiku` 且 (tools 为空/缺失 或 system 为空/缺失)
 
 ### 4. 为什么压缩场景特殊处理？
 **原因**：
@@ -647,8 +649,8 @@ const transformedStream = originalStream.pipeThrough(
 | 压缩场景 | current < last 时特殊处理 |
 | 会话隔离 | 不同 sessionKey 不互串 |
 | Redis 失败 | 降级为不模拟（返回 null） |
-| 子代理识别 | messages 缺失 `<system-reminder>` 不模拟 |
-| 主进程识别 | `<system-reminder></system-reminder>` 仍模拟 |
+| 子代理识别 | haiku + (tools 为空/缺失 或 system 为空/缺失) 不模拟 |
+| 主进程识别 | tools 与 system 均为非空数组时模拟 |
 
 ### 集成测试
 
@@ -684,9 +686,9 @@ const transformedStream = originalStream.pipeThrough(
 - 符合 Claude 5m 缓存语义
 
 ### 5. 伪装请求
-- 伪装请求（`needsClaudeDisguise=true`）仍使用 `<system-reminder>` 判定
-- 判定基于伪装前 `cacheSignals` 快照，避免注入后误判为主代理
-- 若将伪装标签改为非空内容，也不会影响判定结果
+- 伪装请求（`needsClaudeDisguise=true`）仍使用 `model/tools/system` 判定
+- 判定基于伪装前 `cacheSignals` 快照，避免注入 system/标签后误判
+- 即使伪装标签改为非空内容，也不会影响判定结果
 
 ---
 
@@ -723,7 +725,7 @@ const transformedStream = originalStream.pipeThrough(
 1. **首次请求**：估算最后 user 消息 → 剩余归入 cache_creation
 2. **增量请求**：delta 拆分 → cache_read 使用上次 cache_creation
 3. **压缩场景**：10% cache_creation + 90% cache_read
-4. **子代理识别**：messages 缺失 `<system-reminder>` → 不模拟缓存
+4. **子代理识别**：haiku + (tools 为空/缺失 或 system 为空/缺失) → 不模拟缓存
 
 ### Redis 存储策略
 - Key 格式：`cache:sim:last_input:{user_id}`
@@ -738,4 +740,4 @@ const transformedStream = originalStream.pipeThrough(
 ---
 
 **文档维护者**: Claude Code Hub Team
-**最后更新**: 2026-01-24
+**最后更新**: 2026-01-26
