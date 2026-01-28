@@ -193,6 +193,12 @@ function ProviderFormContent({
           website_url: state.basic.websiteUrl?.trim() || null,
           provider_type: state.routing.providerType,
           preserve_client_ip: state.routing.preserveClientIp,
+          use_unified_client_id: state.routing.useUnifiedClientId,
+          unified_client_id: state.routing.useUnifiedClientId
+            ? (state.routing.unifiedClientId.trim() || null)
+            : null,
+          simulate_cache_enabled: state.routing.simulateCacheEnabled,
+          supplementary_prompt_enabled: state.routing.supplementaryPromptEnabled,
           model_redirects: state.routing.modelRedirects,
           allowed_models:
             state.routing.allowedModels.length > 0 ? state.routing.allowedModels : null,

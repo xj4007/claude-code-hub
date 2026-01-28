@@ -44,6 +44,10 @@ export function createInitialState(
             .filter(Boolean)
         : [],
       preserveClientIp: sourceProvider?.preserveClientIp ?? false,
+      useUnifiedClientId: sourceProvider?.useUnifiedClientId ?? false,
+      unifiedClientId: sourceProvider?.unifiedClientId ?? "",
+      simulateCacheEnabled: sourceProvider?.simulateCacheEnabled ?? false,
+      supplementaryPromptEnabled: sourceProvider?.supplementaryPromptEnabled ?? false,
       modelRedirects: sourceProvider?.modelRedirects ?? {},
       allowedModels: sourceProvider?.allowedModels ?? [],
       joinClaudePool: sourceProvider?.joinClaudePool ?? false,
@@ -132,6 +136,14 @@ export function providerFormReducer(
       return { ...state, routing: { ...state.routing, groupTag: action.payload } };
     case "SET_PRESERVE_CLIENT_IP":
       return { ...state, routing: { ...state.routing, preserveClientIp: action.payload } };
+    case "SET_USE_UNIFIED_CLIENT_ID":
+      return { ...state, routing: { ...state.routing, useUnifiedClientId: action.payload } };
+    case "SET_UNIFIED_CLIENT_ID":
+      return { ...state, routing: { ...state.routing, unifiedClientId: action.payload } };
+    case "SET_SIMULATE_CACHE_ENABLED":
+      return { ...state, routing: { ...state.routing, simulateCacheEnabled: action.payload } };
+    case "SET_SUPPLEMENTARY_PROMPT_ENABLED":
+      return { ...state, routing: { ...state.routing, supplementaryPromptEnabled: action.payload } };
     case "SET_MODEL_REDIRECTS":
       return { ...state, routing: { ...state.routing, modelRedirects: action.payload } };
     case "SET_ALLOWED_MODELS":

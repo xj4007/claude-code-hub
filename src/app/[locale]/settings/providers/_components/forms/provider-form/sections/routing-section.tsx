@@ -5,6 +5,7 @@ import { Info, Layers, Route, Scale, Settings, Timer, Users } from "lucide-react
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -67,6 +68,16 @@ export function RoutingSection() {
   );
 
   const providerTypes: ProviderType[] = ["claude", "codex", "gemini", "openai-compatible"];
+  const isClaudeProvider =
+    state.routing.providerType === "claude" || state.routing.providerType === "claude-auth";
+
+  const generateUnifiedClientId = () => {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return Array.from(array)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
 
   return (
     <TooltipProvider>
@@ -321,6 +332,92 @@ export function RoutingSection() {
                 disabled={state.ui.isPending}
               />
             </ToggleRow>
+
+            {isClaudeProvider && (
+              <div className="space-y-4">
+                <ToggleRow
+                  label={t("sections.routing.unifiedClientId.label")}
+                  description={t("sections.routing.unifiedClientId.desc")}
+                  icon={Users}
+                  iconColor="text-blue-500"
+                >
+                  <Switch
+                    id={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
+                    checked={state.routing.useUnifiedClientId}
+                    onCheckedChange={(checked) => {
+                      dispatch({ type: "SET_USE_UNIFIED_CLIENT_ID", payload: checked });
+                      if (checked && !state.routing.unifiedClientId) {
+                        dispatch({
+                          type: "SET_UNIFIED_CLIENT_ID",
+                          payload: generateUnifiedClientId(),
+                        });
+                      }
+                    }}
+                    disabled={state.ui.isPending}
+                  />
+                </ToggleRow>
+
+                {state.routing.useUnifiedClientId && (
+                  <div className="rounded-lg border border-border/60 bg-muted/40 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {t("sections.routing.unifiedClientId.idLabel")}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          dispatch({
+                            type: "SET_UNIFIED_CLIENT_ID",
+                            payload: generateUnifiedClientId(),
+                          })
+                        }
+                        disabled={state.ui.isPending}
+                      >
+                        {t("sections.routing.unifiedClientId.regenerate")}
+                      </Button>
+                    </div>
+                    <code className="block w-full select-all break-all rounded bg-background px-3 py-2 font-mono text-xs text-foreground">
+                      {state.routing.unifiedClientId}
+                    </code>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {t("sections.routing.unifiedClientId.help")}
+                    </p>
+                  </div>
+                )}
+
+                <ToggleRow
+                  label={t("sections.routing.simulateCache.label")}
+                  description={t("sections.routing.simulateCache.desc")}
+                  icon={Settings}
+                >
+                  <Switch
+                    id={isEdit ? "edit-simulate-cache" : "simulate-cache"}
+                    checked={state.routing.simulateCacheEnabled}
+                    onCheckedChange={(checked) =>
+                      dispatch({ type: "SET_SIMULATE_CACHE_ENABLED", payload: checked })
+                    }
+                    disabled={state.ui.isPending}
+                  />
+                </ToggleRow>
+
+                <ToggleRow
+                  label={t("sections.routing.supplementaryPrompt.label")}
+                  description={t("sections.routing.supplementaryPrompt.desc")}
+                  icon={Settings}
+                >
+                  <Switch
+                    id={isEdit ? "edit-supplementary-prompt" : "supplementary-prompt"}
+                    checked={state.routing.supplementaryPromptEnabled}
+                    onCheckedChange={(checked) =>
+                      dispatch({ type: "SET_SUPPLEMENTARY_PROMPT_ENABLED", payload: checked })
+                    }
+                    disabled={state.ui.isPending}
+                  />
+                </ToggleRow>
+              </div>
+            )}
 
             {/* Cache TTL */}
             <SmartInputWrapper

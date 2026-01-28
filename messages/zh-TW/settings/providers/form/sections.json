@@ -248,6 +248,13 @@
         "inherit": "跟隨客戶端"
       }
     },
+    "unifiedClientId": {
+      "label": "統一用戶端識別",
+      "desc": "啟用後，將使用固定的用戶端識別向上游送出請求（僅 Claude / Claude-Auth 供應商生效）。",
+      "idLabel": "用戶端 ID",
+      "regenerate": "重新產生",
+      "help": "ID 為 64 位十六進位字串，建議保留自動產生的值，避免在不同實例間重複使用。"
+    },
     "simulateCache": {
       "label": "模擬快取",
       "desc": "為下游客戶端注入模擬的快取 usage 欄位（不影響本專案計費）",

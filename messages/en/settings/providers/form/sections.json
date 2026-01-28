@@ -247,6 +247,13 @@
         "inherit": "Inherit (follow client request)"
       }
     },
+    "unifiedClientId": {
+      "label": "Unified Client ID",
+      "desc": "Use a fixed client identifier for upstream requests (Claude / Claude-Auth providers only).",
+      "idLabel": "Client ID",
+      "regenerate": "Regenerate",
+      "help": "The ID is a 64-character hex string. Keep the auto-generated value and avoid reusing it across instances."
+    },
     "simulateCache": {
       "label": "Simulate cache",
       "desc": "Inject simulated cache usage fields for downstream clients (does not affect billing here).",

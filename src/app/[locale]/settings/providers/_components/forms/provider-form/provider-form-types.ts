@@ -34,6 +34,10 @@ export interface RoutingState {
   providerType: ProviderType;
   groupTag: string[];
   preserveClientIp: boolean;
+  useUnifiedClientId: boolean;
+  unifiedClientId: string;
+  simulateCacheEnabled: boolean;
+  supplementaryPromptEnabled: boolean;
   modelRedirects: Record<string, string>;
   allowedModels: string[];
   joinClaudePool: boolean;
@@ -108,6 +112,10 @@ export type ProviderFormAction =
   | { type: "SET_PROVIDER_TYPE"; payload: ProviderType }
   | { type: "SET_GROUP_TAG"; payload: string[] }
   | { type: "SET_PRESERVE_CLIENT_IP"; payload: boolean }
+  | { type: "SET_USE_UNIFIED_CLIENT_ID"; payload: boolean }
+  | { type: "SET_UNIFIED_CLIENT_ID"; payload: string }
+  | { type: "SET_SIMULATE_CACHE_ENABLED"; payload: boolean }
+  | { type: "SET_SUPPLEMENTARY_PROMPT_ENABLED"; payload: boolean }
   | { type: "SET_MODEL_REDIRECTS"; payload: Record<string, string> }
   | { type: "SET_ALLOWED_MODELS"; payload: string[] }
   | { type: "SET_JOIN_CLAUDE_POOL"; payload: boolean }
