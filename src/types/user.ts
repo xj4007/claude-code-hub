@@ -100,12 +100,17 @@ export interface UserKeyDisplay {
   status: "enabled" | "disabled";
   todayUsage: number; // 今日消耗金额（美元）
   todayCallCount: number; // 今日调用次数
+  todayTokens: number; // 今日消耗Token数
   lastUsedAt: Date | null; // 最后使用时间
   lastProviderName: string | null; // 最后调用的供应商名称
   modelStats: Array<{
     model: string;
     callCount: number;
     totalCost: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
   }>; // 各模型统计（当天）
   createdAt: Date; // 创建时间
   createdAtFormatted: string; // 格式化后的具体时间
@@ -167,6 +172,8 @@ export interface KeyDialogUserContext {
   limitMonthlyUsd?: number;
   limitTotalUsd?: number | null;
   limitConcurrentSessions?: number;
+  allowedClients?: string[];
+  allowedModels?: string[];
 }
 
 /**

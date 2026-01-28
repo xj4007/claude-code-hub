@@ -4,6 +4,7 @@
   "delete": "Delete",
   "confirm": "Confirm",
   "edit": "Edit",
+  "status": "Status",
   "create": "Create",
   "close": "Close",
   "back": "Back",
@@ -48,5 +49,15 @@
   "theme": "Theme",
   "light": "Light",
   "dark": "Dark",
-  "system": "System"
+  "system": "System",
+  "relativeTimeShort": {
+    "now": "now",
+    "secondsAgo": "{count}s ago",
+    "minutesAgo": "{count}m ago",
+    "hoursAgo": "{count}h ago",
+    "daysAgo": "{count}d ago",
+    "weeksAgo": "{count}w ago",
+    "monthsAgo": "{count}mo ago",
+    "yearsAgo": "{count}y ago"
+  }
 }

@@ -78,7 +78,7 @@
     "inheritedFromUser": "Inherited from User"
   },
   "stats": {
-    "title": "Statistics Summary",
+    "title": "Key Statistics",
     "autoRefresh": "Auto refresh every {seconds}s",
     "totalRequests": "Total Requests",
     "totalCost": "Total Cost",
@@ -92,7 +92,22 @@
     "keyStats": "Key",
     "userStats": "User",
     "noData": "No data for selected period",
-    "unknownModel": "Unknown"
+    "unknownModel": "Unknown",
+    "modal": {
+      "requests": "Requests",
+      "tokens": "tokens",
+      "totalTokens": "Total Tokens",
+      "cost": "Cost",
+      "inputTokens": "Input Tokens",
+      "outputTokens": "Output Tokens",
+      "cacheWrite": "Cache Write",
+      "cacheRead": "Cache Read",
+      "cacheHitRate": "Cache Hit Rate",
+      "cacheTokens": "Cache Tokens",
+      "performanceHigh": "High",
+      "performanceMedium": "Medium",
+      "performanceLow": "Low"
+    }
   },
   "accessRestrictions": {
     "title": "Access Restrictions",
@@ -101,7 +116,7 @@
     "noRestrictions": "No restrictions"
   },
   "quotaCollapsible": {
-    "title": "Quota Usage",
+    "title": "User Quota Usage",
     "daily": "Daily",
     "monthly": "Monthly",
     "total": "Total"

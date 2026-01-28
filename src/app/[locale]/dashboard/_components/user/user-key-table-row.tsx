@@ -1,9 +1,18 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, SquarePen } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  CircleOff,
+  Clock,
+  Plus,
+  SquarePen,
+  XCircle,
+} from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { removeKey } from "@/actions/keys";
 import { toggleUserEnabled } from "@/actions/users";
@@ -97,6 +106,16 @@ function getExpiryStatus(
   return { label: "active", variant: "default" };
 }
 
+// Calculate days left until expiry (for user mode badge)
+function getDaysLeft(expiresAt: Date | null | undefined): number | null {
+  if (!expiresAt) return null;
+  const now = Date.now();
+  const expTs = expiresAt.getTime();
+  if (!Number.isFinite(expTs) || expTs <= now) return null;
+  const msLeft = expTs - now;
+  return Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+}
+
 function normalizeLimitValue(value: unknown): number | null {
   const raw = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isFinite(raw) || raw <= 0) return null;
@@ -166,6 +185,10 @@ export function UserKeyTableRow({
   // 计算用户过期状态
   const expiryStatus = getExpiryStatus(localIsEnabled, localExpiresAt ?? null);
 
+  // 计算剩余天数（仅用于 user mode 显示）
+  const daysLeft = useMemo(() => getDaysLeft(localExpiresAt ?? null), [localExpiresAt]);
+  const showExpiryBadge = !isAdmin && daysLeft !== null && daysLeft <= 7;
+
   // 处理 Provider Group：拆分成数组
   const userGroups = splitGroups(user.providerGroup);
   const visibleGroups = userGroups.slice(0, MAX_VISIBLE_GROUPS);
@@ -209,6 +232,8 @@ export function UserKeyTableRow({
         return;
       }
       toast.success(checked ? tUserStatus("userEnabled") : tUserStatus("userDisabled"));
+      // 使 React Query 缓存失效，确保数据刷新
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       // 刷新服务端数据
       router.refresh();
     } catch (error) {
@@ -267,30 +292,71 @@ export function UserKeyTableRow({
             <span className="sr-only">
               {isExpanded ? translations.collapse : translations.expand}
             </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="shrink-0 cursor-help">
+                  {expiryStatus.label === "active" && (
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  )}
+                  {expiryStatus.label === "disabled" && (
+                    <CircleOff className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  {expiryStatus.label === "expiringSoon" && (
+                    <Clock className="h-4 w-4 text-yellow-500" />
+                  )}
+                  {expiryStatus.label === "expired" && (
+                    <XCircle className="h-4 w-4 text-destructive" />
+                  )}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{tUserStatus(expiryStatus.label)}</TooltipContent>
+            </Tooltip>
             <span className="font-medium truncate">{user.name}</span>
-            <Badge variant={expiryStatus.variant} className="text-[10px] shrink-0">
-              {tUserStatus(expiryStatus.label)}
-            </Badge>
-            {visibleGroups.map((group) => {
-              const bgColor = getGroupColor(group);
-              return (
-                <Badge
-                  key={group}
-                  className="text-[10px] shrink-0"
-                  style={{
-                    backgroundColor: bgColor,
-                    color: getContrastTextColor(bgColor),
-                  }}
-                >
-                  {group}
-                </Badge>
-              );
-            })}
-            {remainingGroupsCount > 0 && (
-              <Badge variant="secondary" className="text-[10px] shrink-0">
-                +{remainingGroupsCount}
-              </Badge>
-            )}
+            {userGroups.length > 0 ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1 cursor-help">
+                    {visibleGroups.map((group) => {
+                      if (group.toLowerCase() === "default") {
+                        return (
+                          <Badge key={group} variant="outline" className="text-[10px] shrink-0">
+                            {group}
+                          </Badge>
+                        );
+                      }
+                      const bgColor = getGroupColor(group);
+                      return (
+                        <Badge
+                          key={group}
+                          className="text-[10px] shrink-0"
+                          style={{
+                            backgroundColor: bgColor,
+                            color: getContrastTextColor(bgColor),
+                          }}
+                        >
+                          {group}
+                        </Badge>
+                      );
+                    })}
+                    {remainingGroupsCount > 0 && (
+                      <Badge variant="secondary" className="text-[10px] shrink-0">
+                        +{remainingGroupsCount}
+                      </Badge>
+                    )}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="start">
+                  <div className="max-w-xs">
+                    <p className="font-medium mb-1">{translations.keyRow?.fields?.group}:</p>
+                    <ul className="text-xs list-disc list-inside">
+                      {userGroups.map((group) => (
+                        <li key={group}>{group}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             {user.tags && user.tags.length > 0 && (
               <span className="text-xs text-muted-foreground truncate">
                 [{user.tags.join(", ")}]
@@ -433,7 +499,27 @@ export function UserKeyTableRow({
                 <SquarePen className="h-4 w-4" />
               </Button>
             </>
-          ) : null}
+          ) : (
+            showExpiryBadge && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant={daysLeft === 0 ? "destructive" : "outline"}
+                    className={cn(
+                      "text-xs cursor-help",
+                      daysLeft > 0 &&
+                        daysLeft <= 7 &&
+                        "border-amber-500 text-amber-600 dark:text-amber-400"
+                    )}
+                  >
+                    <Clock className="h-3 w-3 mr-1" />
+                    {daysLeft}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>{tUserStatus("daysLeft", { days: daysLeft })}</TooltipContent>
+              </Tooltip>
+            )
+          )}
         </div>
       </div>
 
@@ -453,6 +539,7 @@ export function UserKeyTableRow({
                     providerGroup: key.providerGroup,
                     todayUsage: key.todayUsage,
                     todayCallCount: key.todayCallCount,
+                    todayTokens: key.todayTokens,
                     lastUsedAt: key.lastUsedAt,
                     expiresAt: key.expiresAt,
                     status: key.status,

@@ -21,7 +21,8 @@
     "keysQuotas": "キー クォータ統計",
     "providersQuotas": "プロバイダー クォータ統計",
     "usageLogsDescription": "API 呼び出しログと使用統計を表示します",
-    "filterCriteria": "フィルター条件"
+    "filterCriteria": "フィルター条件",
+    "filterCriteriaDescription": "時間、ユーザー、プロバイダーなどでログを絞り込む"
   },
   "description": {
     "viewApiCallLogs": "API 呼び出しログと使用統計を表示します",
@@ -60,10 +61,13 @@
     "filters": {
       "user": "ユーザー",
       "provider": "プロバイダー",
+      "sessionId": "セッションID",
       "searchUser": "ユーザーを検索...",
       "searchProvider": "プロバイダーを検索...",
+      "searchSessionId": "セッションIDを検索...",
       "noUserFound": "一致するユーザーが見つかりません",
       "noProviderFound": "一致するプロバイダーが見つかりません",
+      "noSessionFound": "一致するセッションIDが見つかりません",
       "model": "モデル",
       "endpoint": "エンドポイント",
       "status": "ステータス",
@@ -90,12 +94,34 @@
       "export": "エクスポート",
       "exporting": "エクスポート中...",
       "exportSuccess": "エクスポートが完了しました",
-      "exportError": "エクスポートに失敗しました"
+      "exportError": "エクスポートに失敗しました",
+      "quickFilters": {
+        "today": "今日",
+        "thisWeek": "今週",
+        "errorsOnly": "エラーのみ",
+        "showRetries": "リトライあり"
+      },
+      "activeFilters": {
+        "title": "有効なフィルター",
+        "remove": "フィルターを削除",
+        "clearAll": "すべてクリア"
+      },
+      "groups": {
+        "time": "時間範囲",
+        "timeDesc": "日付と時間でフィルター",
+        "identity": "ID情報",
+        "identityDesc": "ユーザーとキーでフィルター",
+        "request": "リクエスト",
+        "requestDesc": "プロバイダー、モデル、エンドポイントでフィルター",
+        "status": "ステータス",
+        "statusDesc": "ステータスコードとリトライでフィルター"
+      }
     },
     "columns": {
       "time": "時間",
       "user": "ユーザー",
       "key": "キー",
+      "sessionId": "セッションID",
       "provider": "プロバイダー",
       "model": "課金モデル",
       "endpoint": "エンドポイント",
@@ -112,9 +138,7 @@
     },
     "stats": {
       "title": "統計サマリー",
-      "description": "クリックして現在のフィルター条件の集計統計を表示",
-      "expand": "展開",
-      "collapse": "折りたたむ",
+      "description": "現在のフィルター条件の集計統計",
       "totalAmount": "総消費金額",
       "totalTokens": "総トークン数",
       "cacheTokens": "キャッシュトークン",
@@ -138,14 +162,19 @@
       "loadedCount": "{count} 件のレコードを読み込みました",
       "loadingMore": "読み込み中...",
       "noMoreData": "すべてのレコードを読み込みました",
-      "scrollToTop": "トップへ戻る"
+      "scrollToTop": "トップへ戻る",
+      "hideProviderColumn": "プロバイダー列を非表示",
+      "showProviderColumn": "プロバイダー列を表示",
+      "columnVisibility": "列の表示/非表示"
     },
     "actions": {
       "refresh": "更新",
       "refreshing": "更新中...",
       "stopAutoRefresh": "自動更新を停止",
       "startAutoRefresh": "自動更新を開始",
-      "view": "表示"
+      "view": "表示",
+      "fullscreen": "全画面表示",
+      "exitFullscreen": "全画面を終了"
     },
     "error": {
       "loadFailed": "読み込み失敗",
@@ -153,12 +182,27 @@
     },
     "details": {
       "title": "リクエスト詳細",
-      "statusTitle": "リクエスト詳細 - ステータスコード {status}",
+      "statusTitle": "ステータス: {status}",
       "inProgress": "処理中",
       "unknown": "不明",
       "success": "リクエストが正常に完了しました",
       "error": "リクエスト失敗、詳細なエラー情報とプロバイダー決定チェーンは以下の通りです",
       "processing": "リクエストは処理中であり、まだ完了していません",
+      "tabs": {
+        "summary": "概要",
+        "logicTrace": "決定チェーン",
+        "performance": "パフォーマンス",
+        "metadata": "メタデータ"
+      },
+      "summary": {
+        "keyMetrics": "主要指標",
+        "totalCost": "総コスト",
+        "totalTokens": "総トークン数",
+        "duration": "所要時間",
+        "outputRate": "出力速度",
+        "viewFullError": "完全なエラーを表示",
+        "viewSession": "セッションを表示"
+      },
       "specialSettings": {
         "title": "特殊設定"
       },
@@ -199,6 +243,7 @@
         "billingRedirected": "課金: 実際"
       },
       "errorMessage": "エラーメッセージ",
+      "filteredProviders": "フィルタされたプロバイダー",
       "providerChain": {
         "title": "プロバイダー決定チェーンタイムライン",
         "totalDuration": "合計所要時間: {duration}ms"
@@ -215,13 +260,72 @@
         "circuitOpen": "サーキットブレーカー開放"
       },
       "billingDetails": {
-        "title": "課金詳細"
+        "title": "課金詳細",
+        "input": "入力",
+        "output": "出力",
+        "cacheWrite5m": "キャッシュ書き込み (5m)",
+        "cacheWrite1h": "キャッシュ書き込み (1h)",
+        "cacheRead": "キャッシュ読み取り",
+        "cacheTtl": "キャッシュ TTL",
+        "multiplier": "プロバイダー倍率",
+        "totalCost": "総コスト",
+        "context1m": "1M コンテキスト",
+        "context1mPricing": "入力 2x >200k, 出力 1.5x >200k"
       },
       "performance": {
         "title": "パフォーマンス",
         "ttfb": "TTFB",
         "duration": "総所要時間",
         "outputRate": "出力速度"
+      },
+      "performanceTab": {
+        "noPerformanceData": "パフォーマンスデータがありません",
+        "ttfbGauge": "初バイト到達時間",
+        "outputRateGauge": "出力速度",
+        "latencyBreakdown": "レイテンシ内訳",
+        "generationTime": "生成時間",
+        "assessment": {
+          "excellent": "優秀",
+          "good": "良好",
+          "warning": "警告",
+          "poor": "不良"
+        },
+        "thresholds": {
+          "ttfbGood": "TTFB < 1s",
+          "ttfbWarning": "TTFB 1-2s",
+          "ttfbPoor": "TTFB > 3s"
+        }
+      },
+      "metadata": {
+        "noMetadata": "メタデータがありません",
+        "sessionInfo": "セッション情報",
+        "clientInfo": "クライアント情報",
+        "billingInfo": "課金情報",
+        "technicalTimeline": "技術タイムライン",
+        "copyTimeline": "タイムラインをコピー"
+      },
+      "logicTrace": {
+        "title": "決定チェーン",
+        "noDecisionData": "決定データがありません",
+        "providersCount": "{count} プロバイダー",
+        "healthyCount": "{count} 健全",
+        "initialSelection": "初期選択",
+        "healthCheck": "ヘルスチェック",
+        "prioritySelection": "優先度選択",
+        "attemptProvider": "試行: {provider}",
+        "retryAttempt": "再試行 #{number}",
+        "sessionReuse": "セッション再利用",
+        "sessionReuseDesc": "セッションキャッシュからプロバイダーを再利用",
+        "sessionReuseTitle": "セッションバインディング",
+        "sessionReuseSelection": "セッション再利用選択",
+        "sessionReuseSelectionDesc": "セッションキャッシュからプロバイダーを選択",
+        "sessionInfo": "セッション情報",
+        "sessionIdLabel": "セッション ID",
+        "requestSequence": "リクエスト番号",
+        "sessionAge": "セッション経過時間",
+        "reusedProvider": "再利用プロバイダー",
+        "executeRequest": "リクエスト実行",
+        "cacheOptimizationHint": "セッション再利用は、同じ会話内でプロバイダーの親和性を維持することでパフォーマンスを最適化し、選択オーバーヘッドを削減してキャッシュヒット率を向上させます。"
       }
     },
     "providerChain": {
@@ -321,6 +425,10 @@
       "adminAction": "この権限を有効にします。",
       "userAction": "この権限を有効にするには、管理者に連絡してください。",
       "systemSettings": "システム設定"
+    },
+    "filters": {
+      "userTagsPlaceholder": "ユーザータグでフィルタ...",
+      "userGroupsPlaceholder": "ユーザーグループでフィルタ..."
     }
   },
   "sessions": {
@@ -717,7 +825,8 @@
     "limit5hUsd": {
       "label": "5時間消費上限 (USD)",
       "placeholder": "空白の場合は無制限",
-      "description": "5時間以内の最大消費金額"
+      "description": "5時間以内の最大消費金額",
+      "descriptionWithUserLimit": "5時間以内の最大消費金額 (ユーザー上限: {limit})"
     },
     "limitDailyUsd": {
       "label": "1日の消費上限 (USD)",
@@ -743,17 +852,26 @@
     "limitWeeklyUsd": {
       "label": "週間消費上限 (USD)",
       "placeholder": "空白の場合は無制限",
-      "description": "1週間あたりの最大消費金額"
+      "description": "1週間あたりの最大消費金額",
+      "descriptionWithUserLimit": "1週間あたりの最大消費金額 (ユーザー上限: {limit})"
     },
     "limitMonthlyUsd": {
       "label": "月間消費上限 (USD)",
       "placeholder": "空白の場合は無制限",
-      "description": "1ヶ月あたりの最大消費金額"
+      "description": "1ヶ月あたりの最大消費金額",
+      "descriptionWithUserLimit": "1ヶ月あたりの最大消費金額 (ユーザー上限: {limit})"
+    },
+    "limitTotalUsd": {
+      "label": "総消費上限 (USD)",
+      "placeholder": "空白の場合は無制限",
+      "description": "累計消費上限(リセットなし)",
+      "descriptionWithUserLimit": "ユーザーの総上限を超えることはできません ({limit})"
     },
     "limitConcurrentSessions": {
       "label": "同時セッション上限",
       "placeholder": "0は無制限を意味します",
-      "description": "同時に実行される会話の数"
+      "description": "同時に実行される会話の数",
+      "descriptionWithUserLimit": "最大セッション数 (ユーザー上限: {limit})"
     },
     "providerGroup": {
       "label": "プロバイダーグループ",
@@ -761,6 +879,15 @@
       "description": "このキーのプロバイダーグループ(既定: default)",
       "defaultDescription": "default は groupTag 未設定のプロバイダーを含みます",
       "descriptionWithUserGroup": "このキーのプロバイダーグループ(ユーザーのグループ: {group}、既定: default)"
+    },
+    "cacheTtl": {
+      "label": "Cache TTL上書き",
+      "description": "cache_controlを含むリクエストに対してAnthropic prompt cache TTLを強制します。",
+      "options": {
+        "inherit": "上書きしない(プロバイダー/クライアントに従う)",
+        "5m": "5m",
+        "1h": "1h"
+      }
     },
     "successTitle": "キーが正常に作成されました",
     "successDescription": "APIキーが正常に作成されました。",
@@ -889,6 +1016,82 @@
     "title": "プロバイダー可用性モニター",
     "description": "プロバイダーの可用性とパフォーマンス指標をリアルタイムで監視",
     "nav": "可用性モニター",
+    "tabs": {
+      "provider": "プロバイダー可用性",
+      "endpoint": "エンドポイント健全性"
+    },
+    "overview": {
+      "systemAvailability": "システム可用性",
+      "avgLatency": "平均遅延",
+      "errorRate": "エラー率",
+      "activeProbes": "アクティブプローブ",
+      "load": "負荷"
+    },
+    "timeRange": {
+      "15min": "15分",
+      "1h": "1時間",
+      "6h": "6時間",
+      "24h": "24時間",
+      "7d": "7日"
+    },
+    "laneChart": {
+      "title": "プロバイダー可用性タイムライン",
+      "noData": "データがありません",
+      "requests": "{count} リクエスト",
+      "availability": "{value}% 可用",
+      "noRequests": "リクエストなし"
+    },
+    "latencyChart": {
+      "title": "遅延分布",
+      "p50": "P50",
+      "p95": "P95",
+      "p99": "P99",
+      "noData": "遅延データがありません"
+    },
+    "latencyCurve": {
+      "title": "遅延トレンド",
+      "noData": "遅延データがありません",
+      "avg": "平均",
+      "min": "最小",
+      "max": "最大",
+      "latency": "遅延"
+    },
+    "terminal": {
+      "title": "プローブログ",
+      "live": "LIVE",
+      "download": "ログをダウンロード",
+      "noLogs": "プローブログがありません",
+      "manual": "手動",
+      "auto": "自動",
+      "filterPlaceholder": "ログをフィルター..."
+    },
+    "probeGrid": {
+      "noEndpoints": "エンドポイントが設定されていません",
+      "lastProbe": "最終プローブ",
+      "status": {
+        "unknown": "不明",
+        "healthy": "正常",
+        "unhealthy": "異常"
+      }
+    },
+    "endpoint": {
+      "selectVendor": "ベンダーを選択",
+      "selectType": "タイプを選択"
+    },
+    "confidence": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "lowTooltip": "{count} 件未満のリクエスト。データが代表的でない可能性があります。",
+      "mediumTooltip": "中程度のリクエスト量。データは比較的信頼できます。",
+      "highTooltip": "高いリクエスト量。データは信頼できます。"
+    },
+    "actions": {
+      "probeNow": "今すぐプローブ",
+      "probing": "プローブ中...",
+      "probeSuccess": "プローブ成功",
+      "probeFailed": "プローブ失敗"
+    },
     "status": {
       "green": "正常(OK)",
       "red": "異常",
@@ -912,6 +1115,11 @@
     },
     "timeRange": {
       "label": "時間範囲",
+      "15min": "15分",
+      "1h": "1時間",
+      "6h": "6時間",
+      "24h": "24時間",
+      "7d": "7日間",
       "last15min": "過去15分",
       "last1h": "過去1時間",
       "last6h": "過去6時間",
@@ -962,7 +1170,13 @@
       "autoRefresh": "自動更新",
       "stopAutoRefresh": "自動更新を停止",
       "viewDetails": "詳細を表示",
-      "testProvider": "プロバイダーをテスト"
+      "testProvider": "プロバイダーをテスト",
+      "retry": "再試行",
+      "probeNow": "今すぐプローブ",
+      "probing": "プローブ中...",
+      "probeAll": "すべてプローブ",
+      "probeSuccess": "プローブ成功",
+      "probeFailed": "プローブ失敗"
     },
     "states": {
       "loading": "読み込み中...",
@@ -991,6 +1205,84 @@
       "requests": "リクエスト",
       "noData": "データなし",
       "noRequests": "リクエストなし"
+    },
+    "probeHistory": {
+      "title": "エンドポイントプローブ履歴",
+      "description": "プローブログを確認し、特定のエンドポイントを手動でプローブできます",
+      "selectVendor": "ベンダーを選択",
+      "selectType": "プロバイダー種別を選択",
+      "selectEndpoint": "エンドポイントを選択",
+      "noEndpoints": "エンドポイントが見つかりません",
+      "probeNow": "今すぐプローブ",
+      "probing": "プローブ中...",
+      "columns": {
+        "time": "時間",
+        "method": "方法",
+        "status": "ステータス",
+        "latency": "レイテンシ",
+        "error": "エラー"
+      },
+      "success": "成功",
+      "manual": "手動プローブ",
+      "auto": "自動プローブ",
+      "probeSuccess": "プローブ成功",
+      "probeFailed": "プローブ失敗"
+    },
+    "laneChart": {
+      "title": "プロバイダー可用性タイムライン",
+      "noData": "データなし",
+      "requests": "{count} リクエスト",
+      "availability": "可用性 {value}%",
+      "noRequests": "リクエストなし",
+      "denseData": "高密度",
+      "sparseData": "低密度",
+      "latency": "レイテンシ"
+    },
+    "latencyChart": {
+      "title": "レイテンシ分布",
+      "p50": "P50",
+      "p95": "P95",
+      "p99": "P99",
+      "noData": "レイテンシデータなし"
+    },
+    "latencyCurve": {
+      "title": "レイテンシトレンド",
+      "noData": "レイテンシデータなし",
+      "avg": "平均",
+      "min": "最小",
+      "max": "最大",
+      "latency": "レイテンシ"
+    },
+    "terminal": {
+      "title": "プローブログ",
+      "live": "ライブ",
+      "download": "ログをダウンロード",
+      "noLogs": "プローブログなし",
+      "manual": "手動",
+      "auto": "自動",
+      "filterPlaceholder": "ログをフィルター..."
+    },
+    "probeGrid": {
+      "title": "エンドポイントステータス",
+      "noEndpoints": "エンドポイント未設定",
+      "lastProbe": "最終プローブ",
+      "status": {
+        "unknown": "不明",
+        "healthy": "正常",
+        "unhealthy": "異常"
+      }
+    },
+    "endpoint": {
+      "selectVendor": "ベンダーを選択",
+      "selectType": "タイプを選択"
+    },
+    "confidence": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "lowTooltip": "リクエスト数が {count} 未満です。データが代表的でない可能性があります。",
+      "mediumTooltip": "リクエスト量は適度です。データは比較的信頼できます。",
+      "highTooltip": "リクエスト量が十分です。データは信頼できます。"
     },
     "toast": {
       "refreshSuccess": "可用性データを更新しました",
@@ -1115,18 +1407,21 @@
         "name": "キー名",
         "key": "キー",
         "group": "グループ",
-        "todayUsage": "本日の使用量",
+        "todayUsage": "本日のリクエスト",
         "todayCost": "本日の消費",
+        "todayTokens": "本日のトークン",
         "lastUsed": "最終使用",
         "actions": "アクション",
         "quotaButton": "クォータ使用状況を表示",
         "fields": {
-          "callsLabel": "呼び出し",
+          "callsLabel": "リクエスト",
+          "tokensLabel": "トークン",
           "costLabel": "消費"
         }
       },
       "expand": "展開",
       "collapse": "折りたたむ",
+      "refresh": "更新",
       "noKeys": "キーなし",
       "defaultGroup": "default",
       "userStatus": {
@@ -1150,7 +1445,22 @@
       "columns": {
         "model": "モデル",
         "calls": "呼び出し回数",
+        "tokens": "トークン",
         "cost": "消費金額"
+      },
+      "modal": {
+        "requests": "リクエスト",
+        "totalTokens": "トークン合計",
+        "cost": "コスト",
+        "inputTokens": "入力トークン",
+        "outputTokens": "出力トークン",
+        "cacheWrite": "キャッシュ書込",
+        "cacheRead": "キャッシュ読取",
+        "cacheHitRate": "キャッシュヒット率",
+        "cacheTokens": "キャッシュトークン",
+        "performanceHigh": "高",
+        "performanceMedium": "中",
+        "performanceLow": "低"
       },
       "noData": "本日の使用記録はありません",
       "totalCalls": "総呼び出し数",
@@ -1178,6 +1488,10 @@
       "currentExpiry": "現在の有効期限",
       "neverExpires": "無期限",
       "expired": "期限切れ",
+      "quickExtensionLabel": "クイック延長",
+      "quickExtensionHint": "現在の有効期限から延長(期限切れの場合は現在から)",
+      "customDateLabel": "有効期限を設定",
+      "customDateHint": "有効期限を直接指定",
       "quickOptions": {
         "7days": "7 日",
         "30days": "30 日",
@@ -1186,6 +1500,7 @@
       },
       "customDate": "カスタム日付",
       "enableOnRenew": "同時にユーザーを有効化",
+      "enableKeyOnRenew": "同時にキーを有効化",
       "cancel": "キャンセル",
       "confirm": "更新を確認",
       "confirming": "更新中...",
@@ -1208,7 +1523,18 @@
       "userEnabled": "ユーザーが有効化されました",
       "deleteFailed": "ユーザーの削除に失敗しました",
       "userDeleted": "ユーザーが削除されました",
-      "saving": "保存しています..."
+      "saving": "保存しています...",
+      "resetData": {
+        "title": "統計リセット",
+        "description": "このユーザーのすべてのリクエストログと使用データを削除します。この操作は元に戻せません。",
+        "error": "データのリセットに失敗しました",
+        "button": "統計をリセット",
+        "confirmTitle": "すべての統計をリセットしますか？",
+        "confirmDescription": "このユーザーのすべてのリクエストログと使用統計を完全に削除します。この操作は取り消せません。",
+        "confirm": "はい、すべてリセット",
+        "loading": "リセット中...",
+        "success": "すべての統計がリセットされました"
+      }
     },
     "batchEdit": {
       "enterMode": "一括編集",
@@ -1277,7 +1603,7 @@
           "limitDaily": "日次上限 (USD)",
           "limitWeekly": "週次上限 (USD)",
           "limitMonthly": "月次上限 (USD)",
-          "canLoginWebUi": "Web UI へのログインを許可",
+          "canLoginWebUi": "独立した個人使用量ページ",
           "keyEnabled": "キー有効状態"
         },
         "placeholders": {
@@ -1440,7 +1766,8 @@
       "clickToEnableUser": "クリックしてユーザーを有効化",
       "operationFailed": "操作に失敗しました",
       "deleteFailed": "削除に失敗しました",
-      "deleteSuccess": "削除しました"
+      "deleteSuccess": "削除しました",
+      "daysLeft": "{days, plural, =0 {本日期限} =1 {残り1日} other {残り#日}}"
     },
     "userEditSection": {
       "sections": {

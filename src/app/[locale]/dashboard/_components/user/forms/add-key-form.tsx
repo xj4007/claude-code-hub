@@ -35,6 +35,9 @@ export function AddKeyForm({ userId, user, isAdmin = false, onSuccess }: AddKeyF
   const [providerGroupSuggestions, setProviderGroupSuggestions] = useState<string[]>([]);
   const router = useRouter();
   const t = useTranslations("dashboard.addKeyForm");
+  const tBalancePage = useTranslations(
+    "dashboard.userManagement.keyEditSection.fields.balanceQueryPage"
+  );
   const tUI = useTranslations("ui.tagInput");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
@@ -176,9 +179,13 @@ export function AddKeyForm({ userId, user, isAdmin = false, onSuccess }: AddKeyF
       <div className="flex items-start justify-between gap-4 rounded-lg border border-dashed border-border px-4 py-3">
         <div>
           <Label htmlFor="can-login-web-ui" className="text-sm font-medium">
-            {t("canLoginWebUi.label")}
+            {tBalancePage("label")}
           </Label>
-          <p className="text-xs text-muted-foreground mt-1">{t("canLoginWebUi.description")}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {form.values.canLoginWebUi
+              ? tBalancePage("descriptionDisabled")
+              : tBalancePage("descriptionEnabled")}
+          </p>
         </div>
         <Switch
           id="can-login-web-ui"
@@ -216,7 +223,7 @@ export function AddKeyForm({ userId, user, isAdmin = false, onSuccess }: AddKeyF
       />
 
       <div className="space-y-2">
-        <Label>Cache TTL 覆写</Label>
+        <Label>{t("cacheTtl.label")}</Label>
         <Select
           value={form.values.cacheTtlPreference}
           onValueChange={(val) =>
@@ -227,14 +234,12 @@ export function AddKeyForm({ userId, user, isAdmin = false, onSuccess }: AddKeyF
             <SelectValue placeholder="inherit" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="inherit">不覆写（跟随供应商/客户端）</SelectItem>
-            <SelectItem value="5m">5m</SelectItem>
-            <SelectItem value="1h">1h</SelectItem>
+            <SelectItem value="inherit">{t("cacheTtl.options.inherit")}</SelectItem>
+            <SelectItem value="5m">{t("cacheTtl.options.5m")}</SelectItem>
+            <SelectItem value="1h">{t("cacheTtl.options.1h")}</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">
-          强制为包含 cache_control 的请求设置 Anthropic prompt cache TTL。
-        </p>
+        <p className="text-xs text-muted-foreground">{t("cacheTtl.description")}</p>
       </div>
 
       <FormGrid columns={2}>

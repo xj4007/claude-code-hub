@@ -4,6 +4,7 @@
   "delete": "刪除",
   "confirm": "確認",
   "edit": "編輯",
+  "status": "狀態",
   "create": "建立",
   "close": "關閉",
   "back": "返回",
@@ -48,5 +49,15 @@
   "theme": "主題",
   "light": "淺色",
   "dark": "深色",
-  "system": "跟隨系統"
+  "system": "跟隨系統",
+  "relativeTimeShort": {
+    "now": "剛剛",
+    "secondsAgo": "{count}秒前",
+    "minutesAgo": "{count}分前",
+    "hoursAgo": "{count}時前",
+    "daysAgo": "{count}天前",
+    "weeksAgo": "{count}週前",
+    "monthsAgo": "{count}月前",
+    "yearsAgo": "{count}年前"
+  }
 }

@@ -78,7 +78,7 @@
     "inheritedFromUser": "繼承自使用者"
   },
   "stats": {
-    "title": "統計摘要",
+    "title": "金鑰統計",
     "autoRefresh": "每{seconds}秒自動刷新",
     "totalRequests": "總請求數",
     "totalCost": "總費用",
@@ -92,7 +92,22 @@
     "keyStats": "金鑰",
     "userStats": "使用者",
     "noData": "所選時段無資料",
-    "unknownModel": "不明"
+    "unknownModel": "不明",
+    "modal": {
+      "requests": "請求",
+      "tokens": "個token",
+      "totalTokens": "總Token",
+      "cost": "費用",
+      "inputTokens": "輸入Token",
+      "outputTokens": "輸出Token",
+      "cacheWrite": "快取寫入",
+      "cacheRead": "快取讀取",
+      "cacheHitRate": "快取命中率",
+      "cacheTokens": "快取Token",
+      "performanceHigh": "高",
+      "performanceMedium": "中",
+      "performanceLow": "低"
+    }
   },
   "accessRestrictions": {
     "title": "存取限制",
@@ -101,7 +116,7 @@
     "noRestrictions": "無限制"
   },
   "quotaCollapsible": {
-    "title": "配額使用",
+    "title": "用戶配額使用",
     "daily": "每日",
     "monthly": "每月",
     "total": "總計"

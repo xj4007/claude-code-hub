@@ -3,6 +3,7 @@ import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
 import { logger } from "@/lib/logger";
 import { RateLimitService } from "@/lib/rate-limit";
 import { SessionManager } from "@/lib/session-manager";
+import { isVendorTypeCircuitOpen } from "@/lib/vendor-type-circuit-breaker";
 import { findAllProviders, findProviderById } from "@/repository/provider";
 import { getSystemSettings } from "@/repository/system-config";
 import type { ProviderChainItem } from "@/types/message";
@@ -245,7 +246,7 @@ export class ProxyProviderResolver {
           targetType: reusedProvider.providerType as NonNullable<
             ProviderChainItem["decisionContext"]
           >["targetType"],
-          requestedModel: session.getCurrentModel() || "",
+          requestedModel: session.getOriginalModel() || "",
           groupFilterApplied: false,
           beforeHealthCheck: 0,
           afterHealthCheck: 0,
@@ -328,7 +329,7 @@ export class ProxyProviderResolver {
                   targetType: session.provider.providerType as NonNullable<
                     ProviderChainItem["decisionContext"]
                   >["targetType"],
-                  requestedModel: session.getCurrentModel() || "",
+                  requestedModel: session.getOriginalModel() || "",
                   groupFilterApplied: false,
                   beforeHealthCheck: 0,
                   afterHealthCheck: 0,
@@ -385,7 +386,7 @@ export class ProxyProviderResolver {
               targetType: session.provider.providerType as NonNullable<
                 ProviderChainItem["decisionContext"]
               >["targetType"],
-              requestedModel: session.getCurrentModel() || "",
+              requestedModel: session.getOriginalModel() || "",
               groupFilterApplied: false,
               beforeHealthCheck: 0,
               afterHealthCheck: 0,
@@ -554,6 +555,21 @@ export class ProxyProviderResolver {
       return null;
     }
 
+    // 临时熔断（vendor+type）：防止会话复用绕过故障隔离
+    if (
+      provider.providerVendorId &&
+      provider.providerVendorId > 0 &&
+      (await isVendorTypeCircuitOpen(provider.providerVendorId, provider.providerType))
+    ) {
+      logger.debug("ProviderSelector: Session provider vendor-type circuit is open", {
+        sessionId: session.sessionId,
+        providerId: provider.id,
+        vendorId: provider.providerVendorId,
+        providerType: provider.providerType,
+      });
+      return null;
+    }
+
     // 检查熔断器状态（TC-055 修复）
     if (await isCircuitOpen(provider.id)) {
       logger.debug("ProviderSelector: Session provider circuit is open", {
@@ -566,7 +582,7 @@ export class ProxyProviderResolver {
     }
 
     // 检查模型支持（使用新的模型匹配逻辑）
-    const requestedModel = session.getCurrentModel();
+    const requestedModel = session.getOriginalModel();
     if (requestedModel && !providerSupportsModel(provider, requestedModel)) {
       logger.debug("ProviderSelector: Session provider does not support requested model", {
         sessionId: session.sessionId,
@@ -674,7 +690,7 @@ export class ProxyProviderResolver {
     // 使用 Session 快照保证故障迁移期间数据一致性
     // 如果没有 session，回退到 findAllProviders（内部已使用缓存）
     const allProviders = session ? await session.getProvidersSnapshot() : await findAllProviders();
-    const requestedModel = session?.getCurrentModel() || "";
+    const requestedModel = session?.getOriginalModel() || "";
 
     // === Step 1: 分组预过滤（静默，用户只能看到自己分组内的供应商）===
     const effectiveGroupPick = getEffectiveProviderGroup(session);
@@ -896,6 +912,20 @@ export class ProxyProviderResolver {
     );
 
     for (const p of filteredOut) {
+      if (
+        p.providerVendorId &&
+        p.providerVendorId > 0 &&
+        (await isVendorTypeCircuitOpen(p.providerVendorId, p.providerType))
+      ) {
+        context.filteredProviders?.push({
+          id: p.id,
+          name: p.name,
+          reason: "circuit_open",
+          details: "供应商类型临时熔断",
+        });
+        continue;
+      }
+
       if (await isCircuitOpen(p.id)) {
         const state = getCircuitState(p.id);
         context.filteredProviders?.push({
@@ -935,7 +965,7 @@ export class ProxyProviderResolver {
       name: p.name,
       weight: p.weight,
       costMultiplier: p.costMultiplier,
-      probability: totalWeight > 0 ? Math.round((p.weight / totalWeight) * 100) : 0,
+      probability: totalWeight > 0 ? p.weight / totalWeight : 0,
     }));
 
     const selected = ProxyProviderResolver.selectOptimal(topPriorityProviders);
@@ -975,6 +1005,20 @@ export class ProxyProviderResolver {
   private static async filterByLimits(providers: Provider[]): Promise<Provider[]> {
     const results = await Promise.all(
       providers.map(async (p) => {
+        // -1. 检查临时熔断（vendor+type）
+        if (
+          p.providerVendorId &&
+          p.providerVendorId > 0 &&
+          (await isVendorTypeCircuitOpen(p.providerVendorId, p.providerType))
+        ) {
+          logger.debug("ProviderSelector: Vendor-type circuit breaker is open", {
+            providerId: p.id,
+            vendorId: p.providerVendorId,
+            providerType: p.providerType,
+          });
+          return null;
+        }
+
         // 0. 检查熔断器状态
         if (await isCircuitOpen(p.id)) {
           logger.debug("ProviderSelector: Provider circuit breaker is open", {

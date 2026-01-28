@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Users } from "lucide-react";
+import { Loader2, RefreshCw, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -62,6 +62,7 @@ export interface UserManagementTableProps {
     editDialog: any;
     actions: {
       edit: string;
+      status: string;
       details: string;
       logs: string;
       delete: string;
@@ -91,6 +92,8 @@ export interface UserManagementTableProps {
       failed: string;
     };
   };
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 const USER_ROW_HEIGHT = 52;
@@ -124,6 +127,8 @@ export function UserManagementTable({
   onSelectKey,
   onOpenBatchEdit,
   translations,
+  onRefresh,
+  isRefreshing,
 }: UserManagementTableProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -422,6 +427,20 @@ export function UserManagementTable({
             />
           ) : null}
         </div>
+
+        {onRefresh ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            title={tUserMgmt("table.refresh")}
+            aria-label={tUserMgmt("table.refresh")}
+          >
+            <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+          </Button>
+        ) : null}
       </div>
 
       <div className={cn("border border-border rounded-lg", "overflow-hidden")}>
@@ -483,8 +502,11 @@ export function UserManagementTable({
                   </span>
                 </div>
                 <div className="px-2 text-center min-w-0">
-                  <span className="block truncate" title={translations.actions.edit}>
-                    {translations.actions.edit}
+                  <span
+                    className="block truncate"
+                    title={isAdmin ? translations.actions.edit : translations.actions.status}
+                  >
+                    {isAdmin ? translations.actions.edit : translations.actions.status}
                   </span>
                 </div>
               </div>

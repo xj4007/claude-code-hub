@@ -92,7 +92,7 @@ const INITIAL_KEY_STATE: BatchKeySectionState = {
   limitMonthlyUsdEnabled: false,
   limitMonthlyUsd: "",
   canLoginWebUiEnabled: false,
-  canLoginWebUi: true,
+  canLoginWebUi: false, // Default: independent page enabled (switch ON with inverted logic)
   isEnabledEnabled: false,
   isEnabled: true,
 };
@@ -376,6 +376,8 @@ function BatchEditDialogInner({
 
       if (anySuccess) {
         await queryClient.invalidateQueries({ queryKey: ["users"] });
+        await queryClient.invalidateQueries({ queryKey: ["userKeyGroups"] });
+        await queryClient.invalidateQueries({ queryKey: ["userTags"] });
       }
 
       // Only close dialog and clear selection when fully successful
