@@ -195,7 +195,7 @@ function ProviderFormContent({
           preserve_client_ip: state.routing.preserveClientIp,
           use_unified_client_id: state.routing.useUnifiedClientId,
           unified_client_id: state.routing.useUnifiedClientId
-            ? (state.routing.unifiedClientId.trim() || null)
+            ? state.routing.unifiedClientId.trim() || null
             : null,
           simulate_cache_enabled: state.routing.simulateCacheEnabled,
           supplementary_prompt_enabled: state.routing.supplementaryPromptEnabled,

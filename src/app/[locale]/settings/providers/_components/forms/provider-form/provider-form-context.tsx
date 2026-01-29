@@ -143,7 +143,10 @@ export function providerFormReducer(
     case "SET_SIMULATE_CACHE_ENABLED":
       return { ...state, routing: { ...state.routing, simulateCacheEnabled: action.payload } };
     case "SET_SUPPLEMENTARY_PROMPT_ENABLED":
-      return { ...state, routing: { ...state.routing, supplementaryPromptEnabled: action.payload } };
+      return {
+        ...state,
+        routing: { ...state.routing, supplementaryPromptEnabled: action.payload },
+      };
     case "SET_MODEL_REDIRECTS":
       return { ...state, routing: { ...state.routing, modelRedirects: action.payload } };
     case "SET_ALLOWED_MODELS":
