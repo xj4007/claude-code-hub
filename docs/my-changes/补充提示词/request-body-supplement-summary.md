@@ -5,16 +5,18 @@
 - `needsClaudeDisguise` 由客户端识别阶段设置（非 Claude CLI 请求会开启伪装）。
 
 ## 补充内容（Claude 伪装）
-1. `messages[0].content`
-   - 若为字符串，先转换为数组格式。
-   - 若不存在 `<system-reminder>`，在数组头部插入空的 `<system-reminder></system-reminder>` 文本块。
-2. `system`
+1. `system`
    - 若为字符串，转换为数组格式；若缺失则创建空数组。
    - 确保包含 Claude Code 身份文本：
      `You are Claude Code, Anthropic's official CLI for Claude.`
    - 确保包含 `x-anthropic-billing-header` 文本；若已存在则替换为固定值。
-3. `metadata.user_id`
+2. `metadata.user_id`
    - 缺失时补齐；若供应商启用 `useUnifiedClientId`，优先用统一客户端 ID；否则使用默认固定 client id。
+
+## 已移除的功能
+- ~~`messages[0].content` 补充 `<system-reminder>` 标记~~（已删除，不再自动补充空标记）
+  - 原因：不需要补充空的 `<system-reminder>` 标记
+  - 用户自己在 `messages[0].content` 中的 `<system-reminder>` 内容不受影响
 
 ## 位置与时机
 - 在转发上游前、请求格式转换之后执行（`ProxyForwarder.doForward` 内）。
