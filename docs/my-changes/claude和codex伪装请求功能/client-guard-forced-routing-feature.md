@@ -1,9 +1,9 @@
 # Claude CLI 检测与强制路由功能
 
-**更新时间**: 2026-01-14
+**更新时间**: 2026-01-29
 **状态**: 已上线
 **适用范围**: Claude 请求路径（/v1/messages 等）
-**当前版本**: 4.2
+**当前版本**: 4.3
 
 ---
 
@@ -39,7 +39,7 @@
 | 维度 | 检测方法 | 说明 |
 |------|---------|------|
 | **User-Agent** | 使用 `parseUserAgent()` 解析 | 检测 `claude-cli` 或 `claude-vscode` |
-| **system 特征** | 检查 `system[0]` 包含 Claude Code 身份标识 | "You are Claude Code, Anthropic's official CLI for Claude" (支持标准 CLI 和 Agent SDK) |
+| **system 特征** | 检查 `system[0]` 包含 Claude Code 身份标识 | 支持三种变体：<br/>1. "You are Claude Code, Anthropic's official CLI for Claude"<br/>2. "You are a Claude agent, built on Anthropic's Claude Agent SDK" |
 | **metadata.user_id 格式** | 检查符合 `user_{64hex}_account__session_{uuid}` 格式 | 符合 Claude Code 生成格式 |
 
 **检测流程**：
@@ -487,6 +487,7 @@ ProxyForwarder
 
 | 版本 | 日期 | 变更说明 |
 |------|------|---------|
+| **4.3** | **2026-01-29** | **支持 Agent SDK 独立提示词 + 转发替换为标准 CLI 身份** |
 | **4.2** | **2026-01-15** | **增强日志诊断 + 支持 Claude Agent SDK 变体** |
 | 4.1 | 2026-01-13 | 修复：仅对 Claude 请求执行 CLI 检测（修复 Codex/Gemini 被误路由问题） |
 | 4.0 | 2026-01-13 | 新增 Claude CLI 检测与强制路由功能 |
@@ -641,9 +642,9 @@ ProxyClientGuard: Non-Claude request, skipping CLI detection
 
 ---
 
-**文档版本**: 4.2（增强日志诊断 + 支持 Claude Agent SDK）
+**文档版本**: 4.3（支持 Agent SDK 独立提示词 + 转发替换）
 **维护者**: Team
-**上次更新**: 2026-01-15
+**上次更新**: 2026-01-29
 
 ---
 
@@ -975,6 +976,435 @@ if (typeof system === "string") {
 
 ---
 
-**文档版本**: 4.2（增强日志诊断 + 支持 Claude Agent SDK）
+**文档版本**: 4.3（支持 Agent SDK 独立提示词 + 转发替换）
 **维护者**: Team
-**上次更新**: 2026-01-15
+**上次更新**: 2026-01-29
+
+---
+
+## 14. 版本 4.3 增强说明（2026-01-29）
+
+### 14.1 问题背景
+
+**版本 4.2 的局限**：
+- 只支持 `"You are Claude Code, Anthropic's official CLI for Claude"` 及其变体（如 "running within the Claude Agent SDK"）
+- 不支持独立的 Agent SDK 提示词：`"You are a Claude agent, built on Anthropic's Claude Agent SDK."`
+- 真实的 Agent SDK 请求（使用独立提示词）被错误路由到 2api
+
+**新需求**：
+1. **校验阶段**：识别 `"You are a Claude agent, built on Anthropic's Claude Agent SDK."` 也是合法的 Claude 请求
+2. **转发阶段**：检测到 Agent SDK 独立提示词时，**替换**为标准 CLI 提示词（统一上游身份）
+
+### 14.2 增强内容
+
+#### 14.2.1 校验逻辑增强（client-guard.ts）
+
+**修改前**（版本 4.2）：
+```typescript
+const checkClaudeIdentity = (text: string): boolean => {
+  return text.includes("You are Claude Code, Anthropic's official CLI for Claude");
+};
+```
+
+**修改后**（版本 4.3）：
+```typescript
+const checkClaudeIdentity = (text: string): boolean => {
+  return (
+    text.includes("You are Claude Code, Anthropic's official CLI for Claude") ||
+    text.includes("You are a Claude agent, built on Anthropic's Claude Agent SDK")
+  );
+};
+```
+
+**支持的身份标识**：
+- ✅ 标准 CLI: `"You are Claude Code, Anthropic's official CLI for Claude."`
+- ✅ Agent SDK 变体1: `"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."`
+- ✅ **Agent SDK 变体2（新增）**: `"You are a Claude agent, built on Anthropic's Claude Agent SDK."`
+
+---
+
+#### 14.2.2 转发替换逻辑（forwarder.ts）
+
+**核心需求**：虽然校验阶段识别 Agent SDK 独立提示词为合法请求，但在转发给上游时需要**统一替换**为标准 CLI 提示词。
+
+**修改前**（版本 4.2）：
+```typescript
+// 简单检查是否存在 Claude Code 标识
+const hasClaudeCodeIdentity = system.some(
+  (item) => String(item.text || "").includes(
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+  ),
+);
+
+if (!hasClaudeCodeIdentity) {
+  // 不存在则插入
+  system.unshift({
+    type: "text",
+    text: "You are Claude Code, Anthropic's official CLI for Claude.",
+  });
+}
+```
+
+**修改后**（版本 4.3）：
+```typescript
+const STANDARD_CLI_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+const AGENT_SDK_IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+let hasClaudeCodeIdentity = false;
+let sdkIdentityIndex = -1;
+
+// 遍历 system 数组前2个元素，查找身份标识
+// Compatible with old and new versions:
+// - Old version: Claude Code identity in system[0]
+// - New version: system[0] is billing header, Claude Code identity in system[1]
+for (let i = 0; i < Math.min(system.length, 2); i++) {
+  const text = String(item.text || "");
+  
+  // 检查是否包含标准 CLI 身份
+  if (text.includes(STANDARD_CLI_IDENTITY)) {
+    hasClaudeCodeIdentity = true;
+    break;
+  }
+  
+  // 检查是否包含 Agent SDK 身份
+  if (text.includes(AGENT_SDK_IDENTITY)) {
+    sdkIdentityIndex = i;
+    hasClaudeCodeIdentity = true;
+    break;
+  }
+}
+
+// 如果找到 Agent SDK 身份标识，替换为标准 CLI 身份
+if (sdkIdentityIndex !== -1) {
+  system[sdkIdentityIndex] = {
+    type: "text",
+    text: STANDARD_CLI_IDENTITY,
+  };
+  logger.debug("ProxyForwarder: Replaced Agent SDK identity with standard CLI identity", {
+    providerId: provider.id,
+    originalIndex: sdkIdentityIndex,
+  });
+}
+
+// 如果没有任何 Claude 身份标识，在开头插入标准 CLI 身份
+if (!hasClaudeCodeIdentity) {
+  system.unshift({
+    type: "text",
+    text: STANDARD_CLI_IDENTITY,
+  });
+}
+```
+
+**替换逻辑说明**：
+1. **检测阶段**：遍历 system 数组**前2个元素**（兼容新旧版本），查找标准 CLI 或 Agent SDK 身份标识
+   - 旧版本：Claude Code 身份在 system[0]
+   - 新版本：system[0] 是 billing header，Claude Code 身份在 system[1]
+2. **替换阶段**：如果找到 Agent SDK 独立提示词，**原地替换**为标准 CLI 提示词
+3. **插入阶段**：如果没有任何身份标识，在开头插入标准 CLI 提示词
+
+---
+
+### 14.3 代码修改
+
+#### 修改文件 1：`src/app/v1/_lib/proxy/client-guard.ts`
+
+**修改点 1**：更新 JSDoc 注释（第 92-103 行）
+```typescript
+/**
+ * 检测请求是否为 Claude CLI 请求（组合判断：User-Agent + 请求体特征）
+ *
+ * Claude CLI 请求特征：
+ * 1. User-Agent 包含 claude-cli 或 claude-vscode
+ * 2. system[0] 包含以下任一身份标识：
+ *    - "You are Claude Code, Anthropic's official CLI for Claude"（标准 CLI）
+ *    - "You are a Claude agent, built on Anthropic's Claude Agent SDK"（Agent SDK）
+ * 3. metadata.user_id 符合 user_{64hex}_account__session_{uuid} 格式
+ */
+```
+
+**修改点 2**：增强身份检测逻辑（第 123-133 行）
+```typescript
+// 2. 检查 system[0] 是否包含 Claude Code 身份
+// 支持三种变体：
+// - 标准 CLI: "You are Claude Code, Anthropic's official CLI for Claude."
+// - Agent SDK (变体1): "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+// - Agent SDK (变体2): "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+const system = requestBody.system;
+let hasClaudeIdentity = false;
+
+const checkClaudeIdentity = (text: string): boolean => {
+  return (
+    text.includes("You are Claude Code, Anthropic's official CLI for Claude") ||
+    text.includes("You are a Claude agent, built on Anthropic's Claude Agent SDK")
+  );
+};
+```
+
+---
+
+#### 修改文件 2：`src/app/v1/_lib/proxy/forwarder.ts`
+
+**修改点**：重构身份检测与替换逻辑（第 183-243 行）
+```typescript
+// 确保 system 是数组
+if (Array.isArray(system)) {
+  // 1. 检查并替换 Agent SDK 提示词为标准 CLI 提示词
+  const STANDARD_CLI_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+  const AGENT_SDK_IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+  
+  let hasClaudeCodeIdentity = false;
+  let sdkIdentityIndex = -1;
+
+  // 遍历 system 数组前2个元素，查找身份标识
+  // Compatible with old and new versions:
+  // - Old version: Claude Code identity in system[0]
+  // - New version: system[0] is billing header, Claude Code identity in system[1]
+  for (let i = 0; i < Math.min(system.length, 2); i++) {
+    const item = system[i];
+    if (
+      typeof item === "object" &&
+      item !== null &&
+      "type" in item &&
+      item.type === "text" &&
+      "text" in item
+    ) {
+      const text = String(item.text || "");
+      
+      // 检查是否包含标准 CLI 身份
+      if (text.includes(STANDARD_CLI_IDENTITY)) {
+        hasClaudeCodeIdentity = true;
+        break;
+      }
+      
+      // 检查是否包含 Agent SDK 身份
+      if (text.includes(AGENT_SDK_IDENTITY)) {
+        sdkIdentityIndex = i;
+        hasClaudeCodeIdentity = true;
+        break;
+      }
+    }
+  }
+
+  // 如果找到 Agent SDK 身份标识，替换为标准 CLI 身份
+  if (sdkIdentityIndex !== -1) {
+    system[sdkIdentityIndex] = {
+      type: "text",
+      text: STANDARD_CLI_IDENTITY,
+    };
+    logger.debug(
+      "ProxyForwarder: Replaced Agent SDK identity with standard CLI identity",
+      {
+        providerId: provider.id,
+        originalIndex: sdkIdentityIndex,
+      },
+    );
+  }
+
+  // 如果没有任何 Claude 身份标识，在开头插入标准 CLI 身份
+  if (!hasClaudeCodeIdentity) {
+    system.unshift({
+      type: "text",
+      text: STANDARD_CLI_IDENTITY,
+    });
+
+    logger.debug(
+      "ProxyForwarder: Added Claude Code identity to system (normalization)",
+      {
+        providerId: provider.id,
+      },
+    );
+  }
+  
+  // 2. 处理 x-anthropic-billing-header
+  // ... 后续逻辑保持不变
+}
+```
+
+**关键改进**：
+- ✅ 只检查 system 数组的**前2个元素**（与 client-guard.ts 保持一致）
+- ✅ 明确注释说明兼容新旧版本
+- ✅ 提升性能（避免遍历整个数组）
+    logger.debug(
+      "ProxyForwarder: Replaced Agent SDK identity with standard CLI identity",
+      {
+        providerId: provider.id,
+        originalIndex: sdkIdentityIndex,
+      },
+    );
+  }
+
+  // 如果没有任何 Claude 身份标识，在开头插入标准 CLI 身份
+  if (!hasClaudeCodeIdentity) {
+    system.unshift({
+      type: "text",
+      text: STANDARD_CLI_IDENTITY,
+    });
+
+    logger.debug(
+      "ProxyForwarder: Added Claude Code identity to system (normalization)",
+      {
+        providerId: provider.id,
+      },
+    );
+  }
+  
+  // 2. 处理 x-anthropic-billing-header
+  // ... 后续逻辑保持不变
+}
+```
+
+---
+
+### 14.4 行为对比
+
+| 场景 | 版本 4.2 | 版本 4.3 |
+|------|---------|---------|
+| **标准 CLI 请求** | ✅ 正常识别 + 不修改 | ✅ 正常识别 + 不修改（不变） |
+| **Agent SDK 变体1** | ✅ 正常识别 + 不修改 | ✅ 正常识别 + 不修改（不变） |
+| **Agent SDK 变体2（独立提示词）** | ❌ **误判为非 CLI，路由到 2api** | ✅ **正常识别 + 替换为标准 CLI** ✨ |
+| **转发给上游的身份** | 保持原样 | **统一为标准 CLI 提示词** ✨ |
+
+---
+
+### 14.5 测试验证
+
+#### 测试场景 1：Agent SDK 独立提示词（新功能验证）
+
+**输入**：
+- User-Agent: `claude-cli/2.0.31 (external, cli)`
+- system: `"You are a Claude agent, built on Anthropic's Claude Agent SDK."`
+- metadata.user_id: `user_abc123...`
+
+**版本 4.2 行为**：
+- ❌ 判定为非 CLI（身份标识不匹配）
+- ❌ 强制路由到 2api
+- ❌ 执行伪装
+
+**版本 4.3 行为**：
+- ✅ 判定为 CLI（识别 Agent SDK 独立提示词）
+- ✅ 按正常分组策略路由
+- ✅ 转发时替换为标准 CLI 提示词
+- ✅ 日志：`Replaced Agent SDK identity with standard CLI identity`
+
+---
+
+#### 测试场景 2：标准 CLI 请求（回归测试）
+
+**输入**：
+- User-Agent: `claude-cli/2.0.31 (external, cli)`
+- system: `"You are Claude Code, Anthropic's official CLI for Claude."`
+
+**版本 4.3 行为**：
+- ✅ 判定为 CLI
+- ✅ 按正常分组策略路由
+- ✅ 转发时不修改（已经是标准 CLI 提示词）
+- ✅ 行为与版本 4.2 完全一致
+
+---
+
+#### 测试场景 3：非 CLI 请求（回归测试）
+
+**输入**：
+- User-Agent: `curl/7.68.0`
+- system: 无 Claude 身份标识
+
+**版本 4.3 行为**：
+- ✅ 判定为非 CLI
+- ✅ 强制路由到 2api
+- ✅ 执行伪装（插入标准 CLI 提示词）
+- ✅ 行为与版本 4.2 完全一致
+
+---
+
+### 14.6 日志变化
+
+#### 新增日志（转发阶段）
+
+**场景**：检测到 Agent SDK 独立提示词并替换
+```json
+{
+  "level": "debug",
+  "msg": "ProxyForwarder: Replaced Agent SDK identity with standard CLI identity",
+  "providerId": "provider_123",
+  "originalIndex": 1
+}
+```
+
+**说明**：
+- `originalIndex`：Agent SDK 提示词在 system 数组中的位置（0 或 1）
+  - 0：旧版本格式（身份在 system[0]）
+  - 1：新版本格式（system[0] 是 billing header，身份在 system[1]）
+- 该日志仅在检测到 Agent SDK 独立提示词时输出
+
+---
+
+#### 现有日志（保持不变）
+
+**校验阶段**：
+```json
+{
+  "level": "info",
+  "msg": "ProxyClientGuard: CLI request allowed (no restrictions)",
+  "userName": "test_user",
+  "reasons": ["UA matched: claude-cli", "has Claude Code identity", "user_id format valid"]
+}
+```
+
+**转发阶段**（无身份标识时）：
+```json
+{
+  "level": "debug",
+  "msg": "ProxyForwarder: Added Claude Code identity to system (normalization)",
+  "providerId": "provider_123"
+}
+```
+
+---
+
+### 14.7 监控建议
+
+#### 新增监控指标
+
+| 指标 | 说明 | 告警阈值 |
+|------|------|---------|
+| Agent SDK 替换频率 | `Replaced Agent SDK identity` 日志出现次数 | 监控趋势 |
+| Agent SDK 独立提示词占比 | 使用独立提示词的请求占比 | 突然变化 |
+
+#### 日志关键词
+
+**DEBUG 级别**：
+- `Replaced Agent SDK identity with standard CLI identity` - Agent SDK 提示词替换事件
+- `Added Claude Code identity to system (normalization)` - 插入标准 CLI 提示词
+
+**INFO 级别**：
+- `CLI request allowed` - CLI 请求通过校验（包含 Agent SDK 独立提示词）
+
+---
+
+### 14.8 总结
+
+**版本 4.3 解决的问题**：
+1. ✅ **Agent SDK 独立提示词不被识别** → 增加校验逻辑，支持独立提示词
+2. ✅ **上游身份不统一** → 转发时替换为标准 CLI 提示词
+3. ✅ **真实 Agent SDK 请求被误判** → 修复误路由到 2api 的问题
+4. ✅ **新旧版本兼容性** → 明确只检查 system[0] 和 system[1]（兼容 billing header）
+
+**核心价值**：
+- 🔍 **完整支持**：支持所有 Claude CLI 和 Agent SDK 变体
+- 🛡️ **统一身份**：转发给上游时统一使用标准 CLI 提示词
+- 🚀 **向后兼容**：不影响现有 CLI 请求和非 CLI 请求
+- ⚡ **性能优化**：只检查前2个元素，避免遍历整个数组
+
+**影响范围**：
+- ✅ 不影响标准 CLI 请求
+- ✅ 不影响 Agent SDK 变体1（"running within the Claude Agent SDK"）
+- ✅ 修复 Agent SDK 变体2（独立提示词）误判问题
+- ✅ 统一上游身份标识
+- ✅ 兼容新版本格式（system[0] 为 billing header）
+
+---
+
+**文档版本**: 4.3（支持 Agent SDK 独立提示词 + 转发替换）
+**维护者**: Team
+**上次更新**: 2026-01-29
+

@@ -93,8 +93,9 @@ export class ProxyClientGuard {
    *
    * Claude CLI 请求特征：
    * 1. User-Agent 包含 claude-cli 或 claude-vscode
-   * 2. system[0] 包含 "You are Claude Code, Anthropic's official CLI for Claude"
-   *    - 支持标准 CLI 和 Agent SDK 两种变体
+   * 2. system[0] 包含以下任一身份标识：
+   *    - "You are Claude Code, Anthropic's official CLI for Claude"（标准 CLI）
+   *    - "You are a Claude agent, built on Anthropic's Claude Agent SDK"（Agent SDK）
    * 3. metadata.user_id 符合 user_{64hex}_account__session_{uuid} 格式
    *
    * @param userAgent - User-Agent 头
@@ -121,14 +122,18 @@ export class ProxyClientGuard {
       reasons.push(`UA matched: ${clientInfo.clientType}`);
 
       // 2. 检查 system[0] 是否包含 Claude Code 身份
-      // 支持两种变体：
+      // 支持三种变体：
       // - 标准 CLI: "You are Claude Code, Anthropic's official CLI for Claude."
-      // - Agent SDK: "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+      // - Agent SDK (变体1): "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+      // - Agent SDK (变体2): "You are a Claude agent, built on Anthropic's Claude Agent SDK."
       const system = requestBody.system;
       let hasClaudeIdentity = false;
 
       const checkClaudeIdentity = (text: string): boolean => {
-        return text.includes("You are Claude Code, Anthropic's official CLI for Claude");
+        return (
+          text.includes("You are Claude Code, Anthropic's official CLI for Claude") ||
+          text.includes("You are a Claude agent, built on Anthropic's Claude Agent SDK")
+        );
       };
 
       if (typeof system === "string") {
