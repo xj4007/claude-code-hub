@@ -20,7 +20,7 @@
 
 **核心提示词**：
 ```markdown
-# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)
+# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.
 ```
 
 ### 2. 注入逻辑
@@ -38,7 +38,7 @@
 // 在 "(user's private global instructions for all projects):" 后面插入
 Contents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):
 
-# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)
+# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.
 ```
 
 **注入内容**：
@@ -66,7 +66,7 @@ Contents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructio
 ```json
 {
   "type": "text",
-  "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)\n\n\n</system-reminder>"
+  "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.\n\n\n</system-reminder>"
 }
 ```
 
@@ -293,7 +293,7 @@ import type { ProxySession } from "@/app/v1/_lib/proxy/session";
  */
 const SUPPLEMENTARY_PROMPT_CORE = `
 
-# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)
+# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.
 
 `;
 
@@ -439,7 +439,7 @@ export class SupplementaryPromptInjector {
     let text = String(item.text || "");
 
     // 检查是否已包含补充提示词（避免重复插入）
-    if (text.includes("When the output file exceeds 100 lines")) {
+    if (text.includes("Please be aware that your single response content (Output) must not exceed 8192 tokens")) {
       logger.debug("[SupplementaryPromptInjector] Already contains supplementary prompt");
       return false;
     }
@@ -491,7 +491,7 @@ export class SupplementaryPromptInjector {
       if (!item || typeof item !== "object") return false;
       const obj = item as Record<string, unknown>;
       const text = String(obj.text || "");
-      return text.includes("<system-reminder>") && text.includes("When the output file exceeds 100 lines");
+      return text.includes("<system-reminder>") && text.includes("Please be aware that your single response content (Output) must not exceed 8192 tokens");
     });
 
     if (hasExisting) {
@@ -801,7 +801,7 @@ export interface ProviderDisplay {
       "content": [
         {
           "type": "text",
-          "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\n...\n\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)\n\n# Some existing instructions\n\n</system-reminder>"
+          "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\n...\n\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.\n\n# Some existing instructions\n\n</system-reminder>"
         },
         {
           "type": "text",
@@ -848,7 +848,7 @@ export interface ProviderDisplay {
       "content": [
         {
           "type": "text",
-          "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\n...\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)\n\n\n</system-reminder>"
+          "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\n...\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.\n\n\n</system-reminder>"
         },
         {
           "type": "text",
@@ -934,7 +934,7 @@ export interface ProviderDisplay {
 ```markdown
 Contents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):
 
-# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)
+# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.
 
 # 原有内容
 ```
@@ -987,7 +987,7 @@ Contents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructio
   "content": [
     {
       "type": "text",
-      "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# When the output file exceeds 100 lines, output it in chunks (by editing the file multiple times or splitting it into a main file plus sub-files)\n\n\n</system-reminder>"
+      "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# claudeMd\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of {UNIVERSAL_PATH}/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# Please be aware that your single response content (Output) must not exceed 8192 tokens. Exceeding this limit will result in truncation and may cause tool call failures or other critical errors.\n\n\n</system-reminder>"
     },
     {
       "type": "text",
