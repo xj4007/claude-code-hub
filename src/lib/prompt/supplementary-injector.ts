@@ -21,8 +21,7 @@ const CLI_CONTEXT_KEYWORD =
 /**
  * 插入锚点关键字（插入位置的标识）
  */
-const INSERTION_ANCHOR =
-  "(user's private global instructions for all projects):";
+const INSERTION_ANCHOR = "(user's private global instructions for all projects):";
 
 /**
  * 完整的 <system-reminder> 块（用于直接注入）
@@ -52,10 +51,7 @@ export class SupplementaryPromptInjector {
    * @param session - 代理会话（用于子代理判断）
    * @returns 是否成功注入
    */
-  static inject(
-    requestBody: Record<string, unknown>,
-    session: ProxySession,
-  ): boolean {
+  static inject(requestBody: Record<string, unknown>, session: ProxySession): boolean {
     try {
       // 1. 提取请求特征（子代理判断）
       const cacheSignals = extractCacheSignals(requestBody, session);
@@ -65,14 +61,11 @@ export class SupplementaryPromptInjector {
         cacheSignals.hasEmptySystemReminder;
 
       if (isSubAgent) {
-        logger.debug(
-          "[SupplementaryPromptInjector] Skipping sub-agent request",
-          {
-            hasTitlePrompt: cacheSignals.hasTitlePrompt,
-            hasAssistantBrace: cacheSignals.hasAssistantBrace,
-            hasEmptySystemReminder: cacheSignals.hasEmptySystemReminder,
-          },
-        );
+        logger.debug("[SupplementaryPromptInjector] Skipping sub-agent request", {
+          hasTitlePrompt: cacheSignals.hasTitlePrompt,
+          hasAssistantBrace: cacheSignals.hasAssistantBrace,
+          hasEmptySystemReminder: cacheSignals.hasEmptySystemReminder,
+        });
         return false;
       }
 
@@ -92,12 +85,9 @@ export class SupplementaryPromptInjector {
       // 校验首条消息必须是 user 角色
       const role = (firstMessage as Record<string, unknown>).role;
       if (role !== "user") {
-        logger.debug(
-          "[SupplementaryPromptInjector] First message is not user role, skipping",
-          {
-            role,
-          },
-        );
+        logger.debug("[SupplementaryPromptInjector] First message is not user role, skipping", {
+          role,
+        });
         return false;
       }
 
@@ -116,15 +106,11 @@ export class SupplementaryPromptInjector {
       }
 
       // 4. 检查前两个元素是否包含 CLI 关键字
-      const cliElementIndex =
-        SupplementaryPromptInjector.findCliContextElement(content);
+      const cliElementIndex = SupplementaryPromptInjector.findCliContextElement(content);
 
       if (cliElementIndex !== -1) {
         // 优先级 1：智能插入
-        return SupplementaryPromptInjector.smartInsert(
-          content,
-          cliElementIndex,
-        );
+        return SupplementaryPromptInjector.smartInsert(content, cliElementIndex);
       } else {
         // 优先级 2：直接注入
         return SupplementaryPromptInjector.directInject(content);
@@ -150,10 +136,7 @@ export class SupplementaryPromptInjector {
       if (obj.type !== "text") continue;
 
       const text = String(obj.text || "");
-      if (
-        text.includes("<system-reminder>") &&
-        text.includes(CLI_CONTEXT_KEYWORD)
-      ) {
+      if (text.includes("<system-reminder>") && text.includes(CLI_CONTEXT_KEYWORD)) {
         return i;
       }
     }
@@ -167,31 +150,24 @@ export class SupplementaryPromptInjector {
    * @param elementIndex - 目标元素索引
    * @returns 是否成功
    */
-  private static smartInsert(
-    content: unknown[],
-    elementIndex: number,
-  ): boolean {
+  private static smartInsert(content: unknown[], elementIndex: number): boolean {
     const item = content[elementIndex] as Record<string, unknown>;
     let text = String(item.text || "");
 
     // 检查是否已包含补充提示词（避免重复插入）
     if (
       text.includes(
-        "Please be aware that your single response content (Output) must not exceed 8192 tokens",
+        "Please be aware that your single response content (Output) must not exceed 8192 tokens"
       )
     ) {
-      logger.debug(
-        "[SupplementaryPromptInjector] Already contains supplementary prompt",
-      );
+      logger.debug("[SupplementaryPromptInjector] Already contains supplementary prompt");
       return false;
     }
 
     // 查找插入锚点
     const anchorIndex = text.indexOf(INSERTION_ANCHOR);
     if (anchorIndex === -1) {
-      logger.warn(
-        "[SupplementaryPromptInjector] Anchor not found, falling back to direct inject",
-      );
+      logger.warn("[SupplementaryPromptInjector] Anchor not found, falling back to direct inject");
 
       // 在降级前，先对现有 text 进行路径通用化处理
       // （避免原有 <system-reminder> 中的路径未被通用化）
@@ -199,7 +175,7 @@ export class SupplementaryPromptInjector {
       if (normalizedText !== text) {
         item.text = normalizedText;
         logger.debug(
-          "[SupplementaryPromptInjector] Normalized paths in existing content before fallback",
+          "[SupplementaryPromptInjector] Normalized paths in existing content before fallback"
         );
       }
 
@@ -212,9 +188,7 @@ export class SupplementaryPromptInjector {
     // 在锚点后插入
     const insertPosition = anchorIndex + INSERTION_ANCHOR.length;
     const newText =
-      text.slice(0, insertPosition) +
-      SUPPLEMENTARY_PROMPT_CORE +
-      text.slice(insertPosition);
+      text.slice(0, insertPosition) + SUPPLEMENTARY_PROMPT_CORE + text.slice(insertPosition);
 
     item.text = newText;
 
@@ -243,15 +217,13 @@ export class SupplementaryPromptInjector {
       return (
         text.includes("<system-reminder>") &&
         text.includes(
-          "Please be aware that your single response content (Output) must not exceed 8192 tokens",
+          "Please be aware that your single response content (Output) must not exceed 8192 tokens"
         )
       );
     });
 
     if (hasExisting) {
-      logger.debug(
-        "[SupplementaryPromptInjector] Already has full system-reminder with prompt",
-      );
+      logger.debug("[SupplementaryPromptInjector] Already has full system-reminder with prompt");
       return false;
     }
 
