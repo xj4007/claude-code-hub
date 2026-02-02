@@ -92,7 +92,7 @@ describe("CacheSimulator", () => {
     expect(result?.cache_read_input_tokens).toBe(0);
   });
 
-  it("splits delta into cache read and creation with min 50", async () => {
+  it("splits delta into cache read and creation with min 300", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
@@ -101,23 +101,23 @@ describe("CacheSimulator", () => {
 
     const request = makeRequest("x".repeat(40));
     await CacheSimulator.calculate(request, "user_2", makeSession(), {
-      input_tokens: 100,
+      input_tokens: 1000,
       output_tokens: 1,
     });
 
     const result = await CacheSimulator.calculate(request, "user_2", makeSession(), {
-      input_tokens: 200,
+      input_tokens: 1500,
       output_tokens: 2,
     });
 
-    expect(result?.cache_read_input_tokens).toBe(90);
-    expect(result?.cache_creation_input_tokens).toBe(50);
-    expect(result?.input_tokens).toBe(60);
+    expect(result?.cache_read_input_tokens).toBe(990);
+    expect(result?.cache_creation_input_tokens).toBe(300);
+    expect(result?.input_tokens).toBe(210);
 
     randomSpy.mockRestore();
   });
 
-  it("assigns all delta to cache creation when below minimum", async () => {
+  it("assigns all delta to input tokens when below minimum", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
@@ -125,18 +125,18 @@ describe("CacheSimulator", () => {
 
     const request = makeRequest("x".repeat(40));
     await CacheSimulator.calculate(request, "user_3", makeSession(), {
-      input_tokens: 100,
+      input_tokens: 1000,
       output_tokens: 1,
     });
 
     const result = await CacheSimulator.calculate(request, "user_3", makeSession(), {
-      input_tokens: 120,
+      input_tokens: 1250,
       output_tokens: 1,
     });
 
-    expect(result?.cache_read_input_tokens).toBe(90);
-    expect(result?.cache_creation_input_tokens).toBe(30);
-    expect(result?.input_tokens).toBe(0);
+    expect(result?.cache_read_input_tokens).toBe(990);
+    expect(result?.cache_creation_input_tokens).toBe(0);
+    expect(result?.input_tokens).toBe(260);
   });
 
   it("handles compression when current input is below last", async () => {

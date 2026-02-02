@@ -21,7 +21,7 @@ export type SimulatedUsage = {
   };
 };
 
-const MIN_CACHE_CREATION = 50;
+const MIN_CACHE_CREATION = 300;
 
 const SESSION_TTL_SECONDS = (() => {
   const raw = Number.parseInt(process.env.SESSION_TTL || "300", 10);
@@ -117,7 +117,7 @@ export class CacheSimulator {
       return { inputTokens: 0, cacheCreationTokens: 0 };
     }
     if (delta < MIN_CACHE_CREATION) {
-      return { inputTokens: 0, cacheCreationTokens: delta };
+      return { inputTokens: delta, cacheCreationTokens: 0 };
     }
 
     const cacheCreationTokens = CacheSimulator.randomInt(MIN_CACHE_CREATION, delta);

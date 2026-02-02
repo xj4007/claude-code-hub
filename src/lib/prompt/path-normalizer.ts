@@ -52,7 +52,7 @@ export function normalizePathsInText(text: string): string {
   // 注意：需要包含冒号以支持 Windows 路径（C:\Users\...）
   const pathRegex = /Contents of ([^\n\r()]+\.claude\/CLAUDE\.md)/g;
 
-  return text.replace(pathRegex, (match, path) => {
+  return text.replace(pathRegex, (_match, path) => {
     const normalized = normalizePathToUniversal(path);
     return `Contents of ${normalized}`;
   });

@@ -3,7 +3,7 @@ import { STATUS_CODES } from "node:http";
 import type { Readable } from "node:stream";
 import { createGunzip, constants as zlibConstants } from "node:zlib";
 import type { Dispatcher } from "undici";
-import { Agent, request as undiciRequest } from "undici";
+import { request as undiciRequest } from "undici";
 import {
   getCircuitState,
   getProviderHealthInfo,
@@ -18,12 +18,7 @@ import { recordEndpointFailure, recordEndpointSuccess } from "@/lib/endpoint-cir
 import { logger } from "@/lib/logger";
 import { SupplementaryPromptInjector } from "@/lib/prompt/supplementary-injector";
 import { getPreferredProviderEndpoints } from "@/lib/provider-endpoints/endpoint-selector";
-import {
-  createProxyAgentForProvider,
-  getGlobalAgentPool,
-  getProxyAgentForProvider,
-  type ProxyConfigWithCacheKey,
-} from "@/lib/proxy-agent";
+import { getGlobalAgentPool, getProxyAgentForProvider } from "@/lib/proxy-agent";
 import { SessionManager } from "@/lib/session-manager";
 import { CONTEXT_1M_BETA_HEADER, shouldApplyContext1m } from "@/lib/special-attributes";
 import {
@@ -286,14 +281,14 @@ function ensureClaudeRequestDefaults(
       metadata.user_id = `user_${provider.unifiedClientId}_account__session_${sessionUuid}`;
       logger.info("ProxyForwarder: Applied provider unified client ID to metadata.user_id", {
         providerId: provider.id,
-        userIdPrefix: String(metadata.user_id).substring(0, 30) + "...",
+        userIdPrefix: `${String(metadata.user_id).substring(0, 30)}...`,
       });
     } else if (!metadata.user_id) {
       const sessionUuid = crypto.randomUUID();
       metadata.user_id = `user_${defaultClientId}_account__session_${sessionUuid}`;
       logger.info("ProxyForwarder: Added metadata.user_id for normalization", {
         providerId: provider.id,
-        userIdPrefix: String(metadata.user_id).substring(0, 30) + "...",
+        userIdPrefix: `${String(metadata.user_id).substring(0, 30)}...`,
       });
     }
 
