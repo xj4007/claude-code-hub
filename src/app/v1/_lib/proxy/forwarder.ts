@@ -225,7 +225,7 @@ function ensureClaudeRequestDefaults(
 
       // 2. 处理 x-anthropic-billing-header
       const BILLING_HEADER_VALUE =
-        "x-anthropic-billing-header: cc_version=2.1.19.cab; cc_entrypoint=cli";
+        "x-anthropic-billing-header: cc_version=2.1.34.738; cc_entrypoint=cli;";
 
       // 查找是否存在 billing header
       const billingHeaderIndex = system.findIndex(
