@@ -92,7 +92,7 @@ describe("CacheSimulator", () => {
     expect(result?.cache_read_input_tokens).toBe(0);
   });
 
-  it("splits delta into cache read and creation with min 300", async () => {
+  it("splits delta into cache read and creation with min 90", async () => {
     const { client } = makeFakeRedis();
     redisClientRef = client;
 
@@ -101,18 +101,18 @@ describe("CacheSimulator", () => {
 
     const request = makeRequest("x".repeat(40));
     await CacheSimulator.calculate(request, "user_2", makeSession(), {
-      input_tokens: 1000,
+      input_tokens: 100,
       output_tokens: 1,
     });
 
     const result = await CacheSimulator.calculate(request, "user_2", makeSession(), {
-      input_tokens: 1500,
+      input_tokens: 300,
       output_tokens: 2,
     });
 
-    expect(result?.cache_read_input_tokens).toBe(990);
-    expect(result?.cache_creation_input_tokens).toBe(300);
-    expect(result?.input_tokens).toBe(210);
+    expect(result?.cache_read_input_tokens).toBe(90);
+    expect(result?.cache_creation_input_tokens).toBe(90);
+    expect(result?.input_tokens).toBe(120);
 
     randomSpy.mockRestore();
   });
@@ -125,18 +125,18 @@ describe("CacheSimulator", () => {
 
     const request = makeRequest("x".repeat(40));
     await CacheSimulator.calculate(request, "user_3", makeSession(), {
-      input_tokens: 1000,
+      input_tokens: 100,
       output_tokens: 1,
     });
 
     const result = await CacheSimulator.calculate(request, "user_3", makeSession(), {
-      input_tokens: 1250,
+      input_tokens: 170,
       output_tokens: 1,
     });
 
-    expect(result?.cache_read_input_tokens).toBe(990);
+    expect(result?.cache_read_input_tokens).toBe(90);
     expect(result?.cache_creation_input_tokens).toBe(0);
-    expect(result?.input_tokens).toBe(260);
+    expect(result?.input_tokens).toBe(80);
   });
 
   it("handles compression when current input is below last", async () => {

@@ -21,7 +21,7 @@ export type SimulatedUsage = {
   };
 };
 
-const MIN_CACHE_CREATION = 300;
+const MIN_CACHE_CREATION = 90;
 
 const SESSION_TTL_SECONDS = (() => {
   const raw = Number.parseInt(process.env.SESSION_TTL || "300", 10);

@@ -135,7 +135,7 @@ function resolveCacheSessionKey(request: Record<string, unknown>): string | null
 
 #### 核心常量
 ```typescript
-const MIN_CACHE_CREATION = 300;       // 最小缓存创建 token 数
+const MIN_CACHE_CREATION = 90;        // 最小缓存创建 token 数
 const SESSION_TTL_SECONDS = 300;      // 会话缓存 TTL（5分钟）
 const LAST_INPUT_KEY_PREFIX = "cache:sim:last_input";
 ```
@@ -185,31 +185,31 @@ cacheCreation = 1000 - 100 = 900
 **场景 2：正常增量请求（current >= last）**
 ```typescript
 // 输入：
-upstreamUsage = { input_tokens: 1350, output_tokens: 60 }
+upstreamUsage = { input_tokens: 1150, output_tokens: 60 }
 lastState = { lastCacheCreationTokens: 900 }
 
 // 计算：
-delta = 1350 - 900 = 450
-// 随机拆分（保证 cache_creation >= 300）
-cacheCreation = randomInt(300, 450)  // 假设 = 320
-inputTokens = 450 - 320 = 130
+delta = 1150 - 900 = 250
+// 随机拆分（保证 cache_creation >= 90）
+cacheCreation = randomInt(90, 250)  // 假设 = 120
+inputTokens = 250 - 120 = 130
 
 // 输出：
 {
   input_tokens: 130,
   output_tokens: 60,
   cache_read_input_tokens: 900,      // 上次的 cache_creation
-  cache_creation_input_tokens: 320,
-  cache_creation_5m_input_tokens: 320,
+  cache_creation_input_tokens: 120,
+  cache_creation_5m_input_tokens: 120,
   cache_creation_1h_input_tokens: 0,
   cache_creation: {
-    ephemeral_5m_input_tokens: 320,
+    ephemeral_5m_input_tokens: 120,
     ephemeral_1h_input_tokens: 0
   }
 }
 
 // Redis 更新：
-{ input_tokens: 1350, cache_creation_input_tokens: 1220 }  // 900 + 320
+{ input_tokens: 1150, cache_creation_input_tokens: 1020 }  // 900 + 120
 ```
 
 **场景 3：压缩场景（current < last）**
@@ -240,18 +240,18 @@ cacheRead = 800 - 80 = 720
 { input_tokens: 800, cache_creation_input_tokens: 800 }  // 720 + 80
 ```
 
-**场景 4：delta < 300（全部归入 input_tokens）**
+**场景 4：delta < 90（全部归入 input_tokens）**
 ```typescript
 // 输入：
-upstreamUsage = { input_tokens: 1150, output_tokens: 45 }
+upstreamUsage = { input_tokens: 970, output_tokens: 45 }
 lastState = { lastCacheCreationTokens: 900 }
 
 // 计算：
-delta = 1150 - 900 = 250  // < MIN_CACHE_CREATION
+delta = 970 - 900 = 70  // < MIN_CACHE_CREATION
 
 // 输出：
 {
-  input_tokens: 250,                 // delta 太小，全部归入 input_tokens
+  input_tokens: 70,                  // delta 太小，全部归入 input_tokens
   output_tokens: 45,
   cache_read_input_tokens: 900,
   cache_creation_input_tokens: 0,
@@ -264,7 +264,7 @@ delta = 1150 - 900 = 250  // < MIN_CACHE_CREATION
 }
 
 // Redis 更新：
-{ input_tokens: 1150, cache_creation_input_tokens: 900 }  // 保持不变
+{ input_tokens: 970, cache_creation_input_tokens: 900 }  // 保持不变
 ```
 
 #### Token 估算方法
@@ -645,7 +645,7 @@ const transformedStream = originalStream.pipeThrough(
 |---------|--------|
 | 首次请求 | 使用最后 user 文本估算 input_tokens |
 | 增量请求 | delta 正确拆分为 input + cache_creation |
-| delta < 300 | 全部归入 input_tokens |
+| delta < 90 | 全部归入 input_tokens |
 | 压缩场景 | current < last 时特殊处理 |
 | 会话隔离 | 不同 sessionKey 不互串 |
 | Redis 失败 | 降级为不模拟（返回 null） |
@@ -677,7 +677,7 @@ const transformedStream = originalStream.pipeThrough(
 
 ### 3. 误差范围
 - Token 估算基于 `length / 4`，误差 5-15%
-- 随机拆分保证 `cache_creation >= 300`
+- 随机拆分保证 `cache_creation >= 90`
 - 不要求完全可复现（每次拆分可能不同）
 
 ### 4. TTL 管理
