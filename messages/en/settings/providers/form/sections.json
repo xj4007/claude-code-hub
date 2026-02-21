@@ -8,6 +8,10 @@
       "title": "API Endpoint",
       "desc": "Configure the base URL for API requests"
     },
+    "endpointPool": {
+      "title": "Endpoint Pool",
+      "desc": "Manage vendor endpoints for this provider type"
+    },
     "auth": {
       "title": "Authentication",
       "desc": "Provide your API key for authentication"
@@ -44,32 +48,6 @@
     },
     "summary": "{failureThreshold} failures / {openDuration} min break / {successThreshold} successes to recover / {maxRetryAttempts} attempts per provider",
     "title": "Circuit Breaker"
-  },
-  "codexStrategy": {
-    "desc": "Control how to handle the instructions field in Codex requests; affects gateway compatibility",
-    "hint": "Hint: Some strict Codex gateways (e.g. 88code, foxcode) require official instructions. Choose \"Auto\" or \"Force official\".",
-    "select": {
-      "auto": {
-        "desc": "Pass through client instructions; on 400 error, retry with official prompt",
-        "label": "Auto (recommended)"
-      },
-      "force": {
-        "desc": "Always use official Codex CLI instructions (~4000+ chars)",
-        "label": "Force official"
-      },
-      "keep": {
-        "desc": "Always pass through client instructions, no auto retry (for permissive gateways)",
-        "label": "Pass-through"
-      },
-      "label": "Strategy",
-      "placeholder": "Select a strategy"
-    },
-    "summary": {
-      "auto": "Auto (recommended)",
-      "force": "Force official",
-      "keep": "Pass-through"
-    },
-    "title": "Codex Instructions Policy"
   },
   "mcpPassthrough": {
     "desc": "When enabled, pass through MCP tool calls to specified AI provider (e.g. minimax for image recognition, web search)",
@@ -196,6 +174,8 @@
       }
     },
     "codexOverrides": {
+      "title": "Codex Parameter Overrides",
+      "desc": "Override Codex (Responses API) request parameters at the provider level",
       "parallelToolCalls": {
         "help": "Controls whether parallel tool calls are allowed. \"inherit\" follows the client request. Disabling may reduce tool-call concurrency.",
         "label": "Parallel Tool Calls Override",
@@ -235,6 +215,67 @@
           "inherit": "No override (follow client)",
           "low": "low",
           "medium": "medium (default)"
+        }
+      }
+    },
+    "anthropicOverrides": {
+      "maxTokens": {
+        "label": "Max Tokens Override",
+        "help": "Override max_tokens in request body. Range: 1-64000. 'inherit' follows the client request.",
+        "options": {
+          "inherit": "No override (follow client)",
+          "custom": "Custom"
+        },
+        "placeholder": "e.g. 32000"
+      },
+      "thinkingBudget": {
+        "label": "Thinking Budget Override",
+        "help": "Override thinking.budget_tokens in request body. Range: 1024-32000. Forces thinking.type to 'enabled' when set. If adaptive thinking is also enabled and model matches, adaptive takes priority.",
+        "options": {
+          "inherit": "No override (follow client)",
+          "custom": "Custom"
+        },
+        "placeholder": "e.g. 10240",
+        "maxOutButton": "Max Out (32000)"
+      },
+      "adaptiveThinking": {
+        "label": "Adaptive Thinking",
+        "help": "Enable adaptive thinking mode. When enabled and model matches, overrides thinking budget. Non-matching models fall back to thinking budget override.",
+        "effort": {
+          "label": "Effort Level",
+          "help": "Controls depth of reasoning. Higher effort = deeper thinking.",
+          "options": {
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High (Recommended)",
+            "max": "Max"
+          }
+        },
+        "modelMatchMode": {
+          "label": "Model Matching",
+          "help": "Which models should use adaptive thinking.",
+          "options": {
+            "all": "All models",
+            "specific": "Specific models only"
+          }
+        },
+        "models": {
+          "label": "Target Models",
+          "help": "Models that will use adaptive thinking. Non-matching models pass through unchanged.",
+          "placeholder": "e.g. claude-opus-4-6",
+          "addButton": "Add Model"
+        }
+      }
+    },
+    "geminiOverrides": {
+      "title": "Gemini Parameter Overrides",
+      "desc": "Override Gemini API request parameters at the provider level",
+      "googleSearch": {
+        "label": "Google Search (Web Access)",
+        "options": {
+          "inherit": "No override (follow client)",
+          "enabled": "Force enabled",
+          "disabled": "Force disabled"
         }
       }
     },
@@ -304,6 +345,12 @@
         "desc": "Group tag. Select from list or type a new name and press Enter to create (max 50 chars). Only users whose providerGroup matches can use this provider.",
         "label": "Provider Group",
         "placeholder": "e.g. premium, economy"
+      },
+      "groupPriorities": {
+        "label": "Per-Group Priority",
+        "desc": "Override global priority for specific groups. Leave empty to use the global priority above.",
+        "placeholder": "Use global priority",
+        "noGroups": "Set a group tag first to configure per-group priorities"
       },
       "priority": {
         "desc": "Lower value = higher priority (0 is highest). The system only chooses from the highest priority tier. Suggested: primary=0, standby=1, emergency=2",

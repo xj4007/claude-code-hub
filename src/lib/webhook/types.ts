@@ -45,6 +45,12 @@ export interface CircuitBreakerAlertData {
   failureCount: number;
   retryAt: string;
   lastError?: string;
+  /** Incident source: 'provider' for key circuit, 'endpoint' for endpoint circuit */
+  incidentSource?: "provider" | "endpoint";
+  /** Endpoint ID when incidentSource is 'endpoint' */
+  endpointId?: number;
+  /** Endpoint URL when incidentSource is 'endpoint' */
+  endpointUrl?: string;
 }
 
 export interface DailyLeaderboardEntry {
@@ -103,6 +109,8 @@ export interface WebhookSendOptions {
   notificationType?: WebhookNotificationType;
   data?: unknown;
   templateOverride?: Record<string, unknown> | null;
+  /** IANA timezone identifier for date/time formatting */
+  timezone?: string;
 }
 
 export interface WebhookPayload {

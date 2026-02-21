@@ -140,6 +140,7 @@ function createFallbackSettings(): SystemSettings {
     allowGlobalUsageView: false,
     currencyDisplay: "USD",
     billingModelSource: "original",
+    timezone: null,
     enableAutoCleanup: false,
     cleanupRetentionDays: 30,
     cleanupSchedule: "0 2 * * *",
@@ -149,7 +150,10 @@ function createFallbackSettings(): SystemSettings {
     enableHttp2: false,
     interceptAnthropicWarmupRequests: false,
     enableThinkingSignatureRectifier: true,
+    enableThinkingBudgetRectifier: true,
+    enableBillingHeaderRectifier: true,
     enableCodexSessionIdCompletion: true,
+    enableClaudeMetadataUserIdInjection: true,
     enableResponseFixer: true,
     responseFixerConfig: {
       fixTruncatedJson: true,
@@ -158,6 +162,12 @@ function createFallbackSettings(): SystemSettings {
       maxJsonDepth: 200,
       maxFixSize: 1024 * 1024,
     },
+    quotaDbRefreshIntervalSeconds: 10,
+    quotaLeasePercent5h: 0.05,
+    quotaLeasePercentDaily: 0.05,
+    quotaLeasePercentWeekly: 0.05,
+    quotaLeasePercentMonthly: 0.05,
+    quotaLeaseCapUsd: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -174,6 +184,7 @@ export async function getSystemSettings(): Promise<SystemSettings> {
       allowGlobalUsageView: systemSettings.allowGlobalUsageView,
       currencyDisplay: systemSettings.currencyDisplay,
       billingModelSource: systemSettings.billingModelSource,
+      timezone: systemSettings.timezone,
       enableAutoCleanup: systemSettings.enableAutoCleanup,
       cleanupRetentionDays: systemSettings.cleanupRetentionDays,
       cleanupSchedule: systemSettings.cleanupSchedule,
@@ -183,9 +194,18 @@ export async function getSystemSettings(): Promise<SystemSettings> {
       enableHttp2: systemSettings.enableHttp2,
       interceptAnthropicWarmupRequests: systemSettings.interceptAnthropicWarmupRequests,
       enableThinkingSignatureRectifier: systemSettings.enableThinkingSignatureRectifier,
+      enableThinkingBudgetRectifier: systemSettings.enableThinkingBudgetRectifier,
+      enableBillingHeaderRectifier: systemSettings.enableBillingHeaderRectifier,
       enableCodexSessionIdCompletion: systemSettings.enableCodexSessionIdCompletion,
+      enableClaudeMetadataUserIdInjection: systemSettings.enableClaudeMetadataUserIdInjection,
       enableResponseFixer: systemSettings.enableResponseFixer,
       responseFixerConfig: systemSettings.responseFixerConfig,
+      quotaDbRefreshIntervalSeconds: systemSettings.quotaDbRefreshIntervalSeconds,
+      quotaLeasePercent5h: systemSettings.quotaLeasePercent5h,
+      quotaLeasePercentDaily: systemSettings.quotaLeasePercentDaily,
+      quotaLeasePercentWeekly: systemSettings.quotaLeasePercentWeekly,
+      quotaLeasePercentMonthly: systemSettings.quotaLeasePercentMonthly,
+      quotaLeaseCapUsd: systemSettings.quotaLeaseCapUsd,
       createdAt: systemSettings.createdAt,
       updatedAt: systemSettings.updatedAt,
     };
@@ -282,6 +302,11 @@ export async function updateSystemSettings(
       updates.billingModelSource = payload.billingModelSource;
     }
 
+    // 系统时区配置字段（如果提供）
+    if (payload.timezone !== undefined) {
+      updates.timezone = payload.timezone;
+    }
+
     // 日志清理配置字段（如果提供）
     if (payload.enableAutoCleanup !== undefined) {
       updates.enableAutoCleanup = payload.enableAutoCleanup;
@@ -321,9 +346,24 @@ export async function updateSystemSettings(
       updates.enableThinkingSignatureRectifier = payload.enableThinkingSignatureRectifier;
     }
 
+    // thinking budget 整流器开关（如果提供）
+    if (payload.enableThinkingBudgetRectifier !== undefined) {
+      updates.enableThinkingBudgetRectifier = payload.enableThinkingBudgetRectifier;
+    }
+
+    // billing header 整流器开关（如果提供）
+    if (payload.enableBillingHeaderRectifier !== undefined) {
+      updates.enableBillingHeaderRectifier = payload.enableBillingHeaderRectifier;
+    }
+
     // Codex Session ID 补全开关（如果提供）
     if (payload.enableCodexSessionIdCompletion !== undefined) {
       updates.enableCodexSessionIdCompletion = payload.enableCodexSessionIdCompletion;
+    }
+
+    // Claude metadata.user_id 注入开关（如果提供）
+    if (payload.enableClaudeMetadataUserIdInjection !== undefined) {
+      updates.enableClaudeMetadataUserIdInjection = payload.enableClaudeMetadataUserIdInjection;
     }
 
     // 响应整流开关（如果提供）
@@ -338,6 +378,27 @@ export async function updateSystemSettings(
       };
     }
 
+    // Quota lease settings（如果提供）
+    if (payload.quotaDbRefreshIntervalSeconds !== undefined) {
+      updates.quotaDbRefreshIntervalSeconds = payload.quotaDbRefreshIntervalSeconds;
+    }
+    if (payload.quotaLeasePercent5h !== undefined) {
+      updates.quotaLeasePercent5h = String(payload.quotaLeasePercent5h);
+    }
+    if (payload.quotaLeasePercentDaily !== undefined) {
+      updates.quotaLeasePercentDaily = String(payload.quotaLeasePercentDaily);
+    }
+    if (payload.quotaLeasePercentWeekly !== undefined) {
+      updates.quotaLeasePercentWeekly = String(payload.quotaLeasePercentWeekly);
+    }
+    if (payload.quotaLeasePercentMonthly !== undefined) {
+      updates.quotaLeasePercentMonthly = String(payload.quotaLeasePercentMonthly);
+    }
+    if (payload.quotaLeaseCapUsd !== undefined) {
+      updates.quotaLeaseCapUsd =
+        payload.quotaLeaseCapUsd === null ? null : String(payload.quotaLeaseCapUsd);
+    }
+
     const [updated] = await db
       .update(systemSettings)
       .set(updates)
@@ -348,6 +409,7 @@ export async function updateSystemSettings(
         allowGlobalUsageView: systemSettings.allowGlobalUsageView,
         currencyDisplay: systemSettings.currencyDisplay,
         billingModelSource: systemSettings.billingModelSource,
+        timezone: systemSettings.timezone,
         enableAutoCleanup: systemSettings.enableAutoCleanup,
         cleanupRetentionDays: systemSettings.cleanupRetentionDays,
         cleanupSchedule: systemSettings.cleanupSchedule,
@@ -357,9 +419,17 @@ export async function updateSystemSettings(
         enableHttp2: systemSettings.enableHttp2,
         interceptAnthropicWarmupRequests: systemSettings.interceptAnthropicWarmupRequests,
         enableThinkingSignatureRectifier: systemSettings.enableThinkingSignatureRectifier,
+        enableThinkingBudgetRectifier: systemSettings.enableThinkingBudgetRectifier,
         enableCodexSessionIdCompletion: systemSettings.enableCodexSessionIdCompletion,
+        enableClaudeMetadataUserIdInjection: systemSettings.enableClaudeMetadataUserIdInjection,
         enableResponseFixer: systemSettings.enableResponseFixer,
         responseFixerConfig: systemSettings.responseFixerConfig,
+        quotaDbRefreshIntervalSeconds: systemSettings.quotaDbRefreshIntervalSeconds,
+        quotaLeasePercent5h: systemSettings.quotaLeasePercent5h,
+        quotaLeasePercentDaily: systemSettings.quotaLeasePercentDaily,
+        quotaLeasePercentWeekly: systemSettings.quotaLeasePercentWeekly,
+        quotaLeasePercentMonthly: systemSettings.quotaLeasePercentMonthly,
+        quotaLeaseCapUsd: systemSettings.quotaLeaseCapUsd,
         createdAt: systemSettings.createdAt,
         updatedAt: systemSettings.updatedAt,
       });

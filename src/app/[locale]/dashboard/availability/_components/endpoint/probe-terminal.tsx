@@ -1,7 +1,8 @@
 "use client";
 
+import { formatInTimeZone } from "date-fns-tz";
 import { AlertCircle, CheckCircle2, Download, XCircle } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useTimeZone, useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -15,8 +16,11 @@ interface ProbeTerminalProps {
   className?: string;
 }
 
-function formatTime(date: Date | string): string {
+function formatTime(date: Date | string, timeZone?: string): string {
   const d = typeof date === "string" ? new Date(date) : date;
+  if (timeZone) {
+    return formatInTimeZone(d, timeZone, "HH:mm:ss");
+  }
   return d.toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
@@ -68,16 +72,18 @@ export function ProbeTerminal({
   className,
 }: ProbeTerminalProps) {
   const t = useTranslations("dashboard.availability.terminal");
+  const timeZone = useTimeZone() ?? "UTC";
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [filter, setFilter] = useState("");
 
   // Auto-scroll to bottom when new logs arrive
+  // biome-ignore lint/correctness/useExhaustiveDependencies: logs.length intentionally triggers re-scroll
   useEffect(() => {
     if (autoScroll && !userScrolled && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [autoScroll, userScrolled]);
+  }, [logs.length, autoScroll, userScrolled]);
 
   // Detect user scroll
   const handleScroll = () => {
@@ -103,7 +109,7 @@ export function ProbeTerminal({
   const handleDownload = () => {
     const content = filteredLogs
       .map((log) => {
-        const time = formatTime(log.createdAt);
+        const time = formatTime(log.createdAt, timeZone);
         const status = log.ok ? "OK" : "FAIL";
         const latency = formatLatency(log.latencyMs);
         const error = log.errorMessage || "";
@@ -183,7 +189,6 @@ export function ProbeTerminal({
           filteredLogs.map((log) => {
             const level = getLogLevel(log);
             const config = levelConfig[level];
-            const _Icon = config.icon;
 
             return (
               <button
@@ -199,7 +204,7 @@ export function ProbeTerminal({
               >
                 {/* Timestamp */}
                 <span className="text-muted-foreground opacity-60 w-20 shrink-0">
-                  [{formatTime(log.createdAt)}]
+                  [{formatTime(log.createdAt, timeZone)}]
                 </span>
 
                 {/* Status */}
@@ -257,7 +262,7 @@ export function ProbeTerminal({
         {/* Loading indicator */}
         {logs.length > 0 && (
           <div className="flex items-center gap-2 px-2 py-1 text-muted-foreground animate-pulse">
-            <span className="opacity-50">[{formatTime(new Date())}]</span>
+            <span className="opacity-50">[{formatTime(new Date(), timeZone)}]</span>
             <span>...</span>
           </div>
         )}

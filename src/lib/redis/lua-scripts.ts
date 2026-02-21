@@ -5,58 +5,169 @@
  */
 
 /**
- * 原子性检查并发限制 + 追踪 Session（TC-041 修复版）
+ * Atomic concurrency check + session tracking (TC-041 fixed version)
  *
- * 功能：
- * 1. 清理过期 session（5 分钟前）
- * 2. 检查 session 是否已追踪（避免重复计数）
- * 3. 检查当前并发数是否超限
- * 4. 如果未超限，追踪新 session（原子操作）
+ * Features:
+ * 1. Cleanup expired sessions (based on TTL window)
+ * 2. Check if session is already tracked (avoid duplicate counting)
+ * 3. Check if current concurrency exceeds limit
+ * 4. If not exceeded, track new session (atomic operation)
  *
  * KEYS[1]: provider:${providerId}:active_sessions
  * ARGV[1]: sessionId
- * ARGV[2]: limit（并发限制）
- * ARGV[3]: now（当前时间戳，毫秒）
+ * ARGV[2]: limit (concurrency limit)
+ * ARGV[3]: now (current timestamp, ms)
+ * ARGV[4]: ttlMs (optional, cleanup window in ms, default 300000)
  *
- * 返回值：
- * - {1, count, 1} - 允许（新追踪），返回新的并发数和 tracked=1
- * - {1, count, 0} - 允许（已追踪），返回当前并发数和 tracked=0
- * - {0, count, 0} - 拒绝（超限），返回当前并发数和 tracked=0
+ * Return:
+ * - {1, count, 1} - allowed (new tracking), returns new count and tracked=1
+ * - {1, count, 0} - allowed (already tracked), returns current count and tracked=0
+ * - {0, count, 0} - rejected (limit reached), returns current count and tracked=0
  */
 export const CHECK_AND_TRACK_SESSION = `
 local provider_key = KEYS[1]
 local session_id = ARGV[1]
 local limit = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
-local ttl = 300000  -- 5 分钟（毫秒）
+local ttl = tonumber(ARGV[4]) or 300000
 
--- 1. 清理过期 session（5 分钟前）
-local five_minutes_ago = now - ttl
-redis.call('ZREMRANGEBYSCORE', provider_key, '-inf', five_minutes_ago)
+-- Guard against invalid TTL (prevents clearing all sessions)
+if ttl <= 0 then
+  ttl = 300000
+end
 
--- 2. 检查 session 是否已追踪
+-- 1. Cleanup expired sessions (TTL window ago)
+local cutoff = now - ttl
+redis.call('ZREMRANGEBYSCORE', provider_key, '-inf', cutoff)
+
+-- 2. Check if session is already tracked
 local is_tracked = redis.call('ZSCORE', provider_key, session_id)
 
--- 3. 获取当前并发数
+-- 3. Get current concurrency count
 local current_count = redis.call('ZCARD', provider_key)
 
--- 4. 检查限制（排除已追踪的 session）
+-- 4. Check limit (exclude already tracked session)
 if limit > 0 and not is_tracked and current_count >= limit then
   return {0, current_count, 0}  -- {allowed=false, current_count, tracked=0}
 end
 
--- 5. 追踪 session（ZADD 对已存在的成员只更新时间戳）
+-- 5. Track session (ZADD updates timestamp for existing members)
 redis.call('ZADD', provider_key, now, session_id)
-redis.call('EXPIRE', provider_key, 3600)  -- 1 小时兜底 TTL
 
--- 6. 返回成功
+-- 6. Set TTL based on session TTL (at least 1h to cover active sessions)
+local ttl_seconds = math.floor(ttl / 1000)
+local expire_ttl = math.max(3600, ttl_seconds)
+redis.call('EXPIRE', provider_key, expire_ttl)
+
+-- 7. Return success
 if is_tracked then
-  -- 已追踪，计数不变
+  -- Already tracked, count unchanged
   return {1, current_count, 0}  -- {allowed=true, count, tracked=0}
 else
-  -- 新追踪，计数 +1
+  -- New tracking, count +1
   return {1, current_count + 1, 1}  -- {allowed=true, new_count, tracked=1}
 end
+`;
+
+/**
+ * Key/User 并发：原子性检查 + 追踪（修复竞态条件）
+ *
+ * 目标：
+ * - 解决 key/user 并发检查与追踪分离导致的竞态条件（可能短时间超过用户并发上限）
+ * - 允许已存在的 session 在达到上限时继续请求（仅阻止“新 session”进入）
+ *
+ * 注意：
+ * - global 仅用于观测（Sessions 页面），不参与并发判断；但当启用并发上限时，SessionGuard 会跳过
+ *   SessionTracker.trackSession，因此此脚本也负责更新 global，保证 Sessions 页面可见性。
+ * - key/user 使用 ZSET 分别追踪活跃 sessionId（score=timestamp）
+ *
+ * Redis Cluster 注意：
+ * - 该脚本同时操作多个 key，因此 KEYS[1..3] 必须共享相同 hash tag（例如 {active_sessions}），否则会触发 CROSSSLOT。
+ *
+ * KEYS[1]: {active_sessions}:global:active_sessions
+ * KEYS[2]: {active_sessions}:key:${keyId}:active_sessions
+ * KEYS[3]: {active_sessions}:user:${userId}:active_sessions
+ * ARGV[1]: sessionId
+ * ARGV[2]: keyLimit
+ * ARGV[3]: userLimit
+ * ARGV[4]: now（毫秒时间戳）
+ * ARGV[5]: ttlMs（可选，清理窗口，默认 300000ms）
+ *
+ * Return: {allowed, rejectedBy, keyCount, keyTracked, userCount, userTracked}
+ * - allowed=1: 放行
+ * - allowed=0: 拒绝（rejectedBy=1 表示 Key 超限，=2 表示 User 超限）
+ * - key/user Count：返回“最终计数”（若未追踪则为当前计数）
+ * - key/user Tracked：1 表示本次为新追踪，0 表示已存在
+ */
+export const CHECK_AND_TRACK_KEY_USER_SESSION = `
+local global_key = KEYS[1]
+local key_key = KEYS[2]
+local user_key = KEYS[3]
+
+local session_id = ARGV[1]
+local key_limit = tonumber(ARGV[2])
+local user_limit = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5]) or 300000
+
+-- Guard against invalid TTL (prevents clearing all sessions)
+if ttl <= 0 then
+  ttl = 300000
+end
+
+-- 1. Cleanup expired sessions (TTL window ago)
+local cutoff = now - ttl
+redis.call('ZREMRANGEBYSCORE', global_key, '-inf', cutoff)
+redis.call('ZREMRANGEBYSCORE', key_key, '-inf', cutoff)
+redis.call('ZREMRANGEBYSCORE', user_key, '-inf', cutoff)
+
+-- 2. Check if session is already tracked
+local is_tracked_key = redis.call('ZSCORE', key_key, session_id)
+local is_tracked_user = redis.call('ZSCORE', user_key, session_id)
+
+-- 3. Get current concurrency counts
+local current_key_count = redis.call('ZCARD', key_key)
+local current_user_count = redis.call('ZCARD', user_key)
+
+-- 4. Check Key limit (exclude already tracked session)
+if key_limit > 0 and not is_tracked_key and current_key_count >= key_limit then
+  return {0, 1, current_key_count, 0, current_user_count, 0}
+end
+
+-- 5. Check User limit (exclude already tracked session)
+-- 说明：User 上限以 user ZSET 为准；key ZSET 不参与 user 维度的“已追踪”判定，避免绕过 user 并发限制。
+if user_limit > 0 and not is_tracked_user and current_user_count >= user_limit then
+  return {0, 2, current_key_count, 0, current_user_count, 0}
+end
+
+-- 6. Track session (ZADD updates timestamp for existing members)
+redis.call('ZADD', global_key, now, session_id)
+redis.call('ZADD', key_key, now, session_id)
+redis.call('ZADD', user_key, now, session_id)
+
+-- 7. Set TTL based on session TTL (at least 1h to cover active sessions)
+local ttl_seconds = math.floor(ttl / 1000)
+local expire_ttl = math.max(3600, ttl_seconds)
+redis.call('EXPIRE', global_key, expire_ttl)
+redis.call('EXPIRE', key_key, expire_ttl)
+redis.call('EXPIRE', user_key, expire_ttl)
+
+-- 8. Return success (compute counts)
+local key_count = current_key_count
+local key_tracked = 0
+if not is_tracked_key then
+  key_count = key_count + 1
+  key_tracked = 1
+end
+
+local user_count = current_user_count
+local user_tracked = 0
+if not is_tracked_user then
+  user_count = user_count + 1
+  user_tracked = 1
+end
+
+return {1, 0, key_count, key_tracked, user_count, user_tracked}
 `;
 
 /**

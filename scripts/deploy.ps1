@@ -496,12 +496,14 @@ ENABLE_RATE_LIMIT=true
 # Session Configuration
 SESSION_TTL=300
 STORE_SESSION_MESSAGES=false
+STORE_SESSION_RESPONSE_BODY=true
 
 # Cookie Security
 ENABLE_SECURE_COOKIES=$secureCookies
 
 # Circuit Breaker Configuration
 ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS=false
+ENABLE_ENDPOINT_CIRCUIT_BREAKER=false
 
 # Environment
 NODE_ENV=production

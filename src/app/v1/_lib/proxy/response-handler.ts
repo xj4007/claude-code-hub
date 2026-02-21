@@ -1,21 +1,17 @@
 import { ResponseFixer } from "@/app/v1/_lib/proxy/response-fixer";
 import { AsyncTaskManager } from "@/lib/async-task-manager";
-import {
-  type CacheSignals,
-  extractCacheSignals,
-  resolveCacheSessionKey,
-} from "@/lib/cache/cache-signals";
-import { CacheSimulator, type SimulatedUsage } from "@/lib/cache/cache-simulator";
 import { getEnvConfig } from "@/lib/config/env.schema";
 import { logger } from "@/lib/logger";
 import { requestCloudPriceTableSync } from "@/lib/price-sync/cloud-price-updater";
 import { ProxyStatusTracker } from "@/lib/proxy-status-tracker";
 import { RateLimitService } from "@/lib/rate-limit";
+import type { LeaseWindowType } from "@/lib/rate-limit/lease";
 import { SessionManager } from "@/lib/session-manager";
 import { SessionTracker } from "@/lib/session-tracker";
 import { calculateRequestCost } from "@/lib/utils/cost-calculation";
 import { hasValidPriceData } from "@/lib/utils/price-data";
-import { parseSSEData } from "@/lib/utils/sse";
+import { isSSEText, parseSSEData } from "@/lib/utils/sse";
+import { detectUpstreamErrorFromSseOrJsonText } from "@/lib/utils/upstream-error-detection";
 import {
   updateMessageRequestCost,
   updateMessageRequestDetails,
@@ -24,13 +20,11 @@ import {
 import { findLatestPriceByModel } from "@/repository/model-price";
 import { getSystemSettings } from "@/repository/system-config";
 import type { SessionUsageUpdate } from "@/types/session";
-import { defaultRegistry } from "../converters";
-import type { Format, TransformState } from "../converters/types";
 import { GeminiAdapter } from "../gemini/adapter";
 import type { GeminiResponse } from "../gemini/types";
 import { isClientAbortError } from "./errors";
-import { mapClientFormatToTransformer, mapProviderTypeToTransformer } from "./format-mapper";
 import type { ProxySession } from "./session";
+import { consumeDeferredStreamingFinalization } from "./stream-finalization";
 
 export type UsageMetrics = {
   input_tokens?: number;
@@ -40,16 +34,10 @@ export type UsageMetrics = {
   cache_creation_1h_input_tokens?: number;
   cache_ttl?: "5m" | "1h" | "mixed";
   cache_read_input_tokens?: number;
+  // 图片 modality tokens（从 candidatesTokensDetails/promptTokensDetails 提取）
+  input_image_tokens?: number;
+  output_image_tokens?: number;
 };
-
-type CacheSimulationDecision = "pending" | "skip" | "applied";
-
-type CacheSimulationState = {
-  decision: CacheSimulationDecision;
-  simulatedUsage: SimulatedUsage | null;
-};
-
-type CacheTtlValue = "5m" | "1h" | "mixed";
 
 /**
  * 清理 Response headers 中的传输相关 header
@@ -71,6 +59,339 @@ function cleanResponseHeaders(headers: Headers): Headers {
   cleaned.delete("content-length"); // body 改变后长度无效，Response API 会重新计算
 
   return cleaned;
+}
+
+type FinalizeDeferredStreamingResult = {
+  /**
+   * “内部结算用”的状态码。
+   *
+   * 注意：这不会改变客户端实际收到的 HTTP 状态码（SSE 已经开始透传后无法回头改）。
+   * 这里的目的仅是让内部统计/熔断/会话绑定把“假 200”按失败处理。
+   */
+  effectiveStatusCode: number;
+  /**
+   * 内部记录的错误原因（用于写入 DB/监控，帮助定位“假 200”问题）。
+   */
+  errorMessage: string | null;
+  /**
+   * 写入 DB 时用于归因的 providerId（优先使用 deferred meta 的 providerId）。
+   *
+   * 说明：对 SSE 来说，session.provider 可能在后续逻辑里被更新/覆盖；而 deferred meta 代表本次流真正对应的 provider。
+   * 该字段用于保证 DB 的 providerId 与 providerChain/熔断归因一致。
+   */
+  providerIdForPersistence: number | null;
+};
+
+/**
+ * 若本次 SSE 被标记为“延迟结算”，则在流结束后补齐成功/失败的最终判定。
+ *
+ * 触发条件
+ * - Forwarder 收到 Response 且识别为 SSE 时，会在 session 上挂载 DeferredStreamingFinalization 元信息。
+ * - ResponseHandler 在后台读取完整 SSE 内容后，调用本函数：
+ *   - 如果内容看起来是上游错误 JSON（假 200），则：
+ *     - 计入熔断器失败；
+ *     - 不更新 session 智能绑定（避免把会话粘到坏 provider）；
+ *     - 内部状态码改为 502（只影响统计与后续重试选择，不影响本次客户端响应）。
+ *   - 如果流正常结束且未命中错误判定，则按成功结算并更新绑定/熔断/endpoint 成功率。
+ *
+ * @param streamEndedNormally - 必须是 reader 读到 done=true 的“自然结束”；超时/中断等异常结束由其它逻辑处理。
+ * @param clientAborted - 标记是否为客户端主动中断（用于内部状态码映射，避免把中断记为 200 completed）
+ * @param abortReason - 非自然结束时的原因码（用于内部记录/熔断归因；不会影响客户端响应）
+ */
+async function finalizeDeferredStreamingFinalizationIfNeeded(
+  session: ProxySession,
+  allContent: string,
+  upstreamStatusCode: number,
+  streamEndedNormally: boolean,
+  clientAborted: boolean,
+  abortReason?: string
+): Promise<FinalizeDeferredStreamingResult> {
+  const meta = consumeDeferredStreamingFinalization(session);
+  const provider = session.provider;
+
+  const providerIdForPersistence = meta?.providerId ?? provider?.id ?? null;
+
+  // 仅在“上游 HTTP=200 且流自然结束”时做“假 200”检测：
+  // - 非 200：HTTP 已经表明失败（无需额外启发式）
+  // - 非自然结束：内容可能是部分流/截断，启发式会显著提高误判风险
+  //
+  // 此处返回 `{isError:false}` 仅表示“跳过检测”，最终仍会在下面按中断/超时视为失败结算。
+  const shouldDetectFake200 = streamEndedNormally && upstreamStatusCode === 200;
+  const detected = shouldDetectFake200
+    ? detectUpstreamErrorFromSseOrJsonText(allContent)
+    : ({ isError: false } as const);
+
+  // “内部结算用”的状态码（不会改变客户端实际 HTTP 状态码）。
+  // - 假 200：映射为 502，确保内部统计/熔断/会话绑定把它当作失败。
+  // - 未自然结束：也应映射为失败（避免把中断/部分流误记为 200 completed）。
+  let effectiveStatusCode: number;
+  let errorMessage: string | null;
+  if (detected.isError) {
+    effectiveStatusCode = 502;
+    errorMessage = detected.code;
+  } else if (!streamEndedNormally) {
+    effectiveStatusCode = clientAborted ? 499 : 502;
+    errorMessage = clientAborted ? "CLIENT_ABORTED" : (abortReason ?? "STREAM_ABORTED");
+  } else {
+    // streamEndedNormally=true
+    effectiveStatusCode = upstreamStatusCode;
+
+    if (upstreamStatusCode >= 400) {
+      // 非200错误状态码：解析JSON错误响应
+      const detected = detectUpstreamErrorFromSseOrJsonText(allContent);
+      errorMessage = detected.isError ? detected.code : `HTTP ${upstreamStatusCode}`;
+    } else {
+      // 2xx 成功状态码
+      errorMessage = null;
+    }
+  }
+
+  // 未启用延迟结算 / provider 缺失：
+  // - 只返回“内部状态码 + 错误原因”，由调用方写入统计；
+  // - 不在这里更新熔断/绑定（meta 缺失意味着 Forwarder 没有启用延迟结算；provider 缺失意味着无法归因）。
+  if (!meta || !provider) {
+    return { effectiveStatusCode, errorMessage, providerIdForPersistence };
+  }
+
+  // meta 由 Forwarder 在“拿到 upstream Response 的那一刻”记录，代表真正产生本次流的 provider。
+  // 即使 session.provider 在之后被其它逻辑意外修改（极端情况），我们仍以 meta 为准更新：
+  // - provider/endpoint 熔断与统计
+  // - session 智能绑定
+  // 这样能避免把成功/失败记到错误的 provider 上。
+  let providerForChain = provider;
+  if (provider.id !== meta.providerId) {
+    logger.warn("[ResponseHandler] Deferred streaming meta provider mismatch", {
+      sessionId: session.sessionId ?? null,
+      metaProviderId: meta.providerId,
+      currentProviderId: provider.id,
+      canonicalProviderId: meta.providerId,
+    });
+
+    // 尝试用 meta.providerId 找回正确的 Provider 对象，保证 providerChain 的审计数据一致
+    try {
+      const providers = await session.getProvidersSnapshot();
+      const resolved = providers.find((p) => p.id === meta.providerId);
+      if (resolved) {
+        providerForChain = resolved;
+      } else {
+        logger.warn("[ResponseHandler] Deferred streaming meta provider not found in snapshot", {
+          sessionId: session.sessionId ?? null,
+          metaProviderId: meta.providerId,
+          currentProviderId: provider.id,
+        });
+      }
+    } catch (resolveError) {
+      logger.warn("[ResponseHandler] Failed to resolve meta provider from snapshot", {
+        sessionId: session.sessionId ?? null,
+        metaProviderId: meta.providerId,
+        currentProviderId: provider.id,
+        error: resolveError,
+      });
+    }
+  }
+
+  // 未自然结束：不更新 session 绑定（避免把会话粘到不稳定 provider），但要避免把它误记为 200 completed。
+  //
+  // 同时，为了让故障转移/熔断能正确工作：
+  // - 客户端主动中断：不计入熔断器（这通常不是供应商问题）
+  // - 非客户端中断：计入 provider/endpoint 熔断失败（与 timeout 路径保持一致）
+  if (!streamEndedNormally) {
+    if (!clientAborted) {
+      try {
+        // 动态导入：避免 proxy 模块与熔断器模块之间潜在的循环依赖。
+        const { recordFailure } = await import("@/lib/circuit-breaker");
+        await recordFailure(meta.providerId, new Error(errorMessage ?? "STREAM_ABORTED"));
+      } catch (cbError) {
+        logger.warn("[ResponseHandler] Failed to record streaming failure in circuit breaker", {
+          providerId: meta.providerId,
+          sessionId: session.sessionId ?? null,
+          error: cbError,
+        });
+      }
+
+      // NOTE: Do NOT call recordEndpointFailure here. Stream aborts are key-level
+      // errors (auth, rate limit, bad key). The endpoint itself delivered HTTP 200
+      // successfully. Only forwarder-level failures (timeout, network error) and
+      // probe failures should penalize the endpoint circuit breaker.
+    }
+
+    session.addProviderToChain(providerForChain, {
+      endpointId: meta.endpointId,
+      endpointUrl: meta.endpointUrl,
+      reason: "system_error",
+      attemptNumber: meta.attemptNumber,
+      statusCode: effectiveStatusCode,
+      errorMessage: errorMessage ?? undefined,
+    });
+
+    return { effectiveStatusCode, errorMessage, providerIdForPersistence };
+  }
+
+  if (detected.isError) {
+    logger.warn("[ResponseHandler] SSE completed but body indicates error (fake 200)", {
+      providerId: meta.providerId,
+      providerName: meta.providerName,
+      upstreamStatusCode: meta.upstreamStatusCode,
+      effectiveStatusCode,
+      code: detected.code,
+      detail: detected.detail ?? null,
+    });
+
+    // 计入熔断器：让后续请求能正确触发故障转移/熔断
+    try {
+      // 动态导入：避免 proxy 模块与熔断器模块之间潜在的循环依赖。
+      const { recordFailure } = await import("@/lib/circuit-breaker");
+      await recordFailure(meta.providerId, new Error(detected.code));
+    } catch (cbError) {
+      logger.warn("[ResponseHandler] Failed to record fake-200 error in circuit breaker", {
+        providerId: meta.providerId,
+        sessionId: session.sessionId ?? null,
+        error: cbError,
+      });
+    }
+
+    // NOTE: Do NOT call recordEndpointFailure here. Fake-200 errors are key-level
+    // issues (invalid key, auth failure). The endpoint returned HTTP 200 successfully;
+    // the error is in the response content, not endpoint connectivity.
+
+    // 记录到决策链（用于日志展示与 DB 持久化）。
+    // 注意：这里用 effectiveStatusCode（502）而不是 upstreamStatusCode（200），
+    // 以便让内部链路明确显示这是一次失败（否则会被误读为成功）。
+    session.addProviderToChain(providerForChain, {
+      endpointId: meta.endpointId,
+      endpointUrl: meta.endpointUrl,
+      reason: "retry_failed",
+      attemptNumber: meta.attemptNumber,
+      statusCode: effectiveStatusCode,
+      errorMessage: detected.code,
+    });
+
+    return { effectiveStatusCode, errorMessage, providerIdForPersistence };
+  }
+
+  // ========== 非200状态码处理（流自然结束但HTTP状态码表示错误）==========
+  if (upstreamStatusCode >= 400 && errorMessage !== null) {
+    logger.warn("[ResponseHandler] SSE completed but HTTP status indicates error", {
+      providerId: meta.providerId,
+      providerName: meta.providerName,
+      upstreamStatusCode,
+      effectiveStatusCode,
+      errorMessage,
+    });
+
+    // 计入熔断器：让后续请求能正确触发故障转移/熔断
+    try {
+      const { recordFailure } = await import("@/lib/circuit-breaker");
+      await recordFailure(meta.providerId, new Error(errorMessage));
+    } catch (cbError) {
+      logger.warn("[ResponseHandler] Failed to record non-200 error in circuit breaker", {
+        providerId: meta.providerId,
+        sessionId: session.sessionId ?? null,
+        error: cbError,
+      });
+    }
+
+    // NOTE: Do NOT call recordEndpointFailure here. Non-200 HTTP errors (401, 429,
+    // etc.) are typically key/auth-level errors. The endpoint was reachable and
+    // responded; only forwarder-level failures should penalize the endpoint breaker.
+
+    // 记录到决策链
+    session.addProviderToChain(providerForChain, {
+      endpointId: meta.endpointId,
+      endpointUrl: meta.endpointUrl,
+      reason: "retry_failed",
+      attemptNumber: meta.attemptNumber,
+      statusCode: effectiveStatusCode,
+      errorMessage: errorMessage,
+    });
+
+    return { effectiveStatusCode, errorMessage, providerIdForPersistence };
+  }
+
+  // ========== 真正成功（SSE 完整结束且未命中错误判定）==========
+  if (meta.endpointId != null) {
+    try {
+      const { recordEndpointSuccess } = await import("@/lib/endpoint-circuit-breaker");
+      await recordEndpointSuccess(meta.endpointId);
+    } catch (endpointError) {
+      logger.warn("[ResponseHandler] Failed to record endpoint success (stream)", {
+        endpointId: meta.endpointId,
+        providerId: meta.providerId,
+        error: endpointError,
+      });
+    }
+  }
+
+  try {
+    const { recordSuccess } = await import("@/lib/circuit-breaker");
+    await recordSuccess(meta.providerId);
+  } catch (cbError) {
+    logger.warn("[ResponseHandler] Failed to record streaming success in circuit breaker", {
+      providerId: meta.providerId,
+      error: cbError,
+    });
+  }
+
+  // 成功后绑定 session 到供应商（智能绑定策略）
+  if (session.sessionId) {
+    const result = await SessionManager.updateSessionBindingSmart(
+      session.sessionId,
+      meta.providerId,
+      meta.providerPriority,
+      meta.isFirstAttempt,
+      meta.isFailoverSuccess
+    );
+
+    if (result.updated) {
+      logger.info("[ResponseHandler] Session binding updated (stream finalized)", {
+        sessionId: session.sessionId,
+        providerId: meta.providerId,
+        providerName: meta.providerName,
+        priority: meta.providerPriority,
+        reason: result.reason,
+        details: result.details,
+        attemptNumber: meta.attemptNumber,
+        totalProvidersAttempted: meta.totalProvidersAttempted,
+      });
+    } else {
+      logger.debug("[ResponseHandler] Session binding not updated (stream finalized)", {
+        sessionId: session.sessionId,
+        providerId: meta.providerId,
+        providerName: meta.providerName,
+        priority: meta.providerPriority,
+        reason: result.reason,
+        details: result.details,
+      });
+    }
+
+    // 统一更新两个数据源（确保监控数据一致）
+    void SessionManager.updateSessionProvider(session.sessionId, {
+      providerId: meta.providerId,
+      providerName: meta.providerName,
+    }).catch((err) => {
+      logger.error("[ResponseHandler] Failed to update session provider info (stream)", {
+        error: err,
+      });
+    });
+  }
+
+  session.addProviderToChain(providerForChain, {
+    endpointId: meta.endpointId,
+    endpointUrl: meta.endpointUrl,
+    reason: meta.isFirstAttempt ? "request_success" : "retry_success",
+    attemptNumber: meta.attemptNumber,
+    statusCode: meta.upstreamStatusCode,
+  });
+
+  logger.info("[ResponseHandler] Streaming request finalized as success", {
+    providerId: meta.providerId,
+    providerName: meta.providerName,
+    attemptNumber: meta.attemptNumber,
+    totalProvidersAttempted: meta.totalProvidersAttempted,
+    statusCode: meta.upstreamStatusCode,
+  });
+
+  return { effectiveStatusCode, errorMessage, providerIdForPersistence };
 }
 
 export class ProxyResponseHandler {
@@ -111,68 +432,10 @@ export class ProxyResponseHandler {
       return response;
     }
 
-    const requestMessage = session.request.message as Record<string, unknown>;
-    const cacheSignals = session.cacheSignals ?? extractCacheSignals(requestMessage, session);
-    const isClaudeProvider =
-      provider.providerType === "claude" || provider.providerType === "claude-auth";
-    const shouldSimulateCache = provider.simulateCacheEnabled === true && isClaudeProvider;
-    logger.debug("[ResponseHandler] Cache simulation check (non-stream)", {
-      messageId: messageContext?.id ?? null,
-      providerId: provider.id,
-      providerType: provider.providerType,
-      simulateCacheEnabled: provider.simulateCacheEnabled,
-      shouldSimulateCache,
-      needsClaudeDisguise: session.needsClaudeDisguise ?? false,
-      cacheSignals,
-    });
-    const cacheSessionKey = shouldSimulateCache
-      ? (session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage))
-      : null;
-    let simulatedUsageForOutput: SimulatedUsage | null = null;
-
     const responseForLog = response.clone();
     const statusCode = response.status;
 
-    // 检查是否需要格式转换
-    const fromFormat: Format | null = provider.providerType
-      ? mapProviderTypeToTransformer(provider.providerType)
-      : null;
-    const toFormat: Format = mapClientFormatToTransformer(session.originalFormat);
-    const needsTransform = fromFormat !== toFormat && fromFormat && toFormat;
     let finalResponse = response;
-    let outputModified = false;
-
-    const maybeSimulateUsageForOutput = async (
-      responseText: string,
-      responseData: Record<string, unknown>
-    ): Promise<void> => {
-      if (!shouldSimulateCache || simulatedUsageForOutput) {
-        return;
-      }
-
-      const { usageMetrics } = parseUsageFromResponseText(responseText, provider.providerType);
-      if (!usageMetrics || typeof usageMetrics.input_tokens !== "number") {
-        return;
-      }
-
-      const simulated = await CacheSimulator.calculate(
-        requestMessage,
-        cacheSessionKey,
-        session,
-        {
-          input_tokens: usageMetrics.input_tokens,
-          output_tokens: usageMetrics.output_tokens ?? 0,
-        },
-        cacheSignals ?? undefined
-      );
-
-      if (!simulated) {
-        return;
-      }
-
-      simulatedUsageForOutput = simulated;
-      applySimulatedUsageToResponsePayload(responseData, simulated);
-    };
 
     // --- GEMINI HANDLING ---
     if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
@@ -219,9 +482,44 @@ export class ProxyResponseHandler {
               });
             }
 
+            // 非200状态码处理：解析错误响应并计入熔断器
+            let errorMessageForFinalize: string | undefined;
+            if (statusCode >= 400) {
+              const detected = detectUpstreamErrorFromSseOrJsonText(responseText);
+              errorMessageForFinalize = detected.isError ? detected.code : `HTTP ${statusCode}`;
+
+              // 计入熔断器
+              try {
+                const { recordFailure } = await import("@/lib/circuit-breaker");
+                await recordFailure(provider.id, new Error(errorMessageForFinalize));
+              } catch (cbError) {
+                logger.warn(
+                  "ResponseHandler: Failed to record non-200 error in circuit breaker (passthrough)",
+                  {
+                    providerId: provider.id,
+                    error: cbError,
+                  }
+                );
+              }
+
+              // 记录到决策链
+              session.addProviderToChain(provider, {
+                reason: "retry_failed",
+                attemptNumber: 1,
+                statusCode: statusCode,
+                errorMessage: errorMessageForFinalize,
+              });
+            }
+
             // 使用共享的统计处理方法
             const duration = Date.now() - session.startTime;
-            await finalizeRequestStats(session, responseText, statusCode, duration);
+            await finalizeRequestStats(
+              session,
+              responseText,
+              statusCode,
+              duration,
+              errorMessageForFinalize
+            );
           } catch (error) {
             if (!isClientAbortError(error as Error)) {
               logger.error(
@@ -267,73 +565,10 @@ export class ProxyResponseHandler {
             statusText: response.statusText,
             headers: cleanResponseHeaders(response.headers),
           });
-          outputModified = true;
         } catch (error) {
           logger.error("[ResponseHandler] Failed to transform Gemini non-stream response:", error);
           finalResponse = response;
         }
-      }
-    } else if (needsTransform && defaultRegistry.hasResponseTransformer(fromFormat, toFormat)) {
-      try {
-        // 克隆一份用于转换
-        const responseForTransform = response.clone();
-        const responseText = await responseForTransform.text();
-        const responseData = JSON.parse(responseText) as Record<string, unknown>;
-
-        await maybeSimulateUsageForOutput(responseText, responseData);
-
-        // 使用转换器注册表进行转换
-        const transformed = defaultRegistry.transformNonStreamResponse(
-          session.context,
-          fromFormat,
-          toFormat,
-          session.request.model || "",
-          session.request.message, // original request
-          session.request.message, // transformed request (same as original if no transform)
-          responseData
-        );
-
-        logger.debug("[ResponseHandler] Transformed non-stream response", {
-          from: fromFormat,
-          to: toFormat,
-          model: session.request.model,
-        });
-
-        // ⭐ 清理传输 headers（body 已修改，原始传输信息无效）
-        // 构建新的响应
-        finalResponse = new Response(JSON.stringify(transformed), {
-          status: response.status,
-          statusText: response.statusText,
-          headers: cleanResponseHeaders(response.headers),
-        });
-        outputModified = true;
-      } catch (error) {
-        logger.error("[ResponseHandler] Failed to transform response:", error);
-        // 转换失败时返回原始响应
-        finalResponse = response;
-      }
-    }
-
-    if (shouldSimulateCache && !outputModified) {
-      try {
-        const responseForTransform = response.clone();
-        const responseText = await responseForTransform.text();
-        const responseData = JSON.parse(responseText) as Record<string, unknown>;
-
-        await maybeSimulateUsageForOutput(responseText, responseData);
-
-        if (simulatedUsageForOutput) {
-          finalResponse = new Response(JSON.stringify(responseData), {
-            status: response.status,
-            statusText: response.statusText,
-            headers: cleanResponseHeaders(response.headers),
-          });
-          outputModified = true;
-        }
-      } catch (error) {
-        logger.error("[ResponseHandler] Failed to simulate cache usage for non-stream response:", {
-          error: error instanceof Error ? error.message : String(error),
-        });
       }
     }
 
@@ -350,8 +585,8 @@ export class ProxyResponseHandler {
             statusCode: statusCode,
             ttfbMs: session.ttfbMs ?? duration,
             providerChain: session.getProviderChain(),
-            model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
-            providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
+            model: session.getCurrentModel() ?? undefined, // 更新重定向后的模型
+            providerId: session.provider?.id, // 更新最终供应商ID（重试切换后）
             context1mApplied: session.getContext1mApplied(),
           });
           const tracker = ProxyStatusTracker.getInstance();
@@ -407,8 +642,6 @@ export class ProxyResponseHandler {
         const usageResult = parseUsageFromResponseText(responseText, provider.providerType);
         usageRecord = usageResult.usageRecord;
         usageMetrics = usageResult.usageMetrics;
-        const usageForCost = usageMetrics;
-        const usageForOutput = simulatedUsageForOutput ?? usageMetrics;
 
         // Codex: Extract prompt_cache_key and update session binding
         if (provider.providerType === "codex" && session.sessionId && provider.id) {
@@ -440,30 +673,30 @@ export class ProxyResponseHandler {
           });
         }
 
-        if (usageRecord && usageForCost && messageContext) {
+        if (usageRecord && usageMetrics && messageContext) {
           await updateRequestCostFromUsage(
             messageContext.id,
             session.getOriginalModel(),
             session.getCurrentModel(),
-            usageForCost,
+            usageMetrics,
             provider.costMultiplier,
             session.getContext1mApplied()
           );
 
           // 追踪消费到 Redis（用于限流）
-          await trackCostToRedis(session, usageForCost);
+          await trackCostToRedis(session, usageMetrics);
         }
 
         // 更新 session 使用量到 Redis（用于实时监控）
-        if (session.sessionId && usageForOutput) {
+        if (session.sessionId && usageMetrics) {
           // 计算成本（复用相同逻辑）
           let costUsdStr: string | undefined;
           try {
-            if (session.request.model && usageForCost) {
+            if (session.request.model) {
               const priceData = await session.getCachedPriceDataByBillingSource();
               if (priceData) {
                 const cost = calculateRequestCost(
-                  usageForCost,
+                  usageMetrics,
                   priceData,
                   provider.costMultiplier,
                   session.getContext1mApplied()
@@ -480,15 +713,40 @@ export class ProxyResponseHandler {
           }
 
           void SessionManager.updateSessionUsage(session.sessionId, {
-            inputTokens: usageForOutput.input_tokens,
-            outputTokens: usageForOutput.output_tokens,
-            cacheCreationInputTokens: usageForOutput.cache_creation_input_tokens,
-            cacheReadInputTokens: usageForOutput.cache_read_input_tokens,
+            inputTokens: usageMetrics.input_tokens,
+            outputTokens: usageMetrics.output_tokens,
+            cacheCreationInputTokens: usageMetrics.cache_creation_input_tokens,
+            cacheReadInputTokens: usageMetrics.cache_read_input_tokens,
             costUsd: costUsdStr,
             status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
             statusCode: statusCode,
           }).catch((error: unknown) => {
             logger.error("[ResponseHandler] Failed to update session usage:", error);
+          });
+        }
+
+        // 非200状态码处理：解析错误响应并计入熔断器
+        if (statusCode >= 400) {
+          const detected = detectUpstreamErrorFromSseOrJsonText(responseText);
+          const errorMessageForDb = detected.isError ? detected.code : `HTTP ${statusCode}`;
+
+          // 计入熔断器
+          try {
+            const { recordFailure } = await import("@/lib/circuit-breaker");
+            await recordFailure(provider.id, new Error(errorMessageForDb));
+          } catch (cbError) {
+            logger.warn("ResponseHandler: Failed to record non-200 error in circuit breaker", {
+              providerId: provider.id,
+              error: cbError,
+            });
+          }
+
+          // 记录到决策链
+          session.addProviderToChain(provider, {
+            reason: "retry_failed",
+            attemptNumber: 1,
+            statusCode: statusCode,
+            errorMessage: errorMessageForDb,
           });
         }
 
@@ -499,17 +757,17 @@ export class ProxyResponseHandler {
           // 保存扩展信息（status code, tokens, provider chain）
           await updateMessageRequestDetails(messageContext.id, {
             statusCode: statusCode,
-            inputTokens: usageForOutput?.input_tokens,
-            outputTokens: usageForOutput?.output_tokens,
+            inputTokens: usageMetrics?.input_tokens,
+            outputTokens: usageMetrics?.output_tokens,
             ttfbMs: session.ttfbMs ?? duration,
-            cacheCreationInputTokens: usageForOutput?.cache_creation_input_tokens,
-            cacheReadInputTokens: usageForOutput?.cache_read_input_tokens,
-            cacheCreation5mInputTokens: usageForOutput?.cache_creation_5m_input_tokens,
-            cacheCreation1hInputTokens: usageForOutput?.cache_creation_1h_input_tokens,
-            cacheTtlApplied: resolveCacheTtlFromUsage(usageForOutput),
+            cacheCreationInputTokens: usageMetrics?.cache_creation_input_tokens,
+            cacheReadInputTokens: usageMetrics?.cache_read_input_tokens,
+            cacheCreation5mInputTokens: usageMetrics?.cache_creation_5m_input_tokens,
+            cacheCreation1hInputTokens: usageMetrics?.cache_creation_1h_input_tokens,
+            cacheTtlApplied: usageMetrics?.cache_ttl ?? null,
             providerChain: session.getProviderChain(),
-            model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
-            providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
+            model: session.getCurrentModel() ?? undefined, // 更新重定向后的模型
+            providerId: session.provider?.id, // 更新最终供应商ID（重试切换后）
             context1mApplied: session.getContext1mApplied(),
           });
 
@@ -662,52 +920,7 @@ export class ProxyResponseHandler {
       return response;
     }
 
-    const requestMessage = session.request.message as Record<string, unknown>;
-    const cacheSignals = session.cacheSignals ?? extractCacheSignals(requestMessage, session);
-    const isClaudeProvider =
-      provider.providerType === "claude" || provider.providerType === "claude-auth";
-    const shouldSimulateCache = provider.simulateCacheEnabled === true && isClaudeProvider;
-    logger.debug("[ResponseHandler] Cache simulation check (stream)", {
-      messageId: messageContext?.id ?? null,
-      providerId: provider.id,
-      providerType: provider.providerType,
-      simulateCacheEnabled: provider.simulateCacheEnabled,
-      shouldSimulateCache,
-      needsClaudeDisguise: session.needsClaudeDisguise ?? false,
-      cacheSignals,
-    });
-    const cacheSessionKey = shouldSimulateCache
-      ? (session.cacheSessionKey ?? resolveCacheSessionKey(requestMessage))
-      : null;
-    const simulationState: CacheSimulationState = {
-      decision: shouldSimulateCache ? "pending" : "skip",
-      simulatedUsage: null,
-    };
-
-    // 检查是否需要格式转换
-    const fromFormat: Format | null = provider.providerType
-      ? mapProviderTypeToTransformer(provider.providerType)
-      : null;
-    const toFormat: Format = mapClientFormatToTransformer(session.originalFormat);
-    const needsTransform = fromFormat !== toFormat && fromFormat && toFormat;
     let processedStream: ReadableStream<Uint8Array> = response.body;
-    let internalStreamOverride: ReadableStream<Uint8Array> | null = null;
-
-    if (shouldSimulateCache) {
-      const cacheSignalsForSim = cacheSignals ?? extractCacheSignals(requestMessage, session);
-      const [clientSource, internalSource] = processedStream.tee();
-      processedStream = clientSource;
-      internalStreamOverride = internalSource;
-      processedStream = processedStream.pipeThrough(
-        createClaudeCacheSimulationStream({
-          requestMessage,
-          session,
-          cacheSessionKey,
-          cacheSignals: cacheSignalsForSim,
-          state: simulationState,
-        })
-      );
-    }
 
     // --- GEMINI STREAM HANDLING ---
     if (provider.providerType === "gemini" || provider.providerType === "gemini-cli") {
@@ -729,56 +942,250 @@ export class ProxyResponseHandler {
           }
         );
 
-        // ⭐ gemini 透传立即清除首字节超时：透传路径收到响应即视为首字节到达
-        const sessionWithCleanup = session as typeof session & {
-          clearResponseTimeout?: () => void;
-        };
-        if (sessionWithCleanup.clearResponseTimeout) {
-          sessionWithCleanup.clearResponseTimeout();
-          // ⭐ 同步记录 TTFB，与首字节超时口径一致
-          session.recordTtfb();
-          logger.debug(
-            "[ResponseHandler] Gemini passthrough: First byte timeout cleared on response received",
-            {
-              providerId: provider.id,
-              providerName: provider.name,
-            }
-          );
-        }
+        // 注意：不要在“仅收到响应头”时清除首字节超时。
+        // 背景：部分上游可能会快速返回 200 + SSE headers，但随后长时间不发送任何 body 数据。
+        // 若在 headers 阶段就 clearResponseTimeout，会导致首字节超时失效，客户端与服务端都会表现为一直“请求中”。
+        // 透传场景下，我们在后台 stats 读取到第一块数据时再清除超时（与非透传路径口径一致）。
 
         const responseForStats = response.clone();
         const statusCode = response.status;
 
         const taskId = `stream-passthrough-${messageContext.id}`;
         const statsPromise = (async () => {
+          const sessionWithCleanup = session as typeof session & {
+            clearResponseTimeout?: () => void;
+          };
+          const sessionWithController = session as typeof session & {
+            responseController?: AbortController;
+          };
+
+          let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+          // 保护：避免透传 stats 任务把超大响应体无界缓存在内存中（DoS/OOM 风险）
+          // 说明：用于统计/结算的内容采用“头部 + 尾部窗口”：
+          // - 头部保留前 MAX_STATS_HEAD_BYTES（便于解析可能前置的 metadata）
+          // - 尾部保留最近 MAX_STATS_TAIL_BYTES（便于解析结尾 usage/假 200 等）
+          // - 中间部分会被丢弃（wasTruncated=true），统计将退化为 best-effort
+          const MAX_STATS_BUFFER_BYTES = 10 * 1024 * 1024; // 10MB
+          const MAX_STATS_HEAD_BYTES = 1024 * 1024; // 1MB
+          const MAX_STATS_TAIL_BYTES = MAX_STATS_BUFFER_BYTES - MAX_STATS_HEAD_BYTES;
+          const MAX_STATS_TAIL_CHUNKS = 8192;
+
+          const headChunks: string[] = [];
+          let headBufferedBytes = 0;
+
+          const tailChunks: string[] = [];
+          const tailChunkBytes: number[] = [];
+          let tailHead = 0;
+          let tailBufferedBytes = 0;
+          let wasTruncated = false;
+          let inTailMode = false;
+
+          const joinTailChunks = (): string => {
+            if (tailHead <= 0) return tailChunks.join("");
+            return tailChunks.slice(tailHead).join("");
+          };
+
+          const joinChunks = (): string => {
+            const headText = headChunks.join("");
+            if (!inTailMode) {
+              return headText;
+            }
+
+            const tailText = joinTailChunks();
+
+            // 用 SSE comment 标记被截断的中间段；parseSSEData 会忽略 ":" 开头的行
+            if (wasTruncated) {
+              // 插入空行强制 flush event，避免“头+尾”拼接后跨 event 误拼接数据行
+              return `${headText}\n\n: [cch_truncated]\n\n${tailText}`;
+            }
+
+            return `${headText}${tailText}`;
+          };
+
+          const pushChunk = (text: string, bytes: number) => {
+            if (!text) return;
+
+            const pushToTail = () => {
+              tailChunks.push(text);
+              tailChunkBytes.push(bytes);
+              tailBufferedBytes += bytes;
+
+              // 仅保留尾部窗口，避免内存无界增长
+              while (tailBufferedBytes > MAX_STATS_TAIL_BYTES && tailHead < tailChunkBytes.length) {
+                tailBufferedBytes -= tailChunkBytes[tailHead] ?? 0;
+                tailChunks[tailHead] = "";
+                tailChunkBytes[tailHead] = 0;
+                tailHead += 1;
+                wasTruncated = true;
+              }
+
+              // 定期压缩数组，避免 head 指针过大导致 slice/join 性能退化
+              if (tailHead > 4096) {
+                tailChunks.splice(0, tailHead);
+                tailChunkBytes.splice(0, tailHead);
+                tailHead = 0;
+              }
+
+              // 防御：限制 chunk 数量，避免大量超小 chunk 导致对象/数组膨胀（即使总字节数已受限）
+              const keptCount = tailChunks.length - tailHead;
+              if (keptCount > MAX_STATS_TAIL_CHUNKS) {
+                const joined = joinTailChunks();
+                tailChunks.length = 0;
+                tailChunkBytes.length = 0;
+                tailHead = 0;
+                tailChunks.push(joined);
+                tailChunkBytes.push(tailBufferedBytes);
+              }
+            };
+
+            // 优先填充 head；超过 head 上限后切到 tail（但不代表一定发生截断，只有 tail 溢出才算截断）
+            if (!inTailMode) {
+              if (headBufferedBytes + bytes <= MAX_STATS_HEAD_BYTES) {
+                headChunks.push(text);
+                headBufferedBytes += bytes;
+                return;
+              }
+
+              inTailMode = true;
+            }
+
+            pushToTail();
+          };
+          const decoder = new TextDecoder();
+          let isFirstChunk = true;
+          let streamEndedNormally = false;
+          let responseTimeoutCleared = false;
+          let abortReason: string | undefined;
+
+          // 静默期 Watchdog：透传也需要支持中途卡住（无新数据推送）
+          const idleTimeoutMs =
+            provider.streamingIdleTimeoutMs > 0 ? provider.streamingIdleTimeoutMs : Infinity;
+          let idleTimeoutId: NodeJS.Timeout | null = null;
+          const clearIdleTimer = () => {
+            if (idleTimeoutId) {
+              clearTimeout(idleTimeoutId);
+              idleTimeoutId = null;
+            }
+          };
+          const startIdleTimer = () => {
+            if (idleTimeoutMs === Infinity) return;
+            clearIdleTimer();
+            idleTimeoutId = setTimeout(() => {
+              abortReason = "STREAM_IDLE_TIMEOUT";
+              logger.warn("[ResponseHandler] Gemini passthrough streaming idle timeout triggered", {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                idleTimeoutMs,
+                chunksCollected: headChunks.length + Math.max(0, tailChunks.length - tailHead),
+                headBufferedBytes,
+                tailBufferedBytes,
+                bufferedBytes: headBufferedBytes + tailBufferedBytes,
+                wasTruncated,
+              });
+              // 终止上游连接：让透传到客户端的连接也尽快结束，避免永久悬挂占用资源
+              try {
+                sessionWithController.responseController?.abort(new Error("streaming_idle"));
+              } catch {
+                // ignore
+              }
+            }, idleTimeoutMs);
+          };
+
+          const clearResponseTimeoutOnce = (firstChunkSize?: number) => {
+            if (responseTimeoutCleared) return;
+            if (!sessionWithCleanup.clearResponseTimeout) return;
+            sessionWithCleanup.clearResponseTimeout();
+            responseTimeoutCleared = true;
+            if (firstChunkSize != null) {
+              logger.debug(
+                "[ResponseHandler] Gemini passthrough: First chunk received, response timeout cleared",
+                {
+                  taskId,
+                  providerId: provider.id,
+                  providerName: provider.name,
+                  firstChunkSize,
+                }
+              );
+            }
+          };
+
+          const flushAndJoin = (): string => {
+            const flushed = decoder.decode();
+            if (flushed) pushChunk(flushed, 0);
+            return joinChunks();
+          };
+
           try {
-            const reader = responseForStats.body?.getReader();
-            if (!reader) return;
+            const body = responseForStats.body;
+            if (!body) return;
+            reader = body.getReader();
 
-            const chunks: string[] = [];
-            const decoder = new TextDecoder();
-            let isFirstChunk = true;
-
+            // 注意：即使 STORE_SESSION_RESPONSE_BODY=false（不写入 Redis），这里也会在内存中累积完整流内容：
+            // - 用于解析 usage/cost 与内部结算（例如“假 200”检测）
+            // 因此该开关仅影响“是否持久化”，不用于控制流式内存占用。
             while (true) {
               if (session.clientAbortSignal?.aborted) break;
 
               const { done, value } = await reader.read();
-              if (done) break;
-              if (value) {
+              if (done) {
+                const wasResponseControllerAborted =
+                  sessionWithController.responseController?.signal.aborted ?? false;
+                const clientAborted = session.clientAbortSignal?.aborted ?? false;
+
+                // abort -> nodeStreamToWebStreamSafe 可能会把错误吞掉并 close()，导致 done=true；
+                // 这里必须结合 abort signal 判断是否为“自然结束”。
+                if (wasResponseControllerAborted || clientAborted) {
+                  streamEndedNormally = false;
+                  if (!abortReason) {
+                    abortReason = clientAborted ? "CLIENT_ABORTED" : "STREAM_RESPONSE_TIMEOUT";
+                  }
+                } else {
+                  streamEndedNormally = true;
+                }
+                break;
+              }
+
+              const chunkSize = value?.byteLength ?? 0;
+              if (value && chunkSize > 0) {
                 if (isFirstChunk) {
                   isFirstChunk = false;
                   session.recordTtfb();
+                  clearResponseTimeoutOnce(chunkSize);
                 }
-                chunks.push(decoder.decode(value, { stream: true }));
+
+                // 尽量填满 head：边界 chunk 可能跨过 head 上限，按 byte 切分以避免 head 少于 1MB
+                if (!inTailMode && headBufferedBytes < MAX_STATS_HEAD_BYTES) {
+                  const remainingHeadBytes = MAX_STATS_HEAD_BYTES - headBufferedBytes;
+                  if (remainingHeadBytes > 0 && chunkSize > remainingHeadBytes) {
+                    const headPart = value.subarray(0, remainingHeadBytes);
+                    const tailPart = value.subarray(remainingHeadBytes);
+
+                    const headText = decoder.decode(headPart, { stream: true });
+                    pushChunk(headText, remainingHeadBytes);
+
+                    const tailText = decoder.decode(tailPart, { stream: true });
+                    pushChunk(tailText, chunkSize - remainingHeadBytes);
+                  } else {
+                    pushChunk(decoder.decode(value, { stream: true }), chunkSize);
+                  }
+                } else {
+                  pushChunk(decoder.decode(value, { stream: true }), chunkSize);
+                }
+              }
+
+              // 首块数据到达后才启动 idle timer（避免与首字节超时职责重叠）
+              if (!isFirstChunk) {
+                startIdleTimer();
               }
             }
 
-            const flushed = decoder.decode();
-            if (flushed) chunks.push(flushed);
-            const allContent = chunks.join("");
+            clearIdleTimer();
+            const allContent = flushAndJoin();
+            const clientAborted = session.clientAbortSignal?.aborted ?? false;
 
             // 存储响应体到 Redis（5分钟过期）
-            if (session.sessionId) {
+            if (session.sessionId && !wasTruncated) {
               void SessionManager.storeSessionResponse(
                 session.sessionId,
                 allContent,
@@ -786,16 +1193,157 @@ export class ProxyResponseHandler {
               ).catch((err) => {
                 logger.error("[ResponseHandler] Failed to store stream passthrough response:", err);
               });
+            } else if (session.sessionId && wasTruncated) {
+              logger.warn("[ResponseHandler] Skip storing passthrough response: body too large", {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                maxBytes: MAX_STATS_BUFFER_BYTES,
+              });
             }
 
             // 使用共享的统计处理方法
             const duration = Date.now() - session.startTime;
-            await finalizeRequestStats(session, allContent, statusCode, duration);
+            const finalized = await finalizeDeferredStreamingFinalizationIfNeeded(
+              session,
+              allContent,
+              statusCode,
+              streamEndedNormally,
+              clientAborted,
+              abortReason
+            );
+            await finalizeRequestStats(
+              session,
+              allContent,
+              finalized.effectiveStatusCode,
+              duration,
+              finalized.errorMessage ?? undefined,
+              finalized.providerIdForPersistence ?? undefined
+            );
           } catch (error) {
-            if (!isClientAbortError(error as Error)) {
-              logger.error("[ResponseHandler] Gemini passthrough stats task failed:", error);
+            const err = error instanceof Error ? error : new Error(String(error));
+            const clientAborted = session.clientAbortSignal?.aborted ?? false;
+            const isResponseControllerAborted =
+              sessionWithController.responseController?.signal.aborted ?? false;
+            const isIdleTimeout = !!err.message?.includes("streaming_idle");
+
+            abortReason =
+              abortReason ??
+              (clientAborted
+                ? "CLIENT_ABORTED"
+                : isIdleTimeout
+                  ? "STREAM_IDLE_TIMEOUT"
+                  : isResponseControllerAborted
+                    ? "STREAM_RESPONSE_TIMEOUT"
+                    : "STREAM_PROCESSING_ERROR");
+
+            // 透传的 stats 任务失败时，必须尽量落库并结束追踪，避免请求长期停留在“requesting”
+            logger.error("[ResponseHandler] Gemini passthrough stats task failed", {
+              taskId,
+              providerId: provider.id,
+              providerName: provider.name,
+              messageId: messageContext.id,
+              clientAborted,
+              isResponseControllerAborted,
+              isIdleTimeout,
+              abortReason,
+              errorName: err.name,
+              errorMessage: err.message || "(empty message)",
+            });
+
+            try {
+              clearIdleTimer();
+              const allContent = flushAndJoin();
+              const duration = Date.now() - session.startTime;
+
+              const finalized = await finalizeDeferredStreamingFinalizationIfNeeded(
+                session,
+                allContent,
+                statusCode,
+                false,
+                clientAborted,
+                abortReason
+              );
+
+              await finalizeRequestStats(
+                session,
+                allContent,
+                finalized.effectiveStatusCode,
+                duration,
+                finalized.errorMessage ?? abortReason,
+                finalized.providerIdForPersistence ?? undefined
+              );
+            } catch (finalizeError) {
+              await persistRequestFailure({
+                session,
+                messageContext,
+                statusCode: statusCode && statusCode >= 400 ? statusCode : 502,
+                error: finalizeError,
+                taskId,
+                phase: "stream",
+              });
             }
           } finally {
+            clearIdleTimer();
+            // 兜底：在流结束/中断后清理首字节超时，避免定时器泄漏
+            // 注意：不应在流仍可能继续时清理（否则会让首字节超时失效）
+            try {
+              const wasResponseControllerAborted =
+                sessionWithController.responseController?.signal.aborted ?? false;
+              const clientAborted = session.clientAbortSignal?.aborted ?? false;
+              const shouldClearTimeout =
+                responseTimeoutCleared ||
+                streamEndedNormally ||
+                wasResponseControllerAborted ||
+                clientAborted;
+              if (shouldClearTimeout) {
+                clearResponseTimeoutOnce();
+              }
+            } catch (e) {
+              logger.warn(
+                "[ResponseHandler] Gemini passthrough: Failed to clear response timeout",
+                {
+                  taskId,
+                  providerId: provider.id,
+                  providerName: provider.name,
+                  error: e instanceof Error ? e.message : String(e),
+                }
+              );
+            }
+            try {
+              // 取消 tee 分支，避免 stats 任务提前退出时 backpressure 影响客户端透传
+              const cancelPromise = reader?.cancel();
+              if (cancelPromise) {
+                cancelPromise.catch((err) => {
+                  logger.warn(
+                    "[ResponseHandler] Gemini passthrough: Failed to cancel stats reader",
+                    {
+                      taskId,
+                      providerId: provider.id,
+                      providerName: provider.name,
+                      error: err instanceof Error ? err.message : String(err),
+                    }
+                  );
+                });
+              }
+            } catch (e) {
+              logger.warn("[ResponseHandler] Gemini passthrough: Failed to cancel stats reader", {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+            try {
+              reader?.releaseLock();
+            } catch (e) {
+              logger.warn("[ResponseHandler] Gemini passthrough: Failed to release reader lock", {
+                taskId,
+                providerId: provider.id,
+                providerName: provider.name,
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
             AsyncTaskManager.cleanup(taskId);
           }
         })();
@@ -855,48 +1403,6 @@ export class ProxyResponseHandler {
         });
         processedStream = response.body.pipeThrough(transformStream);
       }
-    } else if (needsTransform && defaultRegistry.hasResponseTransformer(fromFormat, toFormat)) {
-      logger.debug("[ResponseHandler] Transforming stream response", {
-        from: fromFormat,
-        to: toFormat,
-        model: session.request.model,
-      });
-
-      // 创建转换流
-      const transformState: TransformState = {}; // 状态对象，用于在多个 chunk 之间保持状态
-      const transformStream = new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          try {
-            const decoder = new TextDecoder();
-            const text = decoder.decode(chunk, { stream: true });
-
-            // 使用转换器注册表转换 chunk
-            const transformedChunks = defaultRegistry.transformStreamResponse(
-              session.context,
-              fromFormat,
-              toFormat,
-              session.request.model || "",
-              session.request.message, // original request
-              session.request.message, // transformed request (same as original if no transform)
-              text,
-              transformState
-            );
-
-            // transformedChunks 是字符串数组
-            for (const transformedChunk of transformedChunks) {
-              if (transformedChunk) {
-                controller.enqueue(new TextEncoder().encode(transformedChunk));
-              }
-            }
-          } catch (error) {
-            logger.error("[ResponseHandler] Stream transform error:", error);
-            // 出错时传递原始 chunk
-            controller.enqueue(chunk);
-          }
-        },
-      });
-
-      processedStream = response.body.pipeThrough(transformStream) as ReadableStream<Uint8Array>;
     }
 
     // ⭐ 使用 TransformStream 包装流，以便在 idle timeout 时能关闭客户端流
@@ -913,15 +1419,7 @@ export class ProxyResponseHandler {
       })
     );
 
-    let clientStream: ReadableStream<Uint8Array>;
-    let internalStream: ReadableStream<Uint8Array>;
-
-    if (internalStreamOverride) {
-      clientStream = controllableStream;
-      internalStream = internalStreamOverride;
-    } else {
-      [clientStream, internalStream] = controllableStream.tee();
-    }
+    const [clientStream, internalStream] = controllableStream.tee();
     const statusCode = response.status;
 
     // 使用 AsyncTaskManager 管理后台处理任务
@@ -934,54 +1432,12 @@ export class ProxyResponseHandler {
     const processingPromise = (async () => {
       const reader = internalStream.getReader();
       const decoder = new TextDecoder();
+      // 注意：即使 STORE_SESSION_RESPONSE_BODY=false（不写入 Redis），这里也会在内存中累积完整流内容：
+      // - 用于解析 usage/cost 与内部结算（例如“假 200”检测）
+      // 因此该开关仅影响“是否持久化”，不用于控制流式内存占用。
       const chunks: string[] = [];
       let usageForCost: UsageMetrics | null = null;
       let isFirstChunk = true; // ⭐ 标记是否为第一块数据
-      const isAnthropicProvider =
-        provider.providerType === "claude" || provider.providerType === "claude-auth";
-      let hasAnthropicTerminalChunk = !isAnthropicProvider; // 非 Anthropic 默认视为已结束
-      let lastChunkText = "";
-
-      // Anthropic 总时长保护（尾包超时 180s）
-      const totalTimeoutMs = isAnthropicProvider ? 180_000 : Infinity;
-      let totalTimeoutId: NodeJS.Timeout | null = null;
-      const clearTotalTimer = () => {
-        if (totalTimeoutId) {
-          clearTimeout(totalTimeoutId);
-          totalTimeoutId = null;
-        }
-      };
-      const startTotalTimer = () => {
-        if (totalTimeoutMs === Infinity || totalTimeoutId) return;
-        totalTimeoutId = setTimeout(() => {
-          const err = new Error("streaming_total_timeout");
-          logger.error("ResponseHandler: Anthropic stream total timeout", {
-            taskId,
-            providerId: provider.id,
-            providerName: provider.name,
-            totalTimeoutMs,
-            chunksCollected: chunks.length,
-          });
-          try {
-            if (streamController) {
-              emitClientStreamError(
-                streamController,
-                "stream_total_timeout",
-                "anthropic stream exceeded 180s without completion",
-                504
-              );
-              (streamController as TransformStreamDefaultController<Uint8Array>).error(err);
-            }
-          } catch (e) {
-            logger.warn("ResponseHandler: Failed to close client stream on total timeout", {
-              taskId,
-              providerId: provider.id,
-              error: e,
-            });
-          }
-          abortController.abort(err);
-        }, totalTimeoutMs);
-      };
 
       // ⭐ 静默期 Watchdog：监控流式请求中途卡住（无新数据推送）
       const idleTimeoutMs =
@@ -1056,7 +1512,24 @@ export class ProxyResponseHandler {
         return chunks.join("");
       };
 
-      const finalizeStream = async (allContent: string): Promise<void> => {
+      const finalizeStream = async (
+        allContent: string,
+        streamEndedNormally: boolean,
+        clientAborted: boolean,
+        abortReason?: string
+      ): Promise<void> => {
+        const finalized = await finalizeDeferredStreamingFinalizationIfNeeded(
+          session,
+          allContent,
+          statusCode,
+          streamEndedNormally,
+          clientAborted,
+          abortReason
+        );
+        const effectiveStatusCode = finalized.effectiveStatusCode;
+        const streamErrorMessage = finalized.errorMessage;
+        const providerIdForPersistence = finalized.providerIdForPersistence;
+
         // 存储响应体到 Redis（5分钟过期）
         if (session.sessionId) {
           void SessionManager.storeSessionResponse(
@@ -1076,17 +1549,6 @@ export class ProxyResponseHandler {
 
         const usageResult = parseUsageFromResponseText(allContent, provider.providerType);
         usageForCost = usageResult.usageMetrics;
-        if (
-          simulationState.decision === "applied" &&
-          simulationState.simulatedUsage &&
-          typeof usageForCost?.output_tokens === "number"
-        ) {
-          simulationState.simulatedUsage.output_tokens = usageForCost.output_tokens;
-        }
-        const usageForOutput =
-          simulationState.decision === "applied" && simulationState.simulatedUsage
-            ? simulationState.simulatedUsage
-            : usageForCost;
 
         // Codex: Extract prompt_cache_key from SSE events and update session binding
         if (provider.providerType === "codex" && session.sessionId && provider.id) {
@@ -1127,10 +1589,10 @@ export class ProxyResponseHandler {
         await trackCostToRedis(session, usageForCost);
 
         // 更新 session 使用量到 Redis（用于实时监控）
-        if (session.sessionId && usageForOutput) {
+        if (session.sessionId) {
           let costUsdStr: string | undefined;
           try {
-            if (session.request.model && usageForCost) {
+            if (usageForCost && session.request.model) {
               const priceData = await session.getCachedPriceDataByBillingSource();
               if (priceData) {
                 const cost = calculateRequestCost(
@@ -1150,38 +1612,48 @@ export class ProxyResponseHandler {
             });
           }
 
-          void SessionManager.updateSessionUsage(session.sessionId, {
-            inputTokens: usageForOutput.input_tokens,
-            outputTokens: usageForOutput.output_tokens,
-            cacheCreationInputTokens: usageForOutput.cache_creation_input_tokens,
-            cacheReadInputTokens: usageForOutput.cache_read_input_tokens,
-            costUsd: costUsdStr,
-            status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
-            statusCode: statusCode,
-          }).catch((error: unknown) => {
-            logger.error("[ResponseHandler] Failed to update session usage:", error);
-          });
+          const payload: SessionUsageUpdate = {
+            status: effectiveStatusCode >= 200 && effectiveStatusCode < 300 ? "completed" : "error",
+            statusCode: effectiveStatusCode,
+            ...(streamErrorMessage ? { errorMessage: streamErrorMessage } : {}),
+          };
+
+          if (usageForCost) {
+            payload.inputTokens = usageForCost.input_tokens;
+            payload.outputTokens = usageForCost.output_tokens;
+            payload.cacheCreationInputTokens = usageForCost.cache_creation_input_tokens;
+            payload.cacheReadInputTokens = usageForCost.cache_read_input_tokens;
+            payload.costUsd = costUsdStr;
+          }
+
+          void SessionManager.updateSessionUsage(session.sessionId, payload).catch(
+            (error: unknown) => {
+              logger.error("[ResponseHandler] Failed to update session usage:", error);
+            }
+          );
         }
 
         // 保存扩展信息（status code, tokens, provider chain）
         await updateMessageRequestDetails(messageContext.id, {
-          statusCode: statusCode,
-          inputTokens: usageForOutput?.input_tokens,
-          outputTokens: usageForOutput?.output_tokens,
+          statusCode: effectiveStatusCode,
+          inputTokens: usageForCost?.input_tokens,
+          outputTokens: usageForCost?.output_tokens,
           ttfbMs: session.ttfbMs,
-          cacheCreationInputTokens: usageForOutput?.cache_creation_input_tokens,
-          cacheReadInputTokens: usageForOutput?.cache_read_input_tokens,
-          cacheCreation5mInputTokens: usageForOutput?.cache_creation_5m_input_tokens,
-          cacheCreation1hInputTokens: usageForOutput?.cache_creation_1h_input_tokens,
-          cacheTtlApplied: resolveCacheTtlFromUsage(usageForOutput),
+          cacheCreationInputTokens: usageForCost?.cache_creation_input_tokens,
+          cacheReadInputTokens: usageForCost?.cache_read_input_tokens,
+          cacheCreation5mInputTokens: usageForCost?.cache_creation_5m_input_tokens,
+          cacheCreation1hInputTokens: usageForCost?.cache_creation_1h_input_tokens,
+          cacheTtlApplied: usageForCost?.cache_ttl ?? null,
           providerChain: session.getProviderChain(),
-          model: session.getCurrentModel() ?? undefined, // ⭐ 更新重定向后的模型
-          providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
+          ...(streamErrorMessage ? { errorMessage: streamErrorMessage } : {}),
+          model: session.getCurrentModel() ?? undefined, // 更新重定向后的模型
+          providerId: providerIdForPersistence ?? session.provider?.id, // 更新最终供应商ID（重试切换后）
           context1mApplied: session.getContext1mApplied(),
         });
       };
 
       try {
+        let streamEndedNormally = false;
         while (true) {
           // 检查取消信号
           if (session.clientAbortSignal?.aborted || abortController.signal.aborted) {
@@ -1195,16 +1667,12 @@ export class ProxyResponseHandler {
 
           const { value, done } = await reader.read();
           if (done) {
+            streamEndedNormally = true;
             break;
           }
           if (value) {
             const chunkSize = value.length;
-            const chunkText = decoder.decode(value, { stream: true });
-            chunks.push(chunkText);
-            lastChunkText = chunkText;
-            if (isAnthropicProvider && detectAnthropicTerminalChunk(chunkText)) {
-              hasAnthropicTerminalChunk = true;
-            }
+            chunks.push(decoder.decode(value, { stream: true }));
 
             // ⭐ 每次收到数据后重置静默期计时器（首次收到数据时启动）
             startIdleTimer();
@@ -1220,7 +1688,6 @@ export class ProxyResponseHandler {
             if (isFirstChunk) {
               session.recordTtfb();
               isFirstChunk = false;
-              startTotalTimer();
               const sessionWithCleanup = session as typeof session & {
                 clearResponseTimeout?: () => void;
               };
@@ -1238,62 +1705,31 @@ export class ProxyResponseHandler {
 
         // ⭐ 流式读取完成：清除静默期计时器
         clearIdleTimer();
-        clearTotalTimer();
         const allContent = flushAndJoin();
-
-        // Anthropic：缺少终止包则判定失败，向客户端显式发送错误事件
-        if (isAnthropicProvider && !hasAnthropicTerminalChunk) {
-          const err = new Error("anthropic_missing_terminal_chunk");
-          logger.error("ResponseHandler: Anthropic stream finished without terminal chunk", {
+        const clientAborted = session.clientAbortSignal?.aborted ?? false;
+        try {
+          await finalizeStream(allContent, streamEndedNormally, clientAborted);
+        } catch (finalizeError) {
+          logger.error("ResponseHandler: Failed to finalize stream", {
             taskId,
             providerId: provider.id,
             providerName: provider.name,
             messageId: messageContext.id,
-            durationMs: Date.now() - session.startTime,
-            chunksCollected: chunks.length,
-            lastChunkPreview: summarizeChunkForLog(lastChunkText),
+            streamEndedNormally,
+            clientAborted,
+            finalizeError,
           });
 
-          try {
-            if (streamController) {
-              emitClientStreamError(
-                streamController,
-                "stream_incomplete",
-                "anthropic stream ended without terminal chunk",
-                502
-              );
-              (streamController as TransformStreamDefaultController<Uint8Array>).error(err);
-            }
-          } catch (e) {
-            logger.warn("ResponseHandler: Failed to emit client stream error", {
-              taskId,
-              providerId: provider.id,
-              error: e,
-            });
-          }
-
-          try {
-            const { recordFailure } = await import("@/lib/circuit-breaker");
-            await recordFailure(provider.id, err);
-          } catch (cbError) {
-            logger.warn("ResponseHandler: Failed to record missing terminal chunk", {
-              providerId: provider.id,
-              error: cbError,
-            });
-          }
-
+          // 回退：避免 finalizeStream 失败导致 request record 未被更新
           await persistRequestFailure({
             session,
             messageContext,
-            statusCode: 502,
-            error: err,
+            statusCode: statusCode && statusCode >= 400 ? statusCode : 500,
+            error: finalizeError,
             taskId,
             phase: "stream",
           });
-          return; // 不再进入 finalize，避免计费/成功标记
         }
-
-        await finalizeStream(allContent);
       } catch (error) {
         // 检测 AbortError 的来源：响应超时 vs 静默期超时 vs 客户端/上游中断
         const err = error as Error;
@@ -1303,7 +1739,6 @@ export class ProxyResponseHandler {
         const clientAborted = session.clientAbortSignal?.aborted ?? false;
         const isResponseControllerAborted =
           sessionWithController.responseController?.signal.aborted ?? false;
-        const isTotalTimeout = err.message?.includes("streaming_total_timeout");
 
         if (isClientAbortError(err)) {
           // 区分不同的超时来源
@@ -1321,32 +1756,30 @@ export class ProxyResponseHandler {
               errorName: err.name,
             });
 
-            // ⚠️ 计入熔断器（动态导入避免循环依赖）
+            // 注意：无法重试，因为客户端已收到 HTTP 200
+            // 错误已记录，不抛出异常（避免影响后台任务）
+
+            // 结算并消费 deferred meta，确保 provider chain/熔断归因完整
             try {
-              const { recordFailure } = await import("@/lib/circuit-breaker");
-              await recordFailure(provider.id, err);
-              logger.debug("ResponseHandler: Response timeout recorded in circuit breaker", {
-                providerId: provider.id,
+              const allContent = flushAndJoin();
+              await finalizeStream(allContent, false, false, "STREAM_RESPONSE_TIMEOUT");
+            } catch (finalizeError) {
+              logger.error("ResponseHandler: Failed to finalize response-timeout stream", {
+                taskId,
+                messageId: messageContext.id,
+                finalizeError,
               });
-            } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
+
+              // 回退：至少保证 DB 记录能落下，避免 orphan record
+              await persistRequestFailure({
+                session,
+                messageContext,
+                statusCode: statusCode && statusCode >= 400 ? statusCode : 502,
+                error: err,
+                taskId,
+                phase: "stream",
               });
             }
-
-            // 注意：无法重试，因为客户端已收到 HTTP 200
-            // 错误已记录，熔断器已更新，不抛出异常（避免影响后台任务）
-
-            // 更新数据库记录（避免 orphan record）
-            await persistRequestFailure({
-              session,
-              messageContext,
-              statusCode: statusCode && statusCode >= 400 ? statusCode : 502,
-              error: err,
-              taskId,
-              phase: "stream",
-            });
           } else if (isIdleTimeout) {
             // ⚠️ 静默期超时：计入熔断器并记录错误日志
             logger.error("ResponseHandler: Streaming idle timeout", {
@@ -1357,60 +1790,30 @@ export class ProxyResponseHandler {
               chunksCollected: chunks.length,
             });
 
-            // ⚠️ 计入熔断器（动态导入避免循环依赖）
-            try {
-              const { recordFailure } = await import("@/lib/circuit-breaker");
-              await recordFailure(provider.id, err);
-              logger.debug("ResponseHandler: Streaming idle timeout recorded in circuit breaker", {
-                providerId: provider.id,
-              });
-            } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
-              });
-            }
-
             // 注意：无法重试，因为客户端已收到 HTTP 200
-            // 错误已记录，熔断器已更新，不抛出异常（避免影响后台任务）
+            // 错误已记录，不抛出异常（避免影响后台任务）
 
-            // 更新数据库记录（避免 orphan record - 这是导致 185 个孤儿记录的根本原因！）
-            await persistRequestFailure({
-              session,
-              messageContext,
-              statusCode: statusCode && statusCode >= 400 ? statusCode : 502,
-              error: err,
-              taskId,
-              phase: "stream",
-            });
-          } else if (isTotalTimeout) {
-            // 总时长超时：计入熔断 + 502/504 失败记录
-            logger.error("ResponseHandler: Anthropic stream total timeout (forced abort)", {
-              taskId,
-              providerId: provider.id,
-              providerName: provider.name,
-              messageId: messageContext.id,
-              chunksCollected: chunks.length,
-            });
-
+            // 结算并消费 deferred meta，确保 provider chain/熔断归因完整
             try {
-              const { recordFailure } = await import("@/lib/circuit-breaker");
-              await recordFailure(provider.id, err);
-            } catch (cbError) {
-              logger.warn("ResponseHandler: Failed to record total timeout in circuit breaker", {
-                providerId: provider.id,
-                error: cbError,
+              const allContent = flushAndJoin();
+              await finalizeStream(allContent, false, false, "STREAM_IDLE_TIMEOUT");
+            } catch (finalizeError) {
+              logger.error("ResponseHandler: Failed to finalize idle-timeout stream", {
+                taskId,
+                messageId: messageContext.id,
+                finalizeError,
+              });
+
+              // 回退：至少保证 DB 记录能落下，避免 orphan record
+              await persistRequestFailure({
+                session,
+                messageContext,
+                statusCode: statusCode && statusCode >= 400 ? statusCode : 502,
+                error: err,
+                taskId,
+                phase: "stream",
               });
             }
-
-            await persistRequestFailure({
-              session,
-              messageContext,
-              statusCode: 504,
-              error: err,
-              taskId,
-              phase: "stream",
-            });
           } else if (!clientAborted) {
             // 上游在流式过程中意外中断：视为供应商/网络错误
             logger.error("ResponseHandler: Upstream stream aborted unexpectedly", {
@@ -1423,14 +1826,27 @@ export class ProxyResponseHandler {
               errorMessage: err.message || "(empty message)",
             });
 
-            await persistRequestFailure({
-              session,
-              messageContext,
-              statusCode: 502,
-              error: err,
-              taskId,
-              phase: "stream",
-            });
+            // 结算并消费 deferred meta，确保 provider chain/熔断归因完整
+            try {
+              const allContent = flushAndJoin();
+              await finalizeStream(allContent, false, false, "STREAM_UPSTREAM_ABORTED");
+            } catch (finalizeError) {
+              logger.error("ResponseHandler: Failed to finalize upstream-aborted stream", {
+                taskId,
+                messageId: messageContext.id,
+                finalizeError,
+              });
+
+              // 回退：至少保证 DB 记录能落下，避免 orphan record
+              await persistRequestFailure({
+                session,
+                messageContext,
+                statusCode: 502,
+                error: err,
+                taskId,
+                phase: "stream",
+              });
+            }
           } else {
             // 客户端主动中断：正常日志，不抛出错误
             logger.warn("ResponseHandler: Stream reading aborted by client", {
@@ -1447,7 +1863,7 @@ export class ProxyResponseHandler {
             });
             try {
               const allContent = flushAndJoin();
-              await finalizeStream(allContent);
+              await finalizeStream(allContent, false, true);
             } catch (finalizeError) {
               logger.error("ResponseHandler: Failed to finalize aborted stream response", {
                 taskId,
@@ -1459,15 +1875,27 @@ export class ProxyResponseHandler {
         } else {
           logger.error("Failed to save SSE content:", error);
 
-          // 更新数据库记录（避免 orphan record）
-          await persistRequestFailure({
-            session,
-            messageContext,
-            statusCode: statusCode && statusCode >= 400 ? statusCode : 500,
-            error,
-            taskId,
-            phase: "stream",
-          });
+          // 结算并消费 deferred meta，确保 provider chain/熔断归因完整
+          try {
+            const allContent = flushAndJoin();
+            await finalizeStream(allContent, false, clientAborted, "STREAM_PROCESSING_ERROR");
+          } catch (finalizeError) {
+            logger.error("ResponseHandler: Failed to finalize stream after processing error", {
+              taskId,
+              messageId: messageContext.id,
+              finalizeError,
+            });
+
+            // 回退：至少保证 DB 记录能落下，避免 orphan record
+            await persistRequestFailure({
+              session,
+              messageContext,
+              statusCode: statusCode && statusCode >= 400 ? statusCode : 500,
+              error,
+              taskId,
+              phase: "stream",
+            });
+          }
         }
       } finally {
         // 确保资源释放
@@ -1570,10 +1998,82 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
     result.output_tokens = usage.candidatesTokenCount;
     hasAny = true;
   }
+
+  // OpenAI chat completion format: prompt_tokens → input_tokens
+  // Priority: Claude (input_tokens) > Gemini (promptTokenCount) > OpenAI (prompt_tokens)
+  if (result.input_tokens === undefined && typeof usage.prompt_tokens === "number") {
+    result.input_tokens = usage.prompt_tokens;
+    hasAny = true;
+  }
   // Gemini 缓存支持
   if (typeof usage.cachedContentTokenCount === "number") {
     result.cache_read_input_tokens = usage.cachedContentTokenCount;
     hasAny = true;
+  }
+
+  // Gemini modality-specific token details (IMAGE/TEXT)
+  // candidatesTokensDetails: 输出 token 按 modality 分类
+  const candidatesDetails = usage.candidatesTokensDetails as
+    | Array<{ modality?: string; tokenCount?: number }>
+    | undefined;
+  if (Array.isArray(candidatesDetails) && candidatesDetails.length > 0) {
+    let imageTokens = 0;
+    let textTokens = 0;
+    let hasValidToken = false;
+    for (const detail of candidatesDetails) {
+      if (typeof detail.tokenCount === "number" && detail.tokenCount > 0) {
+        hasValidToken = true;
+        const modalityUpper = detail.modality?.toUpperCase();
+        if (modalityUpper === "IMAGE") {
+          imageTokens += detail.tokenCount;
+        } else {
+          textTokens += detail.tokenCount;
+        }
+      }
+    }
+    if (imageTokens > 0) {
+      result.output_image_tokens = imageTokens;
+      hasAny = true;
+    }
+    if (hasValidToken) {
+      // 计算未分类的 TEXT tokens: candidatesTokenCount - details总和
+      // 这些可能是图片生成的内部开销，按 TEXT 价格计费
+      const detailsSum = imageTokens + textTokens;
+      const candidatesTotal =
+        typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : 0;
+      const unaccountedTokens = Math.max(candidatesTotal - detailsSum, 0);
+      result.output_tokens = textTokens + unaccountedTokens;
+      hasAny = true;
+    }
+  }
+
+  // promptTokensDetails: 输入 token 按 modality 分类
+  const promptDetails = usage.promptTokensDetails as
+    | Array<{ modality?: string; tokenCount?: number }>
+    | undefined;
+  if (Array.isArray(promptDetails) && promptDetails.length > 0) {
+    let imageTokens = 0;
+    let textTokens = 0;
+    let hasValidToken = false;
+    for (const detail of promptDetails) {
+      if (typeof detail.tokenCount === "number" && detail.tokenCount > 0) {
+        hasValidToken = true;
+        const modalityUpper = detail.modality?.toUpperCase();
+        if (modalityUpper === "IMAGE") {
+          imageTokens += detail.tokenCount;
+        } else {
+          textTokens += detail.tokenCount;
+        }
+      }
+    }
+    if (imageTokens > 0) {
+      result.input_image_tokens = imageTokens;
+      hasAny = true;
+    }
+    if (hasValidToken) {
+      result.input_tokens = textTokens;
+      hasAny = true;
+    }
   }
 
   if (typeof usage.output_tokens === "number") {
@@ -1587,6 +2087,13 @@ function extractUsageMetrics(value: unknown): UsageMetrics | null {
   // 通常存在 output_tokens的时候，thoughtsTokenCount=0
   if (typeof usage.thoughtsTokenCount === "number" && usage.thoughtsTokenCount > 0) {
     result.output_tokens = (result.output_tokens ?? 0) + usage.thoughtsTokenCount;
+    hasAny = true;
+  }
+
+  // OpenAI chat completion format: completion_tokens → output_tokens
+  // Priority: Claude (output_tokens) > Gemini (candidatesTokenCount/thoughtsTokenCount) > OpenAI (completion_tokens)
+  if (result.output_tokens === undefined && typeof usage.completion_tokens === "number") {
+    result.output_tokens = usage.completion_tokens;
     hasAny = true;
   }
 
@@ -1770,7 +2277,7 @@ export function parseUsageFromResponseText(
   // SSE 解析：支持两种格式
   // 1. 标准 SSE (event: + data:) - Claude/OpenAI
   // 2. 纯 data: 格式 - Gemini
-  if (!usageMetrics && responseText.includes("data:")) {
+  if (!usageMetrics && isSSEText(responseText)) {
     const events = parseSSEData(responseText);
 
     // Claude SSE 特殊处理：
@@ -1778,6 +2285,10 @@ export function parseUsageFromResponseText(
     // - message_start 可能包含 cache_creation 的 TTL 细分字段（作为缺失字段的补充）
     let messageStartUsage: UsageMetrics | null = null;
     let messageDeltaUsage: UsageMetrics | null = null;
+
+    // Gemini SSE: usageMetadata 需要 last-wins（完整 token 计数仅在最后事件中）
+    let lastGeminiUsage: UsageMetrics | null = null;
+    let lastGeminiUsageRecord: Record<string, unknown> | null = null;
 
     const mergeUsageMetrics = (base: UsageMetrics | null, patch: UsageMetrics): UsageMetrics => {
       if (!base) {
@@ -1852,18 +2363,37 @@ export function parseUsageFromResponseText(
       }
 
       // 非 Claude 格式的 SSE 处理（Gemini 等）
+      // 注意：Gemini SSE 流中，usageMetadata 在每个事件中都可能存在，
+      // 但只有最后一个事件包含完整的 token 计数（candidatesTokenCount、thoughtsTokenCount 等）
+      // 因此需要持续更新，使用最后一个有效值
       if (!messageStartUsage && !messageDeltaUsage) {
-        // Standard usage fields (data.usage)
+        // Standard usage fields (data.usage) - 仍使用 first-wins 策略
         applyUsageValue(data.usage, `sse.${event.event}.usage`);
 
-        // Gemini usageMetadata
-        applyUsageValue(data.usageMetadata, `sse.${event.event}.usageMetadata`);
+        // Gemini usageMetadata - 改为 last-wins 策略
+        // 跳过 applyUsageValue（它是 first-wins），直接更新
+        if (data.usageMetadata && typeof data.usageMetadata === "object") {
+          const extracted = extractUsageMetrics(data.usageMetadata);
+          if (extracted) {
+            // 持续更新，最后一个有效值会覆盖之前的
+            lastGeminiUsage = extracted;
+            lastGeminiUsageRecord = data.usageMetadata as Record<string, unknown>;
+          }
+        }
 
         // Handle response wrapping in SSE
         if (!usageMetrics && data.response && typeof data.response === "object") {
           const responseObj = data.response as Record<string, unknown>;
           applyUsageValue(responseObj.usage, `sse.${event.event}.response.usage`);
-          applyUsageValue(responseObj.usageMetadata, `sse.${event.event}.response.usageMetadata`);
+
+          // response.usageMetadata 也使用 last-wins 策略
+          if (responseObj.usageMetadata && typeof responseObj.usageMetadata === "object") {
+            const extracted = extractUsageMetrics(responseObj.usageMetadata);
+            if (extracted) {
+              lastGeminiUsage = extracted;
+              lastGeminiUsageRecord = responseObj.usageMetadata as Record<string, unknown>;
+            }
+          }
         }
       }
     }
@@ -1880,6 +2410,17 @@ export function parseUsageFromResponseText(
       usageMetrics = adjustUsageForProviderType(mergedClaudeUsage, providerType);
       usageRecord = mergedClaudeUsage as unknown as Record<string, unknown>;
       logger.debug("[ResponseHandler] Final merged usage from Claude SSE", {
+        providerType,
+        usage: usageMetrics,
+      });
+    }
+
+    // Gemini SSE 处理：使用最后一个有效的 usageMetadata
+    // 仅当 Claude SSE 没有提供 usage 且 applyUsageValue 也没有找到时才使用
+    if (!usageMetrics && lastGeminiUsage) {
+      usageMetrics = adjustUsageForProviderType(lastGeminiUsage, providerType);
+      usageRecord = lastGeminiUsageRecord;
+      logger.debug("[ResponseHandler] Final usage from Gemini SSE (last event)", {
         providerType,
         usage: usageMetrics,
       });
@@ -2059,17 +2600,24 @@ async function updateRequestCostFromUsage(
 /**
  * 统一的请求统计处理方法
  * 用于消除 Gemini 透传、普通非流式、普通流式之间的重复统计逻辑
+ *
+ * @param statusCode - 内部结算状态码（可能与客户端实际收到的 HTTP 状态不同，例如“假 200”会被映射为 502）
+ * @param errorMessage - 可选的内部错误原因（用于把假 200/解析失败等信息写入 DB 与监控）
  */
 export async function finalizeRequestStats(
   session: ProxySession,
   responseText: string,
   statusCode: number,
-  duration: number
+  duration: number,
+  errorMessage?: string,
+  providerIdOverride?: number
 ): Promise<void> {
   const { messageContext, provider } = session;
   if (!provider || !messageContext) {
     return;
   }
+
+  const providerIdForPersistence = providerIdOverride ?? session.provider?.id;
 
   // 1. 结束请求状态追踪
   ProxyStatusTracker.getInstance().endRequest(messageContext.user.id, messageContext.id);
@@ -2084,10 +2632,11 @@ export async function finalizeRequestStats(
     // 即使没有 usageMetrics，也需要更新状态码和 provider chain
     await updateMessageRequestDetails(messageContext.id, {
       statusCode: statusCode,
+      ...(errorMessage ? { errorMessage } : {}),
       ttfbMs: session.ttfbMs ?? duration,
       providerChain: session.getProviderChain(),
       model: session.getCurrentModel() ?? undefined,
-      providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
+      providerId: providerIdForPersistence, // 更新最终供应商ID（重试切换后）
       context1mApplied: session.getContext1mApplied(),
     });
     return;
@@ -2156,6 +2705,7 @@ export async function finalizeRequestStats(
       costUsd: costUsdStr,
       status: statusCode >= 200 && statusCode < 300 ? "completed" : "error",
       statusCode: statusCode,
+      ...(errorMessage ? { errorMessage } : {}),
     }).catch((error: unknown) => {
       logger.error("[ResponseHandler] Failed to update session usage:", error);
     });
@@ -2173,8 +2723,9 @@ export async function finalizeRequestStats(
     cacheCreation1hInputTokens: normalizedUsage.cache_creation_1h_input_tokens,
     cacheTtlApplied: normalizedUsage.cache_ttl ?? null,
     providerChain: session.getProviderChain(),
+    ...(errorMessage ? { errorMessage } : {}),
     model: session.getCurrentModel() ?? undefined,
-    providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
+    providerId: providerIdForPersistence, // 更新最终供应商ID（重试切换后）
     context1mApplied: session.getContext1mApplied(),
   });
 }
@@ -2237,6 +2788,20 @@ async function trackCostToRedis(session: ProxySession, usage: UsageMetrics | nul
         createdAtMs: messageContext.createdAt.getTime(),
       }
     );
+
+    // Decrement lease budgets for all windows (fire-and-forget)
+    const windows: LeaseWindowType[] = ["5h", "daily", "weekly", "monthly"];
+    void Promise.all([
+      ...windows.map((w) => RateLimitService.decrementLeaseBudget(key.id, "key", w, costFloat)),
+      ...windows.map((w) => RateLimitService.decrementLeaseBudget(user.id, "user", w, costFloat)),
+      ...windows.map((w) =>
+        RateLimitService.decrementLeaseBudget(provider.id, "provider", w, costFloat)
+      ),
+    ]).catch((error) => {
+      logger.warn("[ResponseHandler] Failed to decrement lease budgets:", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 
     // 刷新 session 时间戳（滑动窗口）
     void SessionTracker.refreshSession(session.sessionId, key.id, provider.id, user.id).catch(
@@ -2316,7 +2881,7 @@ async function persistRequestFailure(options: {
       ttfbMs: phase === "non-stream" ? (session.ttfbMs ?? duration) : session.ttfbMs,
       providerChain: session.getProviderChain(),
       model: session.getCurrentModel() ?? undefined,
-      providerId: session.provider?.id, // ⭐ 更新最终供应商ID（重试切换后）
+      providerId: session.provider?.id, // 更新最终供应商ID（重试切换后）
       context1mApplied: session.getContext1mApplied(),
     });
 
@@ -2373,327 +2938,4 @@ function formatProcessingError(error: unknown): string {
   } catch {
     return String(error);
   }
-}
-
-/**
- * 检测 Anthropic SSE 是否包含终止事件（message_stop / [DONE]）
- */
-function detectAnthropicTerminalChunk(text: string): boolean {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return (
-    lower.includes("message_stop") ||
-    lower.includes('"event":"message_stop"') ||
-    lower.includes('"type":"message_stop"') ||
-    lower.includes("[done]")
-  );
-}
-
-/**
- * 截断 chunk 内容，避免日志过长
- */
-function summarizeChunkForLog(chunk: string, maxLength = 200): string {
-  if (!chunk) return "(empty)";
-  const trimmed = chunk.trim();
-  if (trimmed.length <= maxLength) return trimmed;
-  const half = Math.floor(maxLength / 2);
-  return `${trimmed.slice(0, half)} ... ${trimmed.slice(-half)}`;
-}
-
-/**
- * 向 SSE 客户端发送错误事件，便于上游/客户端识别失败并重试
- */
-function emitClientStreamError(
-  controller: TransformStreamDefaultController<Uint8Array>,
-  code: string,
-  message: string,
-  status?: number
-) {
-  try {
-    const payload: Record<string, unknown> = {
-      type: "error",
-      error: { code, message },
-    };
-    if (status) {
-      (payload.error as Record<string, unknown>).status = status;
-    }
-    const text = `event: error\ndata: ${JSON.stringify(payload)}\n\n`;
-    controller.enqueue(new TextEncoder().encode(text));
-  } catch {
-    // ignore enqueue errors
-  }
-}
-
-function buildSimulatedUsagePayload(
-  simulatedUsage: SimulatedUsage,
-  options?: { includeOutputTokens?: boolean }
-): Record<string, unknown> {
-  const includeOutputTokens = options?.includeOutputTokens ?? true;
-  const payload: Record<string, unknown> = {
-    input_tokens: simulatedUsage.input_tokens,
-    cache_read_input_tokens: simulatedUsage.cache_read_input_tokens,
-    cache_creation_input_tokens: simulatedUsage.cache_creation_input_tokens,
-    cache_creation_5m_input_tokens: simulatedUsage.cache_creation_5m_input_tokens,
-    cache_creation_1h_input_tokens: simulatedUsage.cache_creation_1h_input_tokens,
-    cache_creation: {
-      ephemeral_5m_input_tokens: simulatedUsage.cache_creation.ephemeral_5m_input_tokens,
-      ephemeral_1h_input_tokens: simulatedUsage.cache_creation.ephemeral_1h_input_tokens,
-    },
-  };
-
-  if (includeOutputTokens) {
-    payload.output_tokens = simulatedUsage.output_tokens;
-  }
-
-  return payload;
-}
-
-function applySimulatedUsageToResponsePayload(
-  responseData: Record<string, unknown>,
-  simulatedUsage: SimulatedUsage
-): boolean {
-  const usagePayload = buildSimulatedUsagePayload(simulatedUsage);
-  let applied = false;
-
-  const replaceUsage = (container: Record<string, unknown>, key: string) => {
-    const value = container[key];
-    if (value && typeof value === "object" && extractUsageMetrics(value)) {
-      container[key] = usagePayload;
-      applied = true;
-    }
-  };
-
-  replaceUsage(responseData, "usage");
-
-  if (responseData.message && typeof responseData.message === "object") {
-    replaceUsage(responseData.message as Record<string, unknown>, "usage");
-  }
-
-  if (responseData.response && typeof responseData.response === "object") {
-    replaceUsage(responseData.response as Record<string, unknown>, "usage");
-  }
-
-  if (Array.isArray(responseData.output)) {
-    for (const item of responseData.output) {
-      if (!item || typeof item !== "object") continue;
-      replaceUsage(item as Record<string, unknown>, "usage");
-    }
-  }
-
-  return applied;
-}
-
-function createClaudeCacheSimulationStream(options: {
-  requestMessage: Record<string, unknown>;
-  session: ProxySession;
-  cacheSessionKey: string | null;
-  cacheSignals: CacheSignals;
-  state: CacheSimulationState;
-}): TransformStream<Uint8Array, Uint8Array> {
-  const { requestMessage, session, cacheSessionKey, cacheSignals, state } = options;
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-
-  const parseEvent = (rawEvent: string): { event?: string; data?: string } | null => {
-    const lines = rawEvent.split("\n");
-    let event: string | undefined;
-    const dataLines: string[] = [];
-
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        event = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-
-    if (dataLines.length === 0) {
-      return null;
-    }
-
-    return { event, data: dataLines.join("\n") };
-  };
-
-  const resolveUsageContainer = (
-    eventType: string,
-    data: Record<string, unknown>
-  ): {
-    container: Record<string, unknown>;
-    key: string;
-    usage: Record<string, unknown>;
-  } | null => {
-    if (eventType === "message_start") {
-      if (data.message && typeof data.message === "object") {
-        const message = data.message as Record<string, unknown>;
-        if (message.usage && typeof message.usage === "object") {
-          return {
-            container: message,
-            key: "usage",
-            usage: message.usage as Record<string, unknown>,
-          };
-        }
-      }
-      if (data.usage && typeof data.usage === "object") {
-        return {
-          container: data,
-          key: "usage",
-          usage: data.usage as Record<string, unknown>,
-        };
-      }
-    }
-
-    if (eventType === "message_delta") {
-      if (data.usage && typeof data.usage === "object") {
-        return {
-          container: data,
-          key: "usage",
-          usage: data.usage as Record<string, unknown>,
-        };
-      }
-      if (data.delta && typeof data.delta === "object") {
-        const delta = data.delta as Record<string, unknown>;
-        if (delta.usage && typeof delta.usage === "object") {
-          return {
-            container: delta,
-            key: "usage",
-            usage: delta.usage as Record<string, unknown>,
-          };
-        }
-      }
-    }
-
-    return null;
-  };
-
-  const ensureSimulation = async (inputTokens: number, outputTokens: number): Promise<void> => {
-    if (state.decision !== "pending") {
-      return;
-    }
-
-    const simulated = await CacheSimulator.calculate(
-      requestMessage,
-      cacheSessionKey,
-      session,
-      {
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-      },
-      cacheSignals
-    );
-
-    if (!simulated) {
-      state.decision = "skip";
-      return;
-    }
-
-    state.simulatedUsage = simulated;
-    state.decision = "applied";
-  };
-
-  const transformEvent = async (rawEvent: string): Promise<string> => {
-    if (!rawEvent.trim()) {
-      return `${rawEvent}\n\n`;
-    }
-
-    const parsed = parseEvent(rawEvent);
-    if (!parsed || !parsed.data) {
-      return `${rawEvent}\n\n`;
-    }
-
-    if (parsed.data === "[DONE]") {
-      return `${rawEvent}\n\n`;
-    }
-
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(parsed.data) as Record<string, unknown>;
-    } catch {
-      return `${rawEvent}\n\n`;
-    }
-
-    const eventType = parsed.event ?? (data.type as string) ?? "";
-    if (eventType !== "message_start" && eventType !== "message_delta") {
-      return `${rawEvent}\n\n`;
-    }
-
-    const usageContainer = resolveUsageContainer(eventType, data);
-    if (!usageContainer) {
-      return `${rawEvent}\n\n`;
-    }
-
-    const upstreamInputTokens =
-      typeof usageContainer.usage.input_tokens === "number"
-        ? usageContainer.usage.input_tokens
-        : null;
-    const upstreamOutputTokens =
-      typeof usageContainer.usage.output_tokens === "number"
-        ? usageContainer.usage.output_tokens
-        : null;
-
-    if (upstreamInputTokens !== null) {
-      await ensureSimulation(upstreamInputTokens, upstreamOutputTokens ?? 0);
-    }
-
-    if (state.decision !== "applied" || !state.simulatedUsage) {
-      return `${rawEvent}\n\n`;
-    }
-
-    if (upstreamOutputTokens !== null) {
-      state.simulatedUsage.output_tokens = upstreamOutputTokens;
-    }
-
-    const includeOutputTokens = typeof usageContainer.usage.output_tokens === "number";
-    usageContainer.container[usageContainer.key] = buildSimulatedUsagePayload(
-      state.simulatedUsage,
-      { includeOutputTokens }
-    );
-
-    const eventLine = parsed.event ? `event: ${parsed.event}\n` : "";
-    return `${eventLine}data: ${JSON.stringify(data)}\n\n`;
-  };
-
-  return new TransformStream<Uint8Array, Uint8Array>({
-    async transform(chunk, controller) {
-      buffer += decoder.decode(chunk, { stream: true });
-      let delimiterIndex = buffer.indexOf("\n\n");
-
-      while (delimiterIndex !== -1) {
-        const rawEvent = buffer.slice(0, delimiterIndex);
-        buffer = buffer.slice(delimiterIndex + 2);
-        const output = await transformEvent(rawEvent);
-        controller.enqueue(encoder.encode(output));
-        delimiterIndex = buffer.indexOf("\n\n");
-      }
-    },
-    flush(controller) {
-      if (buffer) {
-        controller.enqueue(encoder.encode(buffer));
-        buffer = "";
-      }
-    },
-  });
-}
-
-function resolveCacheTtlFromUsage(
-  usage: {
-    cache_ttl?: CacheTtlValue;
-    cache_creation_5m_input_tokens?: number;
-    cache_creation_1h_input_tokens?: number;
-  } | null
-): CacheTtlValue | null {
-  if (!usage) return null;
-  if (usage.cache_ttl) return usage.cache_ttl;
-
-  const has5m =
-    typeof usage.cache_creation_5m_input_tokens === "number" &&
-    usage.cache_creation_5m_input_tokens > 0;
-  const has1h =
-    typeof usage.cache_creation_1h_input_tokens === "number" &&
-    usage.cache_creation_1h_input_tokens > 0;
-
-  if (has5m && has1h) return "mixed";
-  if (has1h) return "1h";
-  if (has5m) return "5m";
-  return null;
 }

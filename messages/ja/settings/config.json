@@ -51,8 +51,14 @@
     "enableResponseFixerDesc": "上流応答の一般的な形式問題（エンコーディング、SSE、途切れた JSON）を自動修復します（既定で有効）。",
     "enableThinkingSignatureRectifier": "thinking 署名整流を有効化",
     "enableThinkingSignatureRectifierDesc": "Anthropic プロバイダーで thinking 署名の不整合や不正なリクエストエラーが発生した場合、thinking 関連ブロックを削除して同一プロバイダーへ1回だけ再試行します（既定で有効）。",
+    "enableThinkingBudgetRectifier": "thinking 予算整流を有効化",
+    "enableThinkingBudgetRectifierDesc": "Anthropic プロバイダーで budget_tokens < 1024 エラーが発生した場合、thinking 予算を最大値（32000）に設定し、必要に応じて max_tokens を 64000 に設定して1回だけ再試行します（既定で有効）。",
+    "enableBillingHeaderRectifier": "課金ヘッダー整流を有効化",
+    "enableBillingHeaderRectifierDesc": "Claude Code クライアントが system プロンプトに注入する x-anthropic-billing-header テキストブロックを事前に削除し、Amazon Bedrock などの非ネイティブ Anthropic 上流による 400 エラーを防止します（既定で有効）。",
     "enableCodexSessionIdCompletion": "Codex セッションID補完を有効化",
     "enableCodexSessionIdCompletionDesc": "Codex リクエストで session_id（ヘッダー）または prompt_cache_key（ボディ）のどちらか一方しか提供されない場合に、欠けている方を自動補完します。両方ない場合は UUID v7 のセッションIDを生成し、同一対話内で安定して再利用します。",
+    "enableClaudeMetadataUserIdInjection": "Claude metadata.user_id 注入を有効化",
+    "enableClaudeMetadataUserIdInjectionDesc": "Claude リクエストに metadata.user_id がない場合、安定した user_id（形式: user_{hash}_account__session_{sessionId}）を自動注入します。クライアントが既に指定している場合は上書きしません。",
     "interceptAnthropicWarmupRequests": "Warmup リクエストを遮断（Anthropic）",
     "interceptAnthropicWarmupRequestsDesc": "有効にすると、Claude Code の Warmup プローブ要求は CCH が直接短い応答を返し、上流プロバイダーへのリクエストを回避します。ログには残りますが、課金/レート制限/統計には含まれません。",
     "keepDays": "保持日数",
@@ -73,7 +79,32 @@
     "siteTitlePlaceholder": "例：Claude Code Hub",
     "siteTitleRequired": "サイトタイトルは空にできません",
     "verboseProviderError": "詳細なプロバイダーエラー",
-    "verboseProviderErrorDesc": "有効にすると、すべてのプロバイダーが利用不可の場合に詳細なエラーメッセージ（プロバイダー数、レート制限の理由など）を返します。無効の場合は簡潔なエラーコードのみを返します。"
+    "verboseProviderErrorDesc": "有効にすると、すべてのプロバイダーが利用不可の場合に詳細なエラーメッセージ（プロバイダー数、レート制限の理由など）を返します。無効の場合は簡潔なエラーコードのみを返します。",
+    "timezoneLabel": "システムタイムゾーン",
+    "timezoneDescription": "バックエンドの時間境界計算とフロントエンドの日付/時刻表示を統一するためのシステムタイムゾーンを設定します。空のままにすると環境変数 TZ またはデフォルトの UTC が使用されます。",
+    "timezoneAuto": "自動 (環境変数 TZ を使用)",
+    "quotaLease": {
+      "title": "クォータリース設定",
+      "description": "レート制限チェック時のリース更新間隔とスライス比率を設定します。リース機構はDBクエリの負荷を軽減しながら、レート制限の精度を維持します。",
+      "dbRefreshInterval": "DB更新間隔（秒）",
+      "dbRefreshIntervalDesc": "データベースからクォータ使用量を更新する間隔（1-300秒）",
+      "leasePercent5h": "5時間ウィンドウリース比率",
+      "leasePercent5hDesc": "各リーススライスの5時間制限に対する比率（0-1）",
+      "leasePercentDaily": "日次ウィンドウリース比率",
+      "leasePercentDailyDesc": "各リーススライスの日次制限に対する比率（0-1）",
+      "leasePercentWeekly": "週次ウィンドウリース比率",
+      "leasePercentWeeklyDesc": "各リーススライスの週次制限に対する比率（0-1）",
+      "leasePercentMonthly": "月次ウィンドウリース比率",
+      "leasePercentMonthlyDesc": "各リーススライスの月次制限に対する比率（0-1）",
+      "leaseCapUsd": "リース上限（USD）",
+      "leaseCapUsdDesc": "リーススライスごとの絶対上限（米ドル）、空の場合は無制限",
+      "warnings": {
+        "dbRefreshIntervalTooLow": "更新間隔が {value}s です。DB 負荷が増える可能性があります。",
+        "dbRefreshIntervalTooHigh": "更新間隔が {value}s です。クォータ/制限の反映が遅れる可能性があります。",
+        "leasePercentZero": "比率が 0 です。リース予算が常に 0 になる可能性があります。",
+        "leaseCapZero": "上限が 0 です。リースごとの予算が 0 になる可能性があります。"
+      }
+    }
   },
   "section": {
     "autoCleanup": {

@@ -104,8 +104,7 @@ function checkProviderGroupMatch(providerGroupTag: string | null, userGroups: st
  * 核心逻辑：
  * 1. Claude 模型请求 (claude-*)：
  *    - Anthropic 提供商：根据 allowedModels 白名单判断
- *    - 非 Anthropic 提供商 + joinClaudePool：检查模型重定向是否指向 claude-* 模型
- *    - 非 Anthropic 提供商（未加入 Claude 调度池）：不支持
+ *    - 非 Anthropic 提供商：不支持 claude-* 模型调度
  *
  * 2. 非 Claude 模型请求 (gpt-*, gemini-*, 或其他任意模型)：
  *    - Anthropic 提供商：不支持（仅支持 Claude 模型）
@@ -135,14 +134,7 @@ function providerSupportsModel(provider: Provider, requestedModel: string): bool
       return provider.allowedModels.includes(requestedModel);
     }
 
-    // 1b. 非 Anthropic 提供商 + joinClaudePool
-    if (provider.joinClaudePool) {
-      const redirectedModel = provider.modelRedirects?.[requestedModel];
-      // 检查是否重定向到 claude 模型
-      return redirectedModel?.startsWith("claude-") || false;
-    }
-
-    // 1c. 其他情况：非 Anthropic 提供商且未加入 Claude 调度池
+    // 1b. 非 Anthropic 提供商不支持 Claude 模型调度
     return false;
   }
 
@@ -591,8 +583,19 @@ export class ProxyProviderResolver {
         providerType: provider.providerType,
         requestedModel,
         allowedModels: provider.allowedModels,
-        joinClaudePool: provider.joinClaudePool,
       });
+
+      // 清除过时绑定，避免 SET NX 死锁
+      // 当 session 内请求模型发生变化时，旧绑定已无意义，
+      // 清除后新的成功请求可通过 SET NX 重新绑定匹配的 provider
+      await SessionManager.clearSessionProvider(session.sessionId);
+      logger.info("ProviderSelector: Cleared stale provider binding (model mismatch)", {
+        sessionId: session.sessionId,
+        staleProviderId: provider.id,
+        staleProviderName: provider.name,
+        requestedModel,
+      });
+
       return null;
     }
 
@@ -636,8 +639,8 @@ export class ProxyProviderResolver {
     }
     // No auth group info (effectiveGroup is null) can reuse any provider
 
-    // 会话复用也必须遵守限额（否则会绕过“达到限额即禁用”的语义）
-    const costCheck = await RateLimitService.checkCostLimits(provider.id, "provider", {
+    // 会话复用也必须遵守限额（否则会绕过"达到限额即禁用"的语义）
+    const costCheck = await RateLimitService.checkCostLimitsWithLease(provider.id, "provider", {
       limit_5h_usd: provider.limit5hUsd,
       limit_daily_usd: provider.limitDailyUsd,
       daily_reset_mode: provider.dailyResetMode,
@@ -921,7 +924,7 @@ export class ProxyProviderResolver {
           id: p.id,
           name: p.name,
           reason: "circuit_open",
-          details: "供应商类型临时熔断",
+          details: "vendor_type_circuit_open",
         });
         continue;
       }
@@ -932,14 +935,14 @@ export class ProxyProviderResolver {
           id: p.id,
           name: p.name,
           reason: "circuit_open",
-          details: `熔断器${state === "open" ? "打开" : "半开"}`,
+          details: state === "open" ? "circuit_open" : "circuit_half_open",
         });
       } else {
         context.filteredProviders?.push({
           id: p.id,
           name: p.name,
           reason: "rate_limited",
-          details: "费用限制",
+          details: "rate_limited",
         });
       }
     }
@@ -951,12 +954,23 @@ export class ProxyProviderResolver {
     }
 
     // Step 5: 优先级分层（只选择最高优先级的供应商）
-    const topPriorityProviders = ProxyProviderResolver.selectTopPriority(healthyProviders);
-    const priorities = [...new Set(healthyProviders.map((p) => p.priority || 0))].sort(
-      (a, b) => a - b
+    const topPriorityProviders = ProxyProviderResolver.selectTopPriority(
+      healthyProviders,
+      effectiveGroupPick
     );
+    const priorities = [
+      ...new Set(
+        healthyProviders.map((p) =>
+          ProxyProviderResolver.resolveEffectivePriority(p, effectiveGroupPick ?? null)
+        )
+      ),
+    ].sort((a, b) => a - b);
     context.priorityLevels = priorities;
-    context.selectedPriority = Math.min(...healthyProviders.map((p) => p.priority || 0));
+    context.selectedPriority = Math.min(
+      ...healthyProviders.map((p) =>
+        ProxyProviderResolver.resolveEffectivePriority(p, effectiveGroupPick ?? null)
+      )
+    );
 
     // Step 6: 成本排序 + 加权选择 + 计算概率
     const totalWeight = topPriorityProviders.reduce((sum, p) => sum + p.weight, 0);
@@ -1028,7 +1042,7 @@ export class ProxyProviderResolver {
         }
 
         // 1. 检查金额限制
-        const costCheck = await RateLimitService.checkCostLimits(p.id, "provider", {
+        const costCheck = await RateLimitService.checkCostLimitsWithLease(p.id, "provider", {
           limit_5h_usd: p.limit5hUsd,
           limit_daily_usd: p.limitDailyUsd,
           daily_reset_mode: p.dailyResetMode,
@@ -1072,18 +1086,38 @@ export class ProxyProviderResolver {
   }
 
   /**
-   * 优先级分层：只选择最高优先级的供应商
+   * 解析供应商的有效优先级：优先使用分组覆盖值，回退到全局默认值
+   * 支持逗号分隔的多分组（如 "cli,admin"），取匹配到的最小优先级
    */
-  private static selectTopPriority(providers: Provider[]): Provider[] {
+  static resolveEffectivePriority(provider: Provider, userGroup: string | null): number {
+    if (userGroup && provider.groupPriorities) {
+      const groups = parseGroupString(userGroup);
+      const overrides = groups
+        .map((g) => provider.groupPriorities?.[g])
+        .filter((v): v is number => v !== undefined);
+      if (overrides.length > 0) {
+        return Math.min(...overrides);
+      }
+    }
+    return provider.priority ?? 0;
+  }
+
+  /**
+   * 优先级分层：只选择最高优先级的供应商（支持分组优先级覆盖）
+   */
+  private static selectTopPriority(providers: Provider[], userGroup?: string | null): Provider[] {
     if (providers.length === 0) {
       return [];
     }
 
-    // 找到最小的优先级值（最高优先级）
-    const minPriority = Math.min(...providers.map((p) => p.priority || 0));
+    const group = userGroup ?? null;
+    const minPriority = Math.min(
+      ...providers.map((p) => ProxyProviderResolver.resolveEffectivePriority(p, group))
+    );
 
-    // 只返回该优先级的供应商
-    return providers.filter((p) => (p.priority || 0) === minPriority);
+    return providers.filter(
+      (p) => ProxyProviderResolver.resolveEffectivePriority(p, group) === minPriority
+    );
   }
 
   /**
@@ -1222,7 +1256,10 @@ export class ProxyProviderResolver {
     }
 
     // 优先级分层
-    const topPriorityProviders = ProxyProviderResolver.selectTopPriority(healthyProviders);
+    const topPriorityProviders = ProxyProviderResolver.selectTopPriority(
+      healthyProviders,
+      effectiveGroupPick
+    );
 
     // 成本排序 + 加权随机选择
     const selected = ProxyProviderResolver.selectOptimal(topPriorityProviders);
@@ -1249,10 +1286,17 @@ export class ProxyProviderResolver {
         beforeHealthCheck: typeFiltered.length,
         afterHealthCheck: healthyProviders.length,
         filteredProviders: [],
-        priorityLevels: [...new Set(healthyProviders.map((p) => p.priority || 0))].sort(
-          (a, b) => a - b
+        priorityLevels: [
+          ...new Set(
+            healthyProviders.map((p) =>
+              ProxyProviderResolver.resolveEffectivePriority(p, effectiveGroupPick ?? null)
+            )
+          ),
+        ].sort((a, b) => a - b),
+        selectedPriority: ProxyProviderResolver.resolveEffectivePriority(
+          selected,
+          effectiveGroupPick ?? null
         ),
-        selectedPriority: selected.priority || 0,
         candidatesAtPriority: candidates,
       },
     };

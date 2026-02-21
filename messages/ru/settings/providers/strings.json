@@ -65,6 +65,7 @@
   "circuitStatus": "Состояние цепи",
   "vendorTypeCircuit": "Цепь по типу провайдера",
   "vendorFallbackName": "Поставщик #{id}",
+  "vendorAggregationRule": "Группировка по домену сайта",
   "orphanedProviders": "Неизвестный поставщик",
   "vendorTypeCircuitUpdated": "Цепь типа поставщика обновлена",
   "noEndpoints": "Эндпоинты не настроены",
@@ -81,10 +82,13 @@
   "probeOk": "OK",
   "probeError": "Ошибка",
   "addEndpointDesc": "Добавьте новый эндпоинт {providerType} для этого вендора.",
+  "addEndpointDescGeneric": "Добавьте новый API эндпоинт для этого вендора.",
+  "columnType": "Тип",
   "endpointUrlLabel": "URL",
   "endpointUrlPlaceholder": "https://api.example.com/v1",
   "endpointLabelOptional": "Метка (необязательно)",
   "endpointLabelPlaceholder": "Продакшн",
+  "sortOrder": "Порядок",
   "editEndpoint": "Редактировать эндпоинт",
   "editVendor": "Редактировать вендора",
   "vendorName": "Название вендора",
@@ -99,5 +103,18 @@
   "vendorUpdateSuccess": "Вендор обновлён",
   "vendorUpdateFailed": "Не удалось обновить вендора",
   "vendorDeleteSuccess": "Вендор удалён",
-  "vendorDeleteFailed": "Не удалось удалить вендора"
+  "vendorDeleteFailed": "Не удалось удалить вендора",
+  "endpointStatus": {
+    "viewDetails": "Подробнее ({count})",
+    "activeEndpoints": "Активные эндпоинты",
+    "noEndpoints": "Нет эндпоинтов",
+    "healthy": "Доступен",
+    "unhealthy": "Недоступен",
+    "unknown": "Неизвестно",
+    "circuitOpen": "Цепь открыта",
+    "circuitHalfOpen": "Цепь полуоткрыта",
+    "resetCircuit": "Сброс цепи",
+    "resetCircuitSuccess": "Цепь эндпоинта сброшена",
+    "resetCircuitFailed": "Не удалось сбросить цепь эндпоинта"
+  }
 }

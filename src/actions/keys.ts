@@ -5,13 +5,17 @@ import { and, count, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getTranslations } from "next-intl/server";
 import { db } from "@/drizzle/db";
-import { keys as keysTable } from "@/drizzle/schema";
+import { keys as keysTable, users as usersTable } from "@/drizzle/schema";
 import { getSession } from "@/lib/auth";
 import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
 import { logger } from "@/lib/logger";
+import { resolveKeyConcurrentSessionLimit } from "@/lib/rate-limit/concurrent-session-limit";
+import { parseDateInputAsTimezone } from "@/lib/utils/date-input";
 import { ERROR_CODES } from "@/lib/utils/error-messages";
 import { normalizeProviderGroup, parseProviderGroups } from "@/lib/utils/provider-group";
+import { resolveSystemTimezone } from "@/lib/utils/timezone";
 import { KeyFormSchema } from "@/lib/validation/schemas";
+import { toKey } from "@/repository/_shared/transformers";
 import type { KeyStatistics } from "@/repository/key";
 import {
   countActiveKeysByUser,
@@ -280,9 +284,12 @@ export async function addKey(data: {
 
     const generatedKey = `sk-${randomBytes(16).toString("hex")}`;
 
-    // 转换 expiresAt: undefined → null（永不过期），string → Date（设置日期）
+    // 转换 expiresAt: undefined → null（永不过期），string → Date（按系统时区解析）
+    const timezone = await resolveSystemTimezone();
     const expiresAt =
-      validatedData.expiresAt === undefined ? null : new Date(validatedData.expiresAt);
+      validatedData.expiresAt === undefined
+        ? null
+        : parseDateInputAsTimezone(validatedData.expiresAt, timezone);
 
     await createKey({
       user_id: data.userId,
@@ -497,22 +504,26 @@ export async function editKey(
 
     // 移除 providerGroup 子集校验（用户分组由 Key 分组自动计算）
 
-    // 转换 expiresAt：
+    // 转换 expiresAt（按系统时区解析）：
     // - 未携带 expiresAt：不更新该字段
     // - 携带 expiresAt 但为空：清除（永不过期）
     // - 携带 expiresAt 且为字符串：设置为对应 Date
-    const expiresAt = hasExpiresAtField
-      ? validatedData.expiresAt === undefined
-        ? null
-        : new Date(validatedData.expiresAt)
-      : undefined;
-
-    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
-      return {
-        ok: false,
-        error: tError("INVALID_FORMAT"),
-        errorCode: ERROR_CODES.INVALID_FORMAT,
-      };
+    let expiresAt: Date | null | undefined;
+    if (hasExpiresAtField) {
+      if (validatedData.expiresAt === undefined) {
+        expiresAt = null;
+      } else {
+        try {
+          const timezone = await resolveSystemTimezone();
+          expiresAt = parseDateInputAsTimezone(validatedData.expiresAt, timezone);
+        } catch {
+          return {
+            ok: false,
+            error: tError("INVALID_FORMAT"),
+            errorCode: ERROR_CODES.INVALID_FORMAT,
+          };
+        }
+      }
     }
 
     const isAdmin = session.user.role === "admin";
@@ -687,48 +698,73 @@ export async function getKeyLimitUsage(keyId: number): Promise<
       return { ok: false, error: "未登录" };
     }
 
-    const key = await findKeyById(keyId);
-    if (!key) {
+    const [result] = await db
+      .select({
+        key: keysTable,
+        userLimitConcurrentSessions: usersTable.limitConcurrentSessions,
+      })
+      .from(keysTable)
+      .leftJoin(usersTable, and(eq(keysTable.userId, usersTable.id), isNull(usersTable.deletedAt)))
+      .where(and(eq(keysTable.id, keyId), isNull(keysTable.deletedAt)))
+      .limit(1);
+
+    if (!result) {
       return { ok: false, error: "密钥不存在" };
     }
+
+    const key = toKey(result.key);
 
     // 权限检查
     if (session.user.role !== "admin" && session.user.id !== key.userId) {
       return { ok: false, error: "无权限执行此操作" };
     }
 
-    // 动态导入 RateLimitService 避免循环依赖
-    const { RateLimitService } = await import("@/lib/rate-limit");
+    // 动态导入避免循环依赖
     const { SessionTracker } = await import("@/lib/session-tracker");
-    const { getResetInfo, getResetInfoWithMode } = await import("@/lib/rate-limit/time-utils");
-    const { sumKeyTotalCost } = await import("@/repository/statistics");
+    const {
+      getResetInfo,
+      getResetInfoWithMode,
+      getTimeRangeForPeriod,
+      getTimeRangeForPeriodWithMode,
+    } = await import("@/lib/rate-limit/time-utils");
+    const { sumKeyTotalCost, sumKeyCostInTimeRange } = await import("@/repository/statistics");
+    const effectiveConcurrentLimit = resolveKeyConcurrentSessionLimit(
+      key.limitConcurrentSessions,
+      result.userLimitConcurrentSessions ?? null
+    );
 
-    // 获取金额消费（优先 Redis，降级数据库）
+    // Calculate time ranges using Key's dailyResetTime/dailyResetMode configuration
+    const keyDailyTimeRange = await getTimeRangeForPeriodWithMode(
+      "daily",
+      key.dailyResetTime,
+      key.dailyResetMode ?? "fixed"
+    );
+
+    // 5h/weekly/monthly use unified time ranges
+    const range5h = await getTimeRangeForPeriod("5h");
+    const rangeWeekly = await getTimeRangeForPeriod("weekly");
+    const rangeMonthly = await getTimeRangeForPeriod("monthly");
+
+    // 获取金额消费（使用 DB direct，与 my-usage.ts 保持一致）
     const [cost5h, costDaily, costWeekly, costMonthly, totalCost, concurrentSessions] =
       await Promise.all([
-        RateLimitService.getCurrentCost(keyId, "key", "5h"),
-        RateLimitService.getCurrentCost(
-          keyId,
-          "key",
-          "daily",
-          key.dailyResetTime,
-          key.dailyResetMode ?? "fixed"
-        ),
-        RateLimitService.getCurrentCost(keyId, "key", "weekly"),
-        RateLimitService.getCurrentCost(keyId, "key", "monthly"),
+        sumKeyCostInTimeRange(keyId, range5h.startTime, range5h.endTime),
+        sumKeyCostInTimeRange(keyId, keyDailyTimeRange.startTime, keyDailyTimeRange.endTime),
+        sumKeyCostInTimeRange(keyId, rangeWeekly.startTime, rangeWeekly.endTime),
+        sumKeyCostInTimeRange(keyId, rangeMonthly.startTime, rangeMonthly.endTime),
         sumKeyTotalCost(key.key),
         SessionTracker.getKeySessionCount(keyId),
       ]);
 
     // 获取重置时间
-    const resetInfo5h = getResetInfo("5h");
-    const resetInfoDaily = getResetInfoWithMode(
+    const resetInfo5h = await getResetInfo("5h");
+    const resetInfoDaily = await getResetInfoWithMode(
       "daily",
       key.dailyResetTime,
       key.dailyResetMode ?? "fixed"
     );
-    const resetInfoWeekly = getResetInfo("weekly");
-    const resetInfoMonthly = getResetInfo("monthly");
+    const resetInfoWeekly = await getResetInfo("weekly");
+    const resetInfoMonthly = await getResetInfo("monthly");
 
     return {
       ok: true,
@@ -759,7 +795,7 @@ export async function getKeyLimitUsage(keyId: number): Promise<
         },
         concurrentSessions: {
           current: concurrentSessions,
-          limit: key.limitConcurrentSessions || 0,
+          limit: effectiveConcurrentLimit,
         },
       },
     };
@@ -1058,10 +1094,9 @@ export async function renewKeyExpiresAt(
       };
     }
 
-    const expiresAt = new Date(data.expiresAt);
-    if (Number.isNaN(expiresAt.getTime())) {
-      return { ok: false, error: tError("INVALID_FORMAT"), errorCode: ERROR_CODES.INVALID_FORMAT };
-    }
+    // 按系统时区解析过期日期
+    const timezone = await resolveSystemTimezone();
+    const expiresAt = parseDateInputAsTimezone(data.expiresAt, timezone);
 
     await updateKey(keyId, {
       expires_at: expiresAt,

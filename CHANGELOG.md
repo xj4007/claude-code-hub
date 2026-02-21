@@ -4,6 +4,194 @@
 
 ---
 
+## v0.5.8 (2026-02-15)
+
+### 优化
+
+- my-usage 页面配额卡片和统计摘要卡片 UX 改进 (#794) [@miraserver](https://github.com/miraserver)
+- 日志页面虚拟化视图中无筛选条件时隐藏统计面板，提升渲染性能
+
+### 修复
+
+- 移除确定性 Session ID，防止跨会话冲突 (#793)
+- 修复标准路径下 Host Header 未匹配实际请求目标的问题
+- 从 Gemini Vertex AI publishers 路径正确提取模型，确保计费准确
+
+### 其他
+
+- README 添加 SSSAiCode 推广信息
+- i18n 翻译文件更新
+
+---
+
+## v0.5.7 (2026-02-14)
+
+### 新增
+
+- 新增 Billing Header 整流器，自动从系统提示中剥离 x-anthropic-billing-header，避免计费信息泄露 (#784)
+
+### 优化
+
+- 配额/用户页面总成本查询改为批量执行，提升页面加载性能
+
+### 修复
+
+- 修复全时间范围总成本查询的日期过滤问题，确保统计数据准确
+- 修复多 Key 并发场景下用户并发 Session 上限可能被击穿的问题 (#776) [@tesgth032](https://github.com/tesgth032)
+- 修复 AgentPool 清理逻辑，加固统计信息透传
+- 修复 billing 查询中 maxAgeDays 过大导致的日期下溢问题
+
+---
+
+## v0.5.6 (2026-02-12)
+
+### 新增
+
+- 端点熔断器默认关闭，新增 `ENABLE_ENDPOINT_CIRCUIT_BREAKER` 环境变量控制开关，并完善 524 决策链审计记录 (#773)
+- 配置表单新增 API Key 输入智能警告提示，检测常见误粘贴格式（如 Bearer 前缀、引号包裹、非 ASCII 字符等）(#768)
+- 新增 InlineWarning 通用内联警告组件，用于表单字段的非阻塞提示
+- 新增配额租约输入警告提示，检测异常配置值 (#768)
+
+### 优化
+
+- 供应商类型熔断器复用 `ENABLE_ENDPOINT_CIRCUIT_BREAKER` 开关，统一熔断器控制逻辑 (eca95ba0)
+- 供应商链格式化器新增 `vendor_type_all_timeout` 和 `endpoint_pool_exhausted` 等决策原因的展示支持
+- 供应商概率显示优化，处理超出 0-1 范围的异常值并封顶 100%
+- 系统设置表单增强，新增端点熔断器开关配置项和启动时自动清理残留熔断状态
+
+### 修复
+
+- 修复 Key 并发限制未继承用户并发上限的问题，Key 未设置时自动回退到用户级别限制 (#772)
+- 修复供应商表单克隆时浅拷贝导致的数据污染问题，改用 `structuredClone` 深拷贝 (#767)
+- 修复 Key 错误不应触发端点熔断器的问题，避免鉴权失败等非端点故障误触熔断 (3d584e5d)
+
+### 其他
+
+- 新增大量单元测试覆盖：Key 并发继承、供应商表单深拷贝、端点熔断器隔离、供应商类型熔断器、并发会话限制、概率格式化、API Key 警告检测、配额租约警告等
+- 部署脚本新增 `ENABLE_ENDPOINT_CIRCUIT_BREAKER` 环境变量配置
+
+---
+
+## v0.5.5 (2026-02-11)
+
+### 新增
+
+- Anthropic 供应商支持 Adaptive Thinking 覆写，可按供应商配置自适应思考模式和努力等级 (#758)
+- 供应商支持按用户组设置独立优先级，实现更精细的负载均衡策略 (#701) [@NieiR](https://github.com/NieiR)
+- 统一供应商-端点熔断可视化和通知机制，提升故障感知体验 (#755)
+- 排行榜新增供应商平均成本指标和缓存命中模型下钻分析 (#753)
+- API Key 与登录鉴权链路安全加固，引入 Vacuum Filter 快速负向过滤，降低数据库压力 (#734) [@tesgth032](https://github.com/tesgth032)
+- 端点探测默认切换为 TCP 模式，改进熔断恢复交互体验 (1291f850)
+- 支持为 Relay 供应商注入 Claude metadata.user_id 以启用上游缓存 (#729) [@ProgramCaiCai](https://github.com/ProgramCaiCai)
+
+### 优化
+
+- Vacuum Filter has 热路径性能优化，降低 API Key 负向短路成本 (#757) [@tesgth032](https://github.com/tesgth032)
+- 解耦 Adaptive Thinking 与 Thinking Budget 偏好设置，支持独立配置 (dc646926)
+
+### 修复
+
+- 修复端点熔断器无法从 OPEN 状态恢复的问题 (632cb856)
+- 修复请求卡死问题：AgentPool 驱逐操作改为非阻塞，防止级联超时 (#759) [@tesgth032](https://github.com/tesgth032)
+- 修复上游非 200 响应未正确触发熔断和回退的问题 (53e3a3e5)
+- 修复上游非 OK 响应 body 挂起导致请求卡死的问题 (#751) [@tesgth032](https://github.com/tesgth032)
+- 修复 SSE 结束后未识别假 200 错误的问题 (#735) [@tesgth032](https://github.com/tesgth032)
+- 修复端点更新回归问题，关联 #742 (#746)
+- 修复 provider_endpoints 查询缺少 anthropicAdaptiveThinking 字段的问题 (d4556158)
+- 修复会话模型切换时旧供应商绑定未清除导致的路由错误 (b83ab2af)
+
+### 其他
+
+- CI 全部 Claude Code GitHub Actions 切换至 claude-opus-4-6 模型 (badf6e25)
+- 新增大量单元测试覆盖：端点熔断恢复、AgentPool 驱逐、非 200 响应处理、Adaptive Thinking 覆写、按组优先级选择、Vacuum Filter、metadata 注入、模型切换绑定清理等
+
+---
+
+## v0.5.4 (2026-02-07)
+
+### 新增
+
+- Gemini 供应商支持 Google Search 网络访问偏好设置，可按供应商配置启用/禁用/继承客户端设置 (#721)
+- 供应商设置 UI 中展示 vendor 端点池信息，便于查看和管理端点分布 (#719)
+- 日志页面成本列支持可切换显示/隐藏，改进类型安全性 (#715) [@lingyin](https://github.com/lingyin)
+
+### 优化
+
+- 端点同步操作包裹在数据库事务中，防止并发竞态条件 (#730)
+- SessionTracker 活跃会话 zsets 按环境 TTL 自动清理过期条目 (#718)
+- 请求过滤器和敏感词热重载缓存失效机制优化 (#710) [@miraserver](https://github.com/miraserver)
+- UI 货币显示遵循系统 currencyDisplay 设置 (#717)
+
+### 修复
+
+- 修复标准路径供应商错误回退到旧版 provider url 的问题
+- 修复 /api/actions 认证会话透传问题，解决 getUsers 返回空数据 (#720) [@Longlone](https://github.com/Longlone)
+- 修复 OpenAI chat completion 格式的 usage 提取逻辑 (#716)
+- 修复 Thinking 签名整流器对 "cannot be modified" 错误的检测
+- 修复 auth session storage 导出和测试 mock 类型
+
+### 其他
+
+- 升级 jspdf 依赖
+- 新增大量单元测试覆盖：端点同步事务、会话追踪清理、Gemini Google Search 覆写、热重载单例、货币格式化等
+
+---
+
+## v0.5.3 (2026-02-03)
+
+### 新增
+
+- 扩展只读密钥访问权限，支持更多 API 端点访问 (#704) [@AptS:1547](https://github.com/AptS1547)
+- 支持 Zeabur 一键部署 (#679) [@h7ml](https://github.com/h7ml)
+- Anthropic 供应商支持参数覆写功能，可自定义 API 请求参数 (#689)
+
+### 优化
+
+- 重构代理架构，移除格式转换器并强制同格式路由，提升性能和稳定性 (#709)
+- 优化 Thinking Budget 整流器，改进思考模式下的令牌预算管理
+
+### 修复
+
+- 修复 Gemini 供应商 buildProxyUrl 重复拼接版本前缀的问题 (#693) [@sunxyw](https://github.com/sunxyw)
+- 修复 Gemini SSE 响应中 usageMetadata 提取逻辑，采用 last-wins 策略 (#691) [@sususu98](https://github.com/sususu98)
+
+### 其他
+
+- 新增 Thinking Budget 整流器单元测试覆盖
+- 更新 i18n 翻译和系统配置
+
+---
+
+## [v0.5.2](https://github.com/ding113/claude-code-hub/releases/tag/v0.5.2) - 2026-01-29
+
+### 新增
+
+- 日志页面供应商链条目支持点击跳转到详情页 (#657)
+- 供应商 vendor 按 host:port 重新聚类功能，当 website_url 为空时自动聚类 (#670)
+- 动态端点探测间隔功能，支持根据端点状态调整探测频率 (#669)
+- 时区一致性增强和基于租约的限流配额系统 (#668)
+
+### 优化
+
+- Dashboard UI 全面改进，优化布局和交互体验 (#657)
+- 设置页面配额租约和响应修复器区块默认折叠，简化界面 (#657)
+
+### 修复
+
+- 修复日志页面筛选器客户端响应性问题，改用 useSearchParams (#657)
+- 修复配额使用量显示和租约扣减对齐问题 (#674)
+- 修复所有周期性成本限制的租约机制统一问题 (#674)
+- 修复设置首次保存时配置未持久化的问题，通过重新验证所有 locale 路径解决 (#670)
+- 修复 computeVendorKey 异步化以符合 Server Actions 规范 (#670)
+- 修复 Gemini 图片生成模型的 IMAGE modality token 计费问题 (#664) [@sususu98](https://github.com/sususu98)
+
+### 其他
+
+- 新增大量单元测试覆盖：租约服务、时区处理、限流窗口、配额一致性等
+- i18n 翻译更新：新增供应商重聚类、配额租约等相关翻译
+
+---
+
 ## [v0.5.1](https://github.com/ding113/claude-code-hub/releases/tag/v0.5.1) - 2026-01-26
 
 ### 新增

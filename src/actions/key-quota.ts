@@ -3,10 +3,11 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { getTranslations } from "next-intl/server";
 import { db } from "@/drizzle/db";
-import { keys as keysTable } from "@/drizzle/schema";
+import { keys as keysTable, users as usersTable } from "@/drizzle/schema";
 import { getSession } from "@/lib/auth";
 import { logger } from "@/lib/logger";
-import { RateLimitService } from "@/lib/rate-limit/service";
+import { resolveKeyConcurrentSessionLimit } from "@/lib/rate-limit/concurrent-session-limit";
+import type { DailyResetMode } from "@/lib/rate-limit/time-utils";
 import { SessionTracker } from "@/lib/session-tracker";
 import type { CurrencyCode } from "@/lib/utils";
 import { ERROR_CODES } from "@/lib/utils/error-messages";
@@ -48,19 +49,25 @@ export async function getKeyQuotaUsage(keyId: number): Promise<ActionResult<KeyQ
       };
     }
 
-    const [keyRow] = await db
-      .select()
+    const [result] = await db
+      .select({
+        key: keysTable,
+        userLimitConcurrentSessions: usersTable.limitConcurrentSessions,
+      })
       .from(keysTable)
+      .leftJoin(usersTable, and(eq(keysTable.userId, usersTable.id), isNull(usersTable.deletedAt)))
       .where(and(eq(keysTable.id, keyId), isNull(keysTable.deletedAt)))
       .limit(1);
 
-    if (!keyRow) {
+    if (!result) {
       return {
         ok: false,
         error: tError?.("KEY_NOT_FOUND") ?? "",
         errorCode: ERROR_CODES.NOT_FOUND,
       };
     }
+
+    const keyRow = result.key;
 
     // Allow admin to view any key, users can only view their own keys
     if (session.user.role !== "admin" && keyRow.userId !== session.user.id) {
@@ -70,6 +77,11 @@ export async function getKeyQuotaUsage(keyId: number): Promise<ActionResult<KeyQ
         errorCode: ERROR_CODES.PERMISSION_DENIED,
       };
     }
+
+    const effectiveConcurrentLimit = resolveKeyConcurrentSessionLimit(
+      keyRow.limitConcurrentSessions ?? 0,
+      result.userLimitConcurrentSessions ?? null
+    );
 
     const settings = await getSystemSettings();
     const currencyCode = settings.currencyDisplay;
@@ -81,18 +93,31 @@ export async function getKeyQuotaUsage(keyId: number): Promise<ActionResult<KeyQ
       return Number.isNaN(num) ? null : num;
     };
 
+    // Import time utils and statistics functions (same as my-usage.ts for consistency)
+    const { getTimeRangeForPeriodWithMode, getTimeRangeForPeriod } = await import(
+      "@/lib/rate-limit/time-utils"
+    );
+    const { sumKeyCostInTimeRange } = await import("@/repository/statistics");
+
+    // Calculate time ranges using Key's dailyResetTime/dailyResetMode configuration
+    const keyDailyTimeRange = await getTimeRangeForPeriodWithMode(
+      "daily",
+      keyRow.dailyResetTime ?? "00:00",
+      (keyRow.dailyResetMode as DailyResetMode | undefined) ?? "fixed"
+    );
+
+    // 5h/weekly/monthly use unified time ranges
+    const range5h = await getTimeRangeForPeriod("5h");
+    const rangeWeekly = await getTimeRangeForPeriod("weekly");
+    const rangeMonthly = await getTimeRangeForPeriod("monthly");
+
+    // Use DB direct queries for consistency with my-usage.ts (not Redis-first)
     const [cost5h, costDaily, costWeekly, costMonthly, totalCost, concurrentSessions] =
       await Promise.all([
-        RateLimitService.getCurrentCost(keyId, "key", "5h"),
-        RateLimitService.getCurrentCost(
-          keyId,
-          "key",
-          "daily",
-          keyRow.dailyResetTime ?? "00:00",
-          keyRow.dailyResetMode ?? "fixed"
-        ),
-        RateLimitService.getCurrentCost(keyId, "key", "weekly"),
-        RateLimitService.getCurrentCost(keyId, "key", "monthly"),
+        sumKeyCostInTimeRange(keyId, range5h.startTime, range5h.endTime),
+        sumKeyCostInTimeRange(keyId, keyDailyTimeRange.startTime, keyDailyTimeRange.endTime),
+        sumKeyCostInTimeRange(keyId, rangeWeekly.startTime, rangeWeekly.endTime),
+        sumKeyCostInTimeRange(keyId, rangeMonthly.startTime, rangeMonthly.endTime),
         getTotalUsageForKey(keyRow.key),
         SessionTracker.getKeySessionCount(keyId),
       ]);
@@ -128,7 +153,7 @@ export async function getKeyQuotaUsage(keyId: number): Promise<ActionResult<KeyQ
       {
         type: "limitSessions",
         current: concurrentSessions,
-        limit: keyRow.limitConcurrentSessions ?? null,
+        limit: effectiveConcurrentLimit > 0 ? effectiveConcurrentLimit : null,
       },
     ];
 

@@ -22,7 +22,8 @@ export function createInitialState(
   }
 ): ProviderFormState {
   const isEdit = mode === "edit";
-  const sourceProvider = isEdit ? provider : cloneProvider;
+  const raw = isEdit ? provider : cloneProvider;
+  const sourceProvider = raw ? structuredClone(raw) : undefined;
 
   return {
     basic: {
@@ -50,8 +51,8 @@ export function createInitialState(
       supplementaryPromptEnabled: sourceProvider?.supplementaryPromptEnabled ?? false,
       modelRedirects: sourceProvider?.modelRedirects ?? {},
       allowedModels: sourceProvider?.allowedModels ?? [],
-      joinClaudePool: sourceProvider?.joinClaudePool ?? false,
       priority: sourceProvider?.priority ?? 0,
+      groupPriorities: sourceProvider?.groupPriorities ?? {},
       weight: sourceProvider?.weight ?? 1,
       costMultiplier: sourceProvider?.costMultiplier ?? 1.0,
       cacheTtlPreference: sourceProvider?.cacheTtlPreference ?? "inherit",
@@ -63,6 +64,11 @@ export function createInitialState(
       codexTextVerbosityPreference: sourceProvider?.codexTextVerbosityPreference ?? "inherit",
       codexParallelToolCallsPreference:
         sourceProvider?.codexParallelToolCallsPreference ?? "inherit",
+      anthropicMaxTokensPreference: sourceProvider?.anthropicMaxTokensPreference ?? "inherit",
+      anthropicThinkingBudgetPreference:
+        sourceProvider?.anthropicThinkingBudgetPreference ?? "inherit",
+      anthropicAdaptiveThinking: sourceProvider?.anthropicAdaptiveThinking ?? null,
+      geminiGoogleSearchPreference: sourceProvider?.geminiGoogleSearchPreference ?? "inherit",
     },
     rateLimit: {
       limit5hUsd: sourceProvider?.limit5hUsd ?? null,
@@ -151,10 +157,10 @@ export function providerFormReducer(
       return { ...state, routing: { ...state.routing, modelRedirects: action.payload } };
     case "SET_ALLOWED_MODELS":
       return { ...state, routing: { ...state.routing, allowedModels: action.payload } };
-    case "SET_JOIN_CLAUDE_POOL":
-      return { ...state, routing: { ...state.routing, joinClaudePool: action.payload } };
     case "SET_PRIORITY":
       return { ...state, routing: { ...state.routing, priority: action.payload } };
+    case "SET_GROUP_PRIORITIES":
+      return { ...state, routing: { ...state.routing, groupPriorities: action.payload } };
     case "SET_WEIGHT":
       return { ...state, routing: { ...state.routing, weight: action.payload } };
     case "SET_COST_MULTIPLIER":
@@ -182,6 +188,75 @@ export function providerFormReducer(
       return {
         ...state,
         routing: { ...state.routing, codexParallelToolCallsPreference: action.payload },
+      };
+    case "SET_ANTHROPIC_MAX_TOKENS":
+      return {
+        ...state,
+        routing: { ...state.routing, anthropicMaxTokensPreference: action.payload },
+      };
+    case "SET_ANTHROPIC_THINKING_BUDGET":
+      return {
+        ...state,
+        routing: {
+          ...state.routing,
+          anthropicThinkingBudgetPreference: action.payload,
+        },
+      };
+    case "SET_ADAPTIVE_THINKING_ENABLED":
+      if (action.payload) {
+        return {
+          ...state,
+          routing: {
+            ...state.routing,
+            anthropicAdaptiveThinking: state.routing.anthropicAdaptiveThinking ?? {
+              effort: "high",
+              modelMatchMode: "specific",
+              models: ["claude-opus-4-6"],
+            },
+          },
+        };
+      }
+      return {
+        ...state,
+        routing: {
+          ...state.routing,
+          anthropicAdaptiveThinking: null,
+        },
+      };
+    case "SET_ADAPTIVE_THINKING_EFFORT":
+      return {
+        ...state,
+        routing: {
+          ...state.routing,
+          anthropicAdaptiveThinking: state.routing.anthropicAdaptiveThinking
+            ? { ...state.routing.anthropicAdaptiveThinking, effort: action.payload }
+            : null,
+        },
+      };
+    case "SET_ADAPTIVE_THINKING_MODEL_MATCH_MODE":
+      return {
+        ...state,
+        routing: {
+          ...state.routing,
+          anthropicAdaptiveThinking: state.routing.anthropicAdaptiveThinking
+            ? { ...state.routing.anthropicAdaptiveThinking, modelMatchMode: action.payload }
+            : null,
+        },
+      };
+    case "SET_ADAPTIVE_THINKING_MODELS":
+      return {
+        ...state,
+        routing: {
+          ...state.routing,
+          anthropicAdaptiveThinking: state.routing.anthropicAdaptiveThinking
+            ? { ...state.routing.anthropicAdaptiveThinking, models: action.payload }
+            : null,
+        },
+      };
+    case "SET_GEMINI_GOOGLE_SEARCH":
+      return {
+        ...state,
+        routing: { ...state.routing, geminiGoogleSearchPreference: action.payload },
       };
 
     // Rate limit
@@ -263,11 +338,13 @@ export function providerFormReducer(
       return { ...state, ui: { ...state.ui, showFailureThresholdConfirm: action.payload } };
 
     // Reset
-    case "RESET_FORM":
+    case "RESET_FORM": {
+      const fresh = structuredClone(defaultInitialState);
       return {
-        ...defaultInitialState,
-        ui: { ...defaultInitialState.ui, activeTab: state.ui.activeTab },
+        ...fresh,
+        ui: { ...fresh.ui, activeTab: state.ui.activeTab },
       };
+    }
 
     // Load provider data
     case "LOAD_PROVIDER":

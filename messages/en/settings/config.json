@@ -51,8 +51,14 @@
     "enableResponseFixerDesc": "Automatically repairs common upstream response issues (encoding, SSE, truncated JSON). Enabled by default.",
     "enableThinkingSignatureRectifier": "Enable Thinking Signature Rectifier",
     "enableThinkingSignatureRectifierDesc": "When Anthropic providers return thinking signature incompatibility or invalid request errors, automatically removes incompatible thinking blocks and retries once against the same provider (enabled by default).",
+    "enableThinkingBudgetRectifier": "Enable Thinking Budget Rectifier",
+    "enableThinkingBudgetRectifierDesc": "When Anthropic providers return budget_tokens < 1024 errors, automatically sets thinking budget to maximum (32000) and max_tokens to 64000 if needed, then retries once (enabled by default).",
+    "enableBillingHeaderRectifier": "Enable Billing Header Rectifier",
+    "enableBillingHeaderRectifierDesc": "Proactively removes x-anthropic-billing-header text blocks injected by Claude Code client into the system prompt, preventing Amazon Bedrock and other non-native Anthropic upstreams from returning 400 errors (enabled by default).",
     "enableCodexSessionIdCompletion": "Enable Codex Session ID Completion",
     "enableCodexSessionIdCompletionDesc": "When Codex requests provide only one of session_id (header) or prompt_cache_key (body), automatically completes the other. If both are missing, generates a UUID v7 session id and reuses it stably within the same conversation.",
+    "enableClaudeMetadataUserIdInjection": "Enable Claude metadata.user_id Injection",
+    "enableClaudeMetadataUserIdInjectionDesc": "When Claude requests are missing metadata.user_id, automatically inject a stable user_id (format: user_{hash}_account__session_{sessionId}). If the client already provides one, keep it unchanged.",
     "interceptAnthropicWarmupRequests": "Intercept Warmup Requests (Anthropic)",
     "interceptAnthropicWarmupRequestsDesc": "When enabled, Claude Code warmup probe requests will be answered by CCH directly to avoid upstream provider calls; the request is logged for audit but is not billed, not rate-limited, and excluded from statistics.",
     "keepDays": "Retention Days",
@@ -73,7 +79,32 @@
     "siteTitlePlaceholder": "e.g. Claude Code Hub",
     "siteTitleRequired": "Site title cannot be empty",
     "verboseProviderError": "Verbose Provider Error",
-    "verboseProviderErrorDesc": "When enabled, return detailed error messages when all providers are unavailable (including provider count, rate limit reasons, etc.); when disabled, only return a simple error code."
+    "verboseProviderErrorDesc": "When enabled, return detailed error messages when all providers are unavailable (including provider count, rate limit reasons, etc.); when disabled, only return a simple error code.",
+    "timezoneLabel": "System Timezone",
+    "timezoneDescription": "Set the system timezone for unified backend time boundary calculations and frontend date/time display. Leave empty to use the TZ environment variable or default to UTC.",
+    "timezoneAuto": "Auto (use TZ env variable)",
+    "quotaLease": {
+      "title": "Quota Lease Settings",
+      "description": "Configure lease refresh interval and slice percentages for rate limit checks. The lease mechanism reduces DB query pressure while maintaining rate limit accuracy.",
+      "dbRefreshInterval": "DB Refresh Interval (seconds)",
+      "dbRefreshIntervalDesc": "Interval for refreshing quota usage from the database (1-300 seconds)",
+      "leasePercent5h": "5-Hour Window Lease Percentage",
+      "leasePercent5hDesc": "Percentage of 5-hour limit for each lease slice (0-1)",
+      "leasePercentDaily": "Daily Window Lease Percentage",
+      "leasePercentDailyDesc": "Percentage of daily limit for each lease slice (0-1)",
+      "leasePercentWeekly": "Weekly Window Lease Percentage",
+      "leasePercentWeeklyDesc": "Percentage of weekly limit for each lease slice (0-1)",
+      "leasePercentMonthly": "Monthly Window Lease Percentage",
+      "leasePercentMonthlyDesc": "Percentage of monthly limit for each lease slice (0-1)",
+      "leaseCapUsd": "Lease Cap (USD)",
+      "leaseCapUsdDesc": "Maximum absolute cap per lease slice in USD, leave empty for no limit",
+      "warnings": {
+        "dbRefreshIntervalTooLow": "Refresh interval is {value}s. This may increase DB load.",
+        "dbRefreshIntervalTooHigh": "Refresh interval is {value}s. Quota/limit updates may be delayed.",
+        "leasePercentZero": "Percentage is 0. This may cause the lease budget to always be 0.",
+        "leaseCapZero": "Lease cap is 0. This may cause the per-lease budget to be 0."
+      }
+    }
   },
   "section": {
     "autoCleanup": {

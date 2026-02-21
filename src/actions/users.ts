@@ -10,8 +10,10 @@ import { getSession } from "@/lib/auth";
 import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
 import { logger } from "@/lib/logger";
 import { getUnauthorizedFields } from "@/lib/permissions/user-field-permissions";
+import { parseDateInputAsTimezone } from "@/lib/utils/date-input";
 import { ERROR_CODES } from "@/lib/utils/error-messages";
 import { normalizeProviderGroup } from "@/lib/utils/provider-group";
+import { resolveSystemTimezone } from "@/lib/utils/timezone";
 import { maskKey } from "@/lib/utils/validation";
 import { formatZodError } from "@/lib/utils/zod-i18n";
 import { CreateUserSchema, UpdateUserSchema } from "@/lib/validation/schemas";
@@ -36,6 +38,9 @@ import {
 import type { User, UserDisplay } from "@/types/user";
 import type { ActionResult } from "./types";
 
+/**
+ * 批量获取用户列表的查询参数（用于用户管理列表页）。
+ */
 export interface GetUsersBatchParams {
   cursor?: number;
   limit?: number;
@@ -56,18 +61,27 @@ export interface GetUsersBatchParams {
   sortOrder?: "asc" | "desc";
 }
 
+/**
+ * 批量获取用户列表的返回结果。
+ */
 export interface GetUsersBatchResult {
   users: UserDisplay[];
   nextCursor: number | null;
   hasMore: boolean;
 }
 
+/**
+ * 批量更新的结果统计（便于前端展示成功/失败数量）。
+ */
 export interface BatchUpdateResult {
   requestedCount: number;
   updatedCount: number;
   updatedIds: number[];
 }
 
+/**
+ * 批量更新用户的请求参数。
+ */
 export interface BatchUpdateUsersParams {
   userIds: number[];
   updates: {
@@ -81,6 +95,9 @@ export interface BatchUpdateUsersParams {
   };
 }
 
+/**
+ * 批量更新用户时的结构化错误（携带 errorCode 便于前端区分提示）。
+ */
 class BatchUpdateError extends Error {
   readonly errorCode: string;
 
@@ -1285,9 +1302,13 @@ export async function getUserLimitUsage(userId: number): Promise<
     // 获取每日消费（使用用户的 dailyResetTime 和 dailyResetMode 配置）
     const resetTime = user.dailyResetTime ?? "00:00";
     const resetMode = user.dailyResetMode ?? "fixed";
-    const { startTime, endTime } = getTimeRangeForPeriodWithMode("daily", resetTime, resetMode);
+    const { startTime, endTime } = await getTimeRangeForPeriodWithMode(
+      "daily",
+      resetTime,
+      resetMode
+    );
     const dailyCost = await sumUserCostInTimeRange(userId, startTime, endTime);
-    const resetInfo = getResetInfoWithMode("daily", resetTime, resetMode);
+    const resetInfo = await getResetInfoWithMode("daily", resetTime, resetMode);
     const resetAt = resetInfo.resetAt;
 
     return {
@@ -1336,8 +1357,9 @@ export async function renewUser(
       };
     }
 
-    // Parse and validate expiration date
-    const expiresAt = new Date(data.expiresAt);
+    // Parse and validate expiration date (using system timezone)
+    const timezone = await resolveSystemTimezone();
+    const expiresAt = parseDateInputAsTimezone(data.expiresAt, timezone);
 
     // 验证过期时间
     const validationResult = await validateExpiresAt(expiresAt, tError);
@@ -1450,6 +1472,9 @@ export async function getUserAllLimitUsage(userId: number): Promise<
     limitTotal: { usage: number; limit: number | null };
   }>
 > {
+  // Infinity means "all time" - no date filter applied to the query
+  const ALL_TIME_MAX_AGE_DAYS = Infinity;
+
   try {
     const tError = await getTranslations("errors");
 
@@ -1473,22 +1498,29 @@ export async function getUserAllLimitUsage(userId: number): Promise<
     }
 
     // 动态导入
-    const { getTimeRangeForPeriod } = await import("@/lib/rate-limit/time-utils");
+    const { getTimeRangeForPeriod, getTimeRangeForPeriodWithMode } = await import(
+      "@/lib/rate-limit/time-utils"
+    );
     const { sumUserCostInTimeRange, sumUserTotalCost } = await import("@/repository/statistics");
 
     // 获取各时间范围
-    const range5h = getTimeRangeForPeriod("5h");
-    const rangeDaily = getTimeRangeForPeriod("daily", user.dailyResetTime || "00:00");
-    const rangeWeekly = getTimeRangeForPeriod("weekly");
-    const rangeMonthly = getTimeRangeForPeriod("monthly");
+    const range5h = await getTimeRangeForPeriod("5h");
+    const rangeDaily = await getTimeRangeForPeriodWithMode(
+      "daily",
+      user.dailyResetTime || "00:00",
+      (user.dailyResetMode || "fixed") as "fixed" | "rolling"
+    );
+    const rangeWeekly = await getTimeRangeForPeriod("weekly");
+    const rangeMonthly = await getTimeRangeForPeriod("monthly");
 
     // 并行查询各时间范围的消费
+    // Note: sumUserTotalCost uses ALL_TIME_MAX_AGE_DAYS for all-time semantics
     const [usage5h, usageDaily, usageWeekly, usageMonthly, usageTotal] = await Promise.all([
       sumUserCostInTimeRange(userId, range5h.startTime, range5h.endTime),
       sumUserCostInTimeRange(userId, rangeDaily.startTime, rangeDaily.endTime),
       sumUserCostInTimeRange(userId, rangeWeekly.startTime, rangeWeekly.endTime),
       sumUserCostInTimeRange(userId, rangeMonthly.startTime, rangeMonthly.endTime),
-      sumUserTotalCost(userId),
+      sumUserTotalCost(userId, ALL_TIME_MAX_AGE_DAYS),
     ]);
 
     return {
@@ -1543,6 +1575,9 @@ export async function resetUserAllStatistics(userId: number): Promise<ActionResu
     // 2. Clear Redis cache
     const { getRedisClient } = await import("@/lib/redis");
     const { scanPattern } = await import("@/lib/redis/scan-helper");
+    const { getKeyActiveSessionsKey, getUserActiveSessionsKey } = await import(
+      "@/lib/redis/active-session-keys"
+    );
     const redis = getRedisClient();
 
     if (redis && redis.status === "ready") {
@@ -1570,8 +1605,9 @@ export async function resetUserAllStatistics(userId: number): Promise<ActionResu
 
         // Active sessions
         for (const keyId of keyIds) {
-          pipeline.del(`key:${keyId}:active_sessions`);
+          pipeline.del(getKeyActiveSessionsKey(keyId));
         }
+        pipeline.del(getUserActiveSessionsKey(userId));
 
         // Cost keys
         for (const key of allCostKeys) {
@@ -1594,7 +1630,7 @@ export async function resetUserAllStatistics(userId: number): Promise<ActionResu
           userId,
           keyCount: keyIds.length,
           costKeysDeleted: allCostKeys.length,
-          activeSessionsDeleted: keyIds.length,
+          activeSessionsDeleted: keyIds.length + 1,
           durationMs: duration,
         });
       } catch (error) {

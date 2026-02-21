@@ -4,32 +4,27 @@ import { and, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/drizzle/db";
 import { providers } from "@/drizzle/schema";
 import { getCachedProviders } from "@/lib/cache/provider-cache";
-import { getEnvConfig } from "@/lib/config";
+import { resetEndpointCircuit } from "@/lib/endpoint-circuit-breaker";
 import { logger } from "@/lib/logger";
+import { resolveSystemTimezone } from "@/lib/utils/timezone";
 import type { CreateProviderData, Provider, UpdateProviderData } from "@/types/provider";
 import { toProvider } from "./_shared/transformers";
 import {
   ensureProviderEndpointExistsForUrl,
   getOrCreateProviderVendorIdFromUrls,
+  syncProviderEndpointOnProviderEdit,
   tryDeleteProviderVendorIfEmpty,
 } from "./provider-endpoints";
 
 export async function createProvider(providerData: CreateProviderData): Promise<Provider> {
-  const providerVendorId = await getOrCreateProviderVendorIdFromUrls({
-    providerUrl: providerData.url,
-    websiteUrl: providerData.website_url ?? null,
-    faviconUrl: providerData.favicon_url ?? null,
-    displayName: providerData.name,
-  });
-
   const dbData = {
     name: providerData.name,
     url: providerData.url,
     key: providerData.key,
-    providerVendorId,
     isEnabled: providerData.is_enabled,
     weight: providerData.weight,
     priority: providerData.priority,
+    groupPriorities: providerData.group_priorities ?? null,
     costMultiplier:
       providerData.cost_multiplier != null ? providerData.cost_multiplier.toString() : "1.0",
     groupTag: providerData.group_tag,
@@ -37,14 +32,8 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     preserveClientIp: providerData.preserve_client_ip ?? false,
     modelRedirects: providerData.model_redirects,
     allowedModels: providerData.allowed_models,
-    joinClaudePool: providerData.join_claude_pool ?? false,
-    codexInstructionsStrategy: providerData.codex_instructions_strategy ?? "auto",
     mcpPassthroughType: providerData.mcp_passthrough_type ?? "none",
     mcpPassthroughUrl: providerData.mcp_passthrough_url ?? null,
-    useUnifiedClientId: providerData.use_unified_client_id ?? false,
-    unifiedClientId: providerData.unified_client_id ?? null,
-    simulateCacheEnabled: providerData.simulate_cache_enabled ?? false,
-    supplementaryPromptEnabled: providerData.supplementary_prompt_enabled ?? false,
     limit5hUsd: providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null,
     limitDailyUsd:
       providerData.limit_daily_usd != null ? providerData.limit_daily_usd.toString() : null,
@@ -75,89 +64,104 @@ export async function createProvider(providerData: CreateProviderData): Promise<
     codexReasoningSummaryPreference: providerData.codex_reasoning_summary_preference ?? null,
     codexTextVerbosityPreference: providerData.codex_text_verbosity_preference ?? null,
     codexParallelToolCallsPreference: providerData.codex_parallel_tool_calls_preference ?? null,
+    anthropicMaxTokensPreference: providerData.anthropic_max_tokens_preference ?? null,
+    anthropicThinkingBudgetPreference: providerData.anthropic_thinking_budget_preference ?? null,
+    anthropicAdaptiveThinking: providerData.anthropic_adaptive_thinking ?? null,
+    geminiGoogleSearchPreference: providerData.gemini_google_search_preference ?? null,
     tpm: providerData.tpm,
     rpm: providerData.rpm,
     rpd: providerData.rpd,
     cc: providerData.cc,
   };
 
-  const [provider] = await db.insert(providers).values(dbData).returning({
-    id: providers.id,
-    name: providers.name,
-    url: providers.url,
-    key: providers.key,
-    providerVendorId: providers.providerVendorId,
-    isEnabled: providers.isEnabled,
-    weight: providers.weight,
-    priority: providers.priority,
-    costMultiplier: providers.costMultiplier,
-    groupTag: providers.groupTag,
-    providerType: providers.providerType,
-    preserveClientIp: providers.preserveClientIp,
-    modelRedirects: providers.modelRedirects,
-    allowedModels: providers.allowedModels,
-    joinClaudePool: providers.joinClaudePool,
-    codexInstructionsStrategy: providers.codexInstructionsStrategy,
-    mcpPassthroughType: providers.mcpPassthroughType,
-    mcpPassthroughUrl: providers.mcpPassthroughUrl,
-    useUnifiedClientId: providers.useUnifiedClientId,
-    unifiedClientId: providers.unifiedClientId,
-    simulateCacheEnabled: providers.simulateCacheEnabled,
-    supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
-    limit5hUsd: providers.limit5hUsd,
-    limitDailyUsd: providers.limitDailyUsd,
-    dailyResetMode: providers.dailyResetMode,
-    dailyResetTime: providers.dailyResetTime,
-    limitWeeklyUsd: providers.limitWeeklyUsd,
-    limitMonthlyUsd: providers.limitMonthlyUsd,
-    limitTotalUsd: providers.limitTotalUsd,
-    totalCostResetAt: providers.totalCostResetAt,
-    limitConcurrentSessions: providers.limitConcurrentSessions,
-    maxRetryAttempts: providers.maxRetryAttempts,
-    circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
-    circuitBreakerOpenDuration: providers.circuitBreakerOpenDuration,
-    circuitBreakerHalfOpenSuccessThreshold: providers.circuitBreakerHalfOpenSuccessThreshold,
-    proxyUrl: providers.proxyUrl,
-    proxyFallbackToDirect: providers.proxyFallbackToDirect,
-    firstByteTimeoutStreamingMs: providers.firstByteTimeoutStreamingMs,
-    streamingIdleTimeoutMs: providers.streamingIdleTimeoutMs,
-    requestTimeoutNonStreamingMs: providers.requestTimeoutNonStreamingMs,
-    websiteUrl: providers.websiteUrl,
-    faviconUrl: providers.faviconUrl,
-    cacheTtlPreference: providers.cacheTtlPreference,
-    context1mPreference: providers.context1mPreference,
-    codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
-    codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
-    codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
-    codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
-    tpm: providers.tpm,
-    rpm: providers.rpm,
-    rpd: providers.rpd,
-    cc: providers.cc,
-    createdAt: providers.createdAt,
-    updatedAt: providers.updatedAt,
-    deletedAt: providers.deletedAt,
-  });
+  return db.transaction(async (tx) => {
+    const providerVendorId = await getOrCreateProviderVendorIdFromUrls(
+      {
+        providerUrl: providerData.url,
+        websiteUrl: providerData.website_url ?? null,
+        faviconUrl: providerData.favicon_url ?? null,
+        displayName: providerData.name,
+      },
+      { tx }
+    );
 
-  const created = toProvider(provider);
-
-  if (created.providerVendorId) {
-    try {
-      await ensureProviderEndpointExistsForUrl({
-        vendorId: created.providerVendorId,
-        providerType: created.providerType,
-        url: created.url,
-      });
-    } catch (error) {
-      logger.warn("[Provider] Failed to seed provider endpoint from provider.url", {
+    const [provider] = await tx
+      .insert(providers)
+      .values({
+        ...dbData,
         providerVendorId,
-        providerType: created.providerType,
-        error: error instanceof Error ? error.message : String(error),
+      })
+      .returning({
+        id: providers.id,
+        name: providers.name,
+        url: providers.url,
+        key: providers.key,
+        providerVendorId: providers.providerVendorId,
+        isEnabled: providers.isEnabled,
+        weight: providers.weight,
+        priority: providers.priority,
+        costMultiplier: providers.costMultiplier,
+        groupTag: providers.groupTag,
+        providerType: providers.providerType,
+        preserveClientIp: providers.preserveClientIp,
+        modelRedirects: providers.modelRedirects,
+        allowedModels: providers.allowedModels,
+        mcpPassthroughType: providers.mcpPassthroughType,
+        mcpPassthroughUrl: providers.mcpPassthroughUrl,
+        limit5hUsd: providers.limit5hUsd,
+        limitDailyUsd: providers.limitDailyUsd,
+        dailyResetMode: providers.dailyResetMode,
+        dailyResetTime: providers.dailyResetTime,
+        limitWeeklyUsd: providers.limitWeeklyUsd,
+        limitMonthlyUsd: providers.limitMonthlyUsd,
+        limitTotalUsd: providers.limitTotalUsd,
+        totalCostResetAt: providers.totalCostResetAt,
+        limitConcurrentSessions: providers.limitConcurrentSessions,
+        maxRetryAttempts: providers.maxRetryAttempts,
+        circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
+        circuitBreakerOpenDuration: providers.circuitBreakerOpenDuration,
+        circuitBreakerHalfOpenSuccessThreshold: providers.circuitBreakerHalfOpenSuccessThreshold,
+        proxyUrl: providers.proxyUrl,
+        proxyFallbackToDirect: providers.proxyFallbackToDirect,
+        firstByteTimeoutStreamingMs: providers.firstByteTimeoutStreamingMs,
+        streamingIdleTimeoutMs: providers.streamingIdleTimeoutMs,
+        requestTimeoutNonStreamingMs: providers.requestTimeoutNonStreamingMs,
+        websiteUrl: providers.websiteUrl,
+        faviconUrl: providers.faviconUrl,
+        cacheTtlPreference: providers.cacheTtlPreference,
+        context1mPreference: providers.context1mPreference,
+        codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+        codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+        codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+        codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
+        anthropicMaxTokensPreference: providers.anthropicMaxTokensPreference,
+        anthropicThinkingBudgetPreference: providers.anthropicThinkingBudgetPreference,
+        anthropicAdaptiveThinking: providers.anthropicAdaptiveThinking,
+        geminiGoogleSearchPreference: providers.geminiGoogleSearchPreference,
+        tpm: providers.tpm,
+        rpm: providers.rpm,
+        rpd: providers.rpd,
+        cc: providers.cc,
+        createdAt: providers.createdAt,
+        updatedAt: providers.updatedAt,
+        deletedAt: providers.deletedAt,
       });
-    }
-  }
 
-  return created;
+    const created = toProvider(provider);
+
+    if (created.providerVendorId) {
+      await ensureProviderEndpointExistsForUrl(
+        {
+          vendorId: created.providerVendorId,
+          providerType: created.providerType,
+          url: created.url,
+        },
+        { tx }
+      );
+    }
+
+    return created;
+  });
 }
 
 export async function findProviderList(
@@ -174,20 +178,15 @@ export async function findProviderList(
       isEnabled: providers.isEnabled,
       weight: providers.weight,
       priority: providers.priority,
+      groupPriorities: providers.groupPriorities,
       costMultiplier: providers.costMultiplier,
       groupTag: providers.groupTag,
       providerType: providers.providerType,
       preserveClientIp: providers.preserveClientIp,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
-      joinClaudePool: providers.joinClaudePool,
-      codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
-      useUnifiedClientId: providers.useUnifiedClientId,
-      unifiedClientId: providers.unifiedClientId,
-      simulateCacheEnabled: providers.simulateCacheEnabled,
-      supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -214,6 +213,10 @@ export async function findProviderList(
       codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
       codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
       codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
+      anthropicMaxTokensPreference: providers.anthropicMaxTokensPreference,
+      anthropicThinkingBudgetPreference: providers.anthropicThinkingBudgetPreference,
+      anthropicAdaptiveThinking: providers.anthropicAdaptiveThinking,
+      geminiGoogleSearchPreference: providers.geminiGoogleSearchPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -254,20 +257,15 @@ export async function findAllProvidersFresh(): Promise<Provider[]> {
       isEnabled: providers.isEnabled,
       weight: providers.weight,
       priority: providers.priority,
+      groupPriorities: providers.groupPriorities,
       costMultiplier: providers.costMultiplier,
       groupTag: providers.groupTag,
       providerType: providers.providerType,
       preserveClientIp: providers.preserveClientIp,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
-      joinClaudePool: providers.joinClaudePool,
-      codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
-      useUnifiedClientId: providers.useUnifiedClientId,
-      unifiedClientId: providers.unifiedClientId,
-      simulateCacheEnabled: providers.simulateCacheEnabled,
-      supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -294,6 +292,10 @@ export async function findAllProvidersFresh(): Promise<Provider[]> {
       codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
       codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
       codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
+      anthropicMaxTokensPreference: providers.anthropicMaxTokensPreference,
+      anthropicThinkingBudgetPreference: providers.anthropicThinkingBudgetPreference,
+      anthropicAdaptiveThinking: providers.anthropicAdaptiveThinking,
+      geminiGoogleSearchPreference: providers.geminiGoogleSearchPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -338,20 +340,15 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       isEnabled: providers.isEnabled,
       weight: providers.weight,
       priority: providers.priority,
+      groupPriorities: providers.groupPriorities,
       costMultiplier: providers.costMultiplier,
       groupTag: providers.groupTag,
       providerType: providers.providerType,
       preserveClientIp: providers.preserveClientIp,
       modelRedirects: providers.modelRedirects,
       allowedModels: providers.allowedModels,
-      joinClaudePool: providers.joinClaudePool,
-      codexInstructionsStrategy: providers.codexInstructionsStrategy,
       mcpPassthroughType: providers.mcpPassthroughType,
       mcpPassthroughUrl: providers.mcpPassthroughUrl,
-      useUnifiedClientId: providers.useUnifiedClientId,
-      unifiedClientId: providers.unifiedClientId,
-      simulateCacheEnabled: providers.simulateCacheEnabled,
-      supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
       limit5hUsd: providers.limit5hUsd,
       limitDailyUsd: providers.limitDailyUsd,
       dailyResetMode: providers.dailyResetMode,
@@ -378,6 +375,10 @@ export async function findProviderById(id: number): Promise<Provider | null> {
       codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
       codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
       codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
+      anthropicMaxTokensPreference: providers.anthropicMaxTokensPreference,
+      anthropicThinkingBudgetPreference: providers.anthropicThinkingBudgetPreference,
+      anthropicAdaptiveThinking: providers.anthropicAdaptiveThinking,
+      geminiGoogleSearchPreference: providers.geminiGoogleSearchPreference,
       tpm: providers.tpm,
       rpm: providers.rpm,
       rpd: providers.rpd,
@@ -401,8 +402,7 @@ export async function updateProvider(
     return findProviderById(id);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dbData: any = {
+  const dbData: Partial<typeof providers.$inferInsert> = {
     updatedAt: new Date(),
   };
 
@@ -412,6 +412,8 @@ export async function updateProvider(
   if (providerData.is_enabled !== undefined) dbData.isEnabled = providerData.is_enabled;
   if (providerData.weight !== undefined) dbData.weight = providerData.weight;
   if (providerData.priority !== undefined) dbData.priority = providerData.priority;
+  if (providerData.group_priorities !== undefined)
+    dbData.groupPriorities = providerData.group_priorities ?? null;
   if (providerData.cost_multiplier !== undefined)
     dbData.costMultiplier =
       providerData.cost_multiplier != null ? providerData.cost_multiplier.toString() : "1.0";
@@ -422,22 +424,10 @@ export async function updateProvider(
   if (providerData.model_redirects !== undefined)
     dbData.modelRedirects = providerData.model_redirects;
   if (providerData.allowed_models !== undefined) dbData.allowedModels = providerData.allowed_models;
-  if (providerData.join_claude_pool !== undefined)
-    dbData.joinClaudePool = providerData.join_claude_pool;
-  if (providerData.codex_instructions_strategy !== undefined)
-    dbData.codexInstructionsStrategy = providerData.codex_instructions_strategy;
   if (providerData.mcp_passthrough_type !== undefined)
     dbData.mcpPassthroughType = providerData.mcp_passthrough_type;
   if (providerData.mcp_passthrough_url !== undefined)
     dbData.mcpPassthroughUrl = providerData.mcp_passthrough_url;
-  if (providerData.use_unified_client_id !== undefined)
-    dbData.useUnifiedClientId = providerData.use_unified_client_id;
-  if (providerData.unified_client_id !== undefined)
-    dbData.unifiedClientId = providerData.unified_client_id;
-  if (providerData.simulate_cache_enabled !== undefined)
-    dbData.simulateCacheEnabled = providerData.simulate_cache_enabled;
-  if (providerData.supplementary_prompt_enabled !== undefined)
-    dbData.supplementaryPromptEnabled = providerData.supplementary_prompt_enabled;
   if (providerData.limit_5h_usd !== undefined)
     dbData.limit5hUsd =
       providerData.limit_5h_usd != null ? providerData.limit_5h_usd.toString() : null;
@@ -493,133 +483,196 @@ export async function updateProvider(
   if (providerData.codex_parallel_tool_calls_preference !== undefined)
     dbData.codexParallelToolCallsPreference =
       providerData.codex_parallel_tool_calls_preference ?? null;
+  if (providerData.anthropic_max_tokens_preference !== undefined)
+    dbData.anthropicMaxTokensPreference = providerData.anthropic_max_tokens_preference ?? null;
+  if (providerData.anthropic_thinking_budget_preference !== undefined)
+    dbData.anthropicThinkingBudgetPreference =
+      providerData.anthropic_thinking_budget_preference ?? null;
+  if (providerData.anthropic_adaptive_thinking !== undefined)
+    dbData.anthropicAdaptiveThinking = providerData.anthropic_adaptive_thinking ?? null;
+  if (providerData.gemini_google_search_preference !== undefined)
+    dbData.geminiGoogleSearchPreference = providerData.gemini_google_search_preference ?? null;
   if (providerData.tpm !== undefined) dbData.tpm = providerData.tpm;
   if (providerData.rpm !== undefined) dbData.rpm = providerData.rpm;
   if (providerData.rpd !== undefined) dbData.rpd = providerData.rpd;
   if (providerData.cc !== undefined) dbData.cc = providerData.cc;
 
-  let previousVendorId: number | null = null;
-  if (providerData.url !== undefined || providerData.website_url !== undefined) {
-    const [current] = await db
-      .select({
-        url: providers.url,
-        websiteUrl: providers.websiteUrl,
-        faviconUrl: providers.faviconUrl,
-        name: providers.name,
-        providerVendorId: providers.providerVendorId,
-      })
-      .from(providers)
-      .where(and(eq(providers.id, id), isNull(providers.deletedAt)))
-      .limit(1);
+  const shouldRefreshVendor =
+    providerData.url !== undefined || providerData.website_url !== undefined;
+  const shouldSyncEndpoint = shouldRefreshVendor || providerData.provider_type !== undefined;
 
-    if (current) {
-      previousVendorId = current.providerVendorId;
-      const providerVendorId = await getOrCreateProviderVendorIdFromUrls({
-        providerUrl: providerData.url ?? current.url,
-        websiteUrl: providerData.website_url ?? current.websiteUrl,
-        faviconUrl: providerData.favicon_url ?? current.faviconUrl,
-        displayName: providerData.name ?? current.name,
-      });
-      dbData.providerVendorId = providerVendorId;
-    }
-  }
+  const updateResult = await db.transaction(async (tx) => {
+    let previousVendorId: number | null = null;
+    let previousUrl: string | null = null;
+    let previousProviderType: Provider["providerType"] | null = null;
+    let endpointCircuitResetId: number | null = null;
 
-  const [provider] = await db
-    .update(providers)
-    .set(dbData)
-    .where(and(eq(providers.id, id), isNull(providers.deletedAt)))
-    .returning({
-      id: providers.id,
-      name: providers.name,
-      url: providers.url,
-      key: providers.key,
-      providerVendorId: providers.providerVendorId,
-      isEnabled: providers.isEnabled,
-      weight: providers.weight,
-      priority: providers.priority,
-      costMultiplier: providers.costMultiplier,
-      groupTag: providers.groupTag,
-      providerType: providers.providerType,
-      preserveClientIp: providers.preserveClientIp,
-      modelRedirects: providers.modelRedirects,
-      allowedModels: providers.allowedModels,
-      joinClaudePool: providers.joinClaudePool,
-      codexInstructionsStrategy: providers.codexInstructionsStrategy,
-      mcpPassthroughType: providers.mcpPassthroughType,
-      mcpPassthroughUrl: providers.mcpPassthroughUrl,
-      simulateCacheEnabled: providers.simulateCacheEnabled,
-      supplementaryPromptEnabled: providers.supplementaryPromptEnabled,
-      limit5hUsd: providers.limit5hUsd,
-      limitDailyUsd: providers.limitDailyUsd,
-      dailyResetMode: providers.dailyResetMode,
-      dailyResetTime: providers.dailyResetTime,
-      limitWeeklyUsd: providers.limitWeeklyUsd,
-      limitMonthlyUsd: providers.limitMonthlyUsd,
-      limitTotalUsd: providers.limitTotalUsd,
-      totalCostResetAt: providers.totalCostResetAt,
-      limitConcurrentSessions: providers.limitConcurrentSessions,
-      maxRetryAttempts: providers.maxRetryAttempts,
-      circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
-      circuitBreakerOpenDuration: providers.circuitBreakerOpenDuration,
-      circuitBreakerHalfOpenSuccessThreshold: providers.circuitBreakerHalfOpenSuccessThreshold,
-      proxyUrl: providers.proxyUrl,
-      proxyFallbackToDirect: providers.proxyFallbackToDirect,
-      firstByteTimeoutStreamingMs: providers.firstByteTimeoutStreamingMs,
-      streamingIdleTimeoutMs: providers.streamingIdleTimeoutMs,
-      requestTimeoutNonStreamingMs: providers.requestTimeoutNonStreamingMs,
-      websiteUrl: providers.websiteUrl,
-      faviconUrl: providers.faviconUrl,
-      cacheTtlPreference: providers.cacheTtlPreference,
-      context1mPreference: providers.context1mPreference,
-      codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
-      codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
-      codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
-      codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
-      tpm: providers.tpm,
-      rpm: providers.rpm,
-      rpd: providers.rpd,
-      cc: providers.cc,
-      createdAt: providers.createdAt,
-      updatedAt: providers.updatedAt,
-      deletedAt: providers.deletedAt,
-    });
+    if (shouldSyncEndpoint) {
+      const [current] = await tx
+        .select({
+          url: providers.url,
+          websiteUrl: providers.websiteUrl,
+          faviconUrl: providers.faviconUrl,
+          name: providers.name,
+          providerVendorId: providers.providerVendorId,
+          providerType: providers.providerType,
+        })
+        .from(providers)
+        .where(and(eq(providers.id, id), isNull(providers.deletedAt)))
+        .limit(1);
 
-  if (!provider) return null;
-  const transformed = toProvider(provider);
+      if (current) {
+        previousVendorId = current.providerVendorId;
+        previousUrl = current.url;
+        previousProviderType = current.providerType;
 
-  if (
-    providerData.url !== undefined ||
-    providerData.provider_type !== undefined ||
-    providerData.website_url !== undefined
-  ) {
-    if (
-      transformed.providerVendorId &&
-      (providerData.url !== undefined ||
-        transformed.providerVendorId !== previousVendorId ||
-        previousVendorId === null)
-    ) {
-      try {
-        await ensureProviderEndpointExistsForUrl({
-          vendorId: transformed.providerVendorId,
-          providerType: transformed.providerType,
-          url: transformed.url,
-        });
-      } catch (error) {
-        logger.warn("[Provider] Failed to seed provider endpoint after provider update", {
-          providerId: transformed.id,
-          providerVendorId: transformed.providerVendorId,
-          providerType: transformed.providerType,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (shouldRefreshVendor) {
+          const providerVendorId = await getOrCreateProviderVendorIdFromUrls(
+            {
+              providerUrl: providerData.url ?? current.url,
+              websiteUrl: providerData.website_url ?? current.websiteUrl,
+              faviconUrl: providerData.favicon_url ?? current.faviconUrl,
+              displayName: providerData.name ?? current.name,
+            },
+            { tx }
+          );
+          dbData.providerVendorId = providerVendorId;
+        }
       }
     }
+
+    const [provider] = await tx
+      .update(providers)
+      .set(dbData)
+      .where(and(eq(providers.id, id), isNull(providers.deletedAt)))
+      .returning({
+        id: providers.id,
+        name: providers.name,
+        url: providers.url,
+        key: providers.key,
+        providerVendorId: providers.providerVendorId,
+        isEnabled: providers.isEnabled,
+        weight: providers.weight,
+        priority: providers.priority,
+        groupPriorities: providers.groupPriorities,
+        costMultiplier: providers.costMultiplier,
+        groupTag: providers.groupTag,
+        providerType: providers.providerType,
+        preserveClientIp: providers.preserveClientIp,
+        modelRedirects: providers.modelRedirects,
+        allowedModels: providers.allowedModels,
+        mcpPassthroughType: providers.mcpPassthroughType,
+        mcpPassthroughUrl: providers.mcpPassthroughUrl,
+        limit5hUsd: providers.limit5hUsd,
+        limitDailyUsd: providers.limitDailyUsd,
+        dailyResetMode: providers.dailyResetMode,
+        dailyResetTime: providers.dailyResetTime,
+        limitWeeklyUsd: providers.limitWeeklyUsd,
+        limitMonthlyUsd: providers.limitMonthlyUsd,
+        limitTotalUsd: providers.limitTotalUsd,
+        totalCostResetAt: providers.totalCostResetAt,
+        limitConcurrentSessions: providers.limitConcurrentSessions,
+        maxRetryAttempts: providers.maxRetryAttempts,
+        circuitBreakerFailureThreshold: providers.circuitBreakerFailureThreshold,
+        circuitBreakerOpenDuration: providers.circuitBreakerOpenDuration,
+        circuitBreakerHalfOpenSuccessThreshold: providers.circuitBreakerHalfOpenSuccessThreshold,
+        proxyUrl: providers.proxyUrl,
+        proxyFallbackToDirect: providers.proxyFallbackToDirect,
+        firstByteTimeoutStreamingMs: providers.firstByteTimeoutStreamingMs,
+        streamingIdleTimeoutMs: providers.streamingIdleTimeoutMs,
+        requestTimeoutNonStreamingMs: providers.requestTimeoutNonStreamingMs,
+        websiteUrl: providers.websiteUrl,
+        faviconUrl: providers.faviconUrl,
+        cacheTtlPreference: providers.cacheTtlPreference,
+        context1mPreference: providers.context1mPreference,
+        codexReasoningEffortPreference: providers.codexReasoningEffortPreference,
+        codexReasoningSummaryPreference: providers.codexReasoningSummaryPreference,
+        codexTextVerbosityPreference: providers.codexTextVerbosityPreference,
+        codexParallelToolCallsPreference: providers.codexParallelToolCallsPreference,
+        anthropicMaxTokensPreference: providers.anthropicMaxTokensPreference,
+        anthropicThinkingBudgetPreference: providers.anthropicThinkingBudgetPreference,
+        anthropicAdaptiveThinking: providers.anthropicAdaptiveThinking,
+        geminiGoogleSearchPreference: providers.geminiGoogleSearchPreference,
+        tpm: providers.tpm,
+        rpm: providers.rpm,
+        rpd: providers.rpd,
+        cc: providers.cc,
+        createdAt: providers.createdAt,
+        updatedAt: providers.updatedAt,
+        deletedAt: providers.deletedAt,
+      });
+
+    if (!provider) return null;
+    const transformed = toProvider(provider);
+
+    if (shouldSyncEndpoint && transformed.providerVendorId) {
+      if (previousUrl && previousProviderType) {
+        const syncResult = await syncProviderEndpointOnProviderEdit(
+          {
+            providerId: transformed.id,
+            vendorId: transformed.providerVendorId,
+            providerType: transformed.providerType,
+            previousVendorId,
+            previousProviderType,
+            previousUrl,
+            nextUrl: transformed.url,
+            keepPreviousWhenReferenced: true,
+          },
+          { tx }
+        );
+
+        endpointCircuitResetId = syncResult.resetCircuitEndpointId ?? null;
+      } else {
+        await ensureProviderEndpointExistsForUrl(
+          {
+            vendorId: transformed.providerVendorId,
+            providerType: transformed.providerType,
+            url: transformed.url,
+          },
+          { tx }
+        );
+      }
+    }
+
+    return {
+      provider: transformed,
+      previousVendorIdToCleanup:
+        previousVendorId && transformed.providerVendorId !== previousVendorId
+          ? previousVendorId
+          : null,
+      endpointCircuitResetId,
+    };
+  });
+
+  if (!updateResult) {
+    return null;
   }
 
-  if (previousVendorId && transformed.providerVendorId !== previousVendorId) {
-    await tryDeleteProviderVendorIfEmpty(previousVendorId);
+  if (updateResult.endpointCircuitResetId != null) {
+    try {
+      await resetEndpointCircuit(updateResult.endpointCircuitResetId);
+    } catch (error) {
+      logger.warn("updateProvider:reset_endpoint_circuit_failed", {
+        providerId: updateResult.provider.id,
+        endpointId: updateResult.endpointCircuitResetId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
-  return transformed;
+  if (updateResult.previousVendorIdToCleanup) {
+    try {
+      await tryDeleteProviderVendorIfEmpty(updateResult.previousVendorIdToCleanup);
+    } catch (error) {
+      logger.warn("updateProvider:vendor_cleanup_failed", {
+        providerId: updateResult.provider.id,
+        previousVendorId: updateResult.previousVendorIdToCleanup,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return updateResult.provider;
 }
 
 export async function updateProviderPrioritiesBatch(
@@ -823,9 +876,9 @@ export async function getProviderStatistics(): Promise<
   }>
 > {
   try {
-    // 统一的时区处理：使用 PostgreSQL AT TIME ZONE + 环境变量 TZ
+    // 统一的时区处理：使用 PostgreSQL AT TIME ZONE + 系统时区配置
     // 参考 getUserStatisticsFromDB 的实现，避免 Node.js Date 带来的时区偏移
-    const timezone = getEnvConfig().TZ;
+    const timezone = await resolveSystemTimezone();
 
     // ⭐ 使用 providerChain 最后一项的 providerId 来确定最终供应商（兼容重试切换）
     // 如果 provider_chain 为空（无重试），则使用 provider_id 字段

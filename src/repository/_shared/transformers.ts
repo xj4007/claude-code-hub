@@ -85,6 +85,7 @@ export function toProvider(dbProvider: any): Provider {
     isEnabled: dbProvider?.isEnabled ?? true,
     weight: dbProvider?.weight ?? 1,
     priority: dbProvider?.priority ?? 0,
+    groupPriorities: dbProvider?.groupPriorities ?? null,
     costMultiplier: dbProvider?.costMultiplier ? parseFloat(dbProvider.costMultiplier) : 1.0,
     groupTag: dbProvider?.groupTag ?? null,
     providerType: dbProvider?.providerType ?? "claude",
@@ -128,6 +129,10 @@ export function toProvider(dbProvider: any): Provider {
     codexReasoningSummaryPreference: dbProvider?.codexReasoningSummaryPreference ?? null,
     codexTextVerbosityPreference: dbProvider?.codexTextVerbosityPreference ?? null,
     codexParallelToolCallsPreference: dbProvider?.codexParallelToolCallsPreference ?? null,
+    anthropicMaxTokensPreference: dbProvider?.anthropicMaxTokensPreference ?? null,
+    anthropicThinkingBudgetPreference: dbProvider?.anthropicThinkingBudgetPreference ?? null,
+    anthropicAdaptiveThinking: dbProvider?.anthropicAdaptiveThinking ?? null,
+    geminiGoogleSearchPreference: dbProvider?.geminiGoogleSearchPreference ?? null,
     tpm: dbProvider?.tpm ?? null,
     rpm: dbProvider?.rpm ?? null,
     rpd: dbProvider?.rpd ?? null,
@@ -183,6 +188,7 @@ export function toSystemSettings(dbSettings: any): SystemSettings {
     allowGlobalUsageView: dbSettings?.allowGlobalUsageView ?? true,
     currencyDisplay: dbSettings?.currencyDisplay ?? "USD",
     billingModelSource: dbSettings?.billingModelSource ?? "original",
+    timezone: dbSettings?.timezone ?? null,
     enableAutoCleanup: dbSettings?.enableAutoCleanup ?? false,
     cleanupRetentionDays: dbSettings?.cleanupRetentionDays ?? 30,
     cleanupSchedule: dbSettings?.cleanupSchedule ?? "0 2 * * *",
@@ -192,12 +198,29 @@ export function toSystemSettings(dbSettings: any): SystemSettings {
     enableHttp2: dbSettings?.enableHttp2 ?? false,
     interceptAnthropicWarmupRequests: dbSettings?.interceptAnthropicWarmupRequests ?? false,
     enableThinkingSignatureRectifier: dbSettings?.enableThinkingSignatureRectifier ?? true,
+    enableThinkingBudgetRectifier: dbSettings?.enableThinkingBudgetRectifier ?? true,
+    enableBillingHeaderRectifier: dbSettings?.enableBillingHeaderRectifier ?? true,
     enableCodexSessionIdCompletion: dbSettings?.enableCodexSessionIdCompletion ?? true,
+    enableClaudeMetadataUserIdInjection: dbSettings?.enableClaudeMetadataUserIdInjection ?? true,
     enableResponseFixer: dbSettings?.enableResponseFixer ?? true,
     responseFixerConfig: {
       ...defaultResponseFixerConfig,
       ...(dbSettings?.responseFixerConfig ?? {}),
     },
+    quotaDbRefreshIntervalSeconds: dbSettings?.quotaDbRefreshIntervalSeconds ?? 10,
+    quotaLeasePercent5h: dbSettings?.quotaLeasePercent5h
+      ? parseFloat(dbSettings.quotaLeasePercent5h)
+      : 0.05,
+    quotaLeasePercentDaily: dbSettings?.quotaLeasePercentDaily
+      ? parseFloat(dbSettings.quotaLeasePercentDaily)
+      : 0.05,
+    quotaLeasePercentWeekly: dbSettings?.quotaLeasePercentWeekly
+      ? parseFloat(dbSettings.quotaLeasePercentWeekly)
+      : 0.05,
+    quotaLeasePercentMonthly: dbSettings?.quotaLeasePercentMonthly
+      ? parseFloat(dbSettings.quotaLeasePercentMonthly)
+      : 0.05,
+    quotaLeaseCapUsd: dbSettings?.quotaLeaseCapUsd ? parseFloat(dbSettings.quotaLeaseCapUsd) : null,
     createdAt: dbSettings?.createdAt ? new Date(dbSettings.createdAt) : new Date(),
     updatedAt: dbSettings?.updatedAt ? new Date(dbSettings.updatedAt) : new Date(),
   };

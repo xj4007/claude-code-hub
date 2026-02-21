@@ -51,8 +51,14 @@
     "enableResponseFixerDesc": "Автоматически исправляет распространённые проблемы ответа у провайдеров (кодировка, SSE, обрезанный JSON). Включено по умолчанию.",
     "enableThinkingSignatureRectifier": "Включить исправление thinking-signature",
     "enableThinkingSignatureRectifierDesc": "Если Anthropic-провайдер возвращает ошибку несовместимой подписи thinking или некорректного запроса, автоматически удаляет несовместимые thinking-блоки и повторяет запрос один раз к тому же провайдеру (включено по умолчанию).",
+    "enableThinkingBudgetRectifier": "Включить исправление thinking-budget",
+    "enableThinkingBudgetRectifierDesc": "Если Anthropic-провайдер возвращает ошибку budget_tokens < 1024, автоматически устанавливает thinking budget на максимум (32000) и при необходимости max_tokens на 64000, затем повторяет запрос один раз (включено по умолчанию).",
+    "enableBillingHeaderRectifier": "Включить исправление billing-заголовка",
+    "enableBillingHeaderRectifierDesc": "Проактивно удаляет текстовые блоки x-anthropic-billing-header, добавленные клиентом Claude Code в системный промпт, предотвращая ошибки 400 от Amazon Bedrock и других не-Anthropic провайдеров (включено по умолчанию).",
     "enableCodexSessionIdCompletion": "Включить дополнение Session ID для Codex",
     "enableCodexSessionIdCompletionDesc": "Если в Codex-запросе присутствует только session_id (в заголовках) или prompt_cache_key (в теле), автоматически дополняет отсутствующее поле. Если оба отсутствуют, генерирует UUID v7 и стабильно переиспользует его в рамках одного диалога.",
+    "enableClaudeMetadataUserIdInjection": "Включить инъекцию Claude metadata.user_id",
+    "enableClaudeMetadataUserIdInjectionDesc": "Если в Claude-запросе отсутствует metadata.user_id, автоматически добавляет стабильный user_id (формат: user_{hash}_account__session_{sessionId}). Если клиент уже передал значение, оно не перезаписывается.",
     "interceptAnthropicWarmupRequests": "Перехватывать Warmup-запросы (Anthropic)",
     "interceptAnthropicWarmupRequestsDesc": "Если включено, Warmup-пробные запросы Claude Code будут отвечены самим CCH без обращения к провайдерам; запрос сохраняется в логах, но не тарифицируется, не учитывается в лимитах и исключается из статистики.",
     "keepDays": "Хранить дней",
@@ -73,7 +79,32 @@
     "siteTitlePlaceholder": "например: Claude Code Hub",
     "siteTitleRequired": "Название сайта не может быть пустым",
     "verboseProviderError": "Подробные ошибки провайдеров",
-    "verboseProviderErrorDesc": "При включении возвращает подробные сообщения об ошибках при недоступности всех провайдеров (количество провайдеров, причины ограничений и т.д.); при отключении возвращает только простой код ошибки."
+    "verboseProviderErrorDesc": "При включении возвращает подробные сообщения об ошибках при недоступности всех провайдеров (количество провайдеров, причины ограничений и т.д.); при отключении возвращает только простой код ошибки.",
+    "timezoneLabel": "Системная Временная Зона",
+    "timezoneDescription": "Установите системную временную зону для единых вычислений временных границ в бэкенде и отображения даты/времени в интерфейсе. Оставьте пустым для использования переменной окружения TZ или UTC по умолчанию.",
+    "timezoneAuto": "Авто (использовать переменную окружения TZ)",
+    "quotaLease": {
+      "title": "Настройки аренды квоты",
+      "description": "Настройка интервала обновления аренды и процентов среза для проверки лимитов. Механизм аренды снижает нагрузку на БД, сохраняя точность лимитов.",
+      "dbRefreshInterval": "Интервал обновления БД (секунды)",
+      "dbRefreshIntervalDesc": "Интервал обновления использования квоты из базы данных (1-300 секунд)",
+      "leasePercent5h": "Процент аренды 5-часового окна",
+      "leasePercent5hDesc": "Процент 5-часового лимита для каждого среза аренды (0-1)",
+      "leasePercentDaily": "Процент аренды дневного окна",
+      "leasePercentDailyDesc": "Процент дневного лимита для каждого среза аренды (0-1)",
+      "leasePercentWeekly": "Процент аренды недельного окна",
+      "leasePercentWeeklyDesc": "Процент недельного лимита для каждого среза аренды (0-1)",
+      "leasePercentMonthly": "Процент аренды месячного окна",
+      "leasePercentMonthlyDesc": "Процент месячного лимита для каждого среза аренды (0-1)",
+      "leaseCapUsd": "Предел аренды (USD)",
+      "leaseCapUsdDesc": "Максимальный абсолютный предел на срез аренды в долларах США, оставьте пустым для отсутствия ограничения",
+      "warnings": {
+        "dbRefreshIntervalTooLow": "Интервал {value}s. Это может увеличить нагрузку на БД.",
+        "dbRefreshIntervalTooHigh": "Интервал {value}s. Обновление квот/лимитов может запаздывать.",
+        "leasePercentZero": "Процент равен 0. Бюджет аренды может всегда быть 0.",
+        "leaseCapZero": "Предел аренды равен 0. Бюджет на срез может быть 0."
+      }
+    }
   },
   "section": {
     "autoCleanup": {

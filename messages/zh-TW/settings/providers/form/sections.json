@@ -8,6 +8,10 @@
       "title": "API 端點",
       "desc": "設定 API 請求的基礎 URL"
     },
+    "endpointPool": {
+      "title": "端點池",
+      "desc": "管理此供應商類型的端點池"
+    },
     "auth": {
       "title": "身份驗證",
       "desc": "提供用於驗證的 API 金鑰"
@@ -44,32 +48,6 @@
     },
     "summary": "{failureThreshold} 次失敗 / {openDuration} 分鐘熔斷 / {successThreshold} 次成功恢復 / 每個供應商最多 {maxRetryAttempts} 次嘗試",
     "title": "斷路器設定"
-  },
-  "codexStrategy": {
-    "desc": "控制如何處理 Codex 請求的 instructions 欄位，影響與上游中轉站的相容性",
-    "hint": "提示：部分嚴格的 Codex 中轉站（如 88code、foxcode）需要官方 instructions，請選擇「自動」或「強制官方」策略",
-    "select": {
-      "auto": {
-        "desc": "透傳客戶端 instructions，400 錯誤時自動重試官方 prompt",
-        "label": "自動（建議）"
-      },
-      "force": {
-        "desc": "始終使用官方 Codex CLI instructions（約 4000+ 字）",
-        "label": "強制官方"
-      },
-      "keep": {
-        "desc": "始終透傳客戶端 instructions，不自動重試（適用於寬鬆中轉站）",
-        "label": "原樣透傳"
-      },
-      "label": "策略選擇",
-      "placeholder": "選擇策略"
-    },
-    "summary": {
-      "auto": "自動（建議）",
-      "force": "強制官方",
-      "keep": "原樣透傳"
-    },
-    "title": "Codex Instructions 策略設定"
   },
   "mcpPassthrough": {
     "desc": "啟用後，將 MCP 工具調用透傳到指定的 AI 服務商（如 minimax 的圖片識別、聯網搜索）",
@@ -197,6 +175,8 @@
       }
     },
     "codexOverrides": {
+      "title": "Codex 參數覆寫",
+      "desc": "在供應商級別覆寫 Codex (Responses API) 請求參數",
       "parallelToolCalls": {
         "help": "控制是否允許並行 tool calls。關閉可能降低工具呼叫並發能力；「跟隨客戶端」不改寫 parallel_tool_calls。",
         "label": "並行工具呼叫覆寫",
@@ -236,6 +216,67 @@
           "inherit": "不覆寫（跟隨客戶端）",
           "low": "low（精簡）",
           "medium": "medium（預設）"
+        }
+      }
+    },
+    "anthropicOverrides": {
+      "maxTokens": {
+        "label": "Max Tokens 覆寫",
+        "help": "覆寫請求體中的 max_tokens。範圍：1-64000。'繼承' 表示遵循客戶端請求。",
+        "options": {
+          "inherit": "不覆寫（遵循客戶端）",
+          "custom": "自訂"
+        },
+        "placeholder": "如 32000"
+      },
+      "thinkingBudget": {
+        "label": "思考預算覆寫",
+        "help": "覆寫請求體中的 thinking.budget_tokens。範圍：1024-32000。設置後會強制 thinking.type 為 'enabled'。如果同時啟用了自適應思考且模型匹配，則自適應優先。",
+        "options": {
+          "inherit": "不覆寫（遵循客戶端）",
+          "custom": "自訂"
+        },
+        "placeholder": "如 10240",
+        "maxOutButton": "拉滿 (32000)"
+      },
+      "adaptiveThinking": {
+        "label": "自適應思考",
+        "help": "啟用自適應思考模式。啟用且模型匹配時優先於思考預算覆寫，不匹配的模型回退到思考預算覆寫。",
+        "effort": {
+          "label": "思考深度",
+          "help": "控制推理深度。越高 = 思考越深入。",
+          "options": {
+            "low": "低",
+            "medium": "中",
+            "high": "高（推薦）",
+            "max": "最大"
+          }
+        },
+        "modelMatchMode": {
+          "label": "模型匹配",
+          "help": "哪些模型啟用自適應思考。",
+          "options": {
+            "all": "所有模型",
+            "specific": "僅特定模型"
+          }
+        },
+        "models": {
+          "label": "目標模型",
+          "help": "啟用自適應思考的模型列表。不匹配的模型保持原樣透傳。",
+          "placeholder": "如 claude-opus-4-6",
+          "addButton": "新增模型"
+        }
+      }
+    },
+    "geminiOverrides": {
+      "title": "Gemini 參數覆寫",
+      "desc": "在供應商層級覆寫 Gemini API 請求參數",
+      "googleSearch": {
+        "label": "Google Search 聯網",
+        "options": {
+          "inherit": "不覆寫（遵循客戶端）",
+          "enabled": "強制開啟",
+          "disabled": "強制關閉"
         }
       }
     },
@@ -305,6 +346,12 @@
         "desc": "分組標籤。從列表選擇或輸入新名稱後按 Enter 創建（最多50字符）。只有 providerGroup 匹配的用戶才能使用此供應商。",
         "label": "供應商分組",
         "placeholder": "例如 premium, economy"
+      },
+      "groupPriorities": {
+        "label": "分組優先級覆蓋",
+        "desc": "為特定分組設定獨立的優先級。留空則使用上方的全域優先級。",
+        "placeholder": "使用全域優先級",
+        "noGroups": "請先設定分組標籤，才能設定分組優先級"
       },
       "priority": {
         "desc": "數值越小，優先級越高（0 最高）。系統只會從最高優先級的供應商中選擇。建議：主力=0，備用=1，緊急備援=2",

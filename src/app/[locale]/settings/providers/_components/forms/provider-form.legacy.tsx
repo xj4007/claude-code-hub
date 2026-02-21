@@ -1,5 +1,5 @@
 "use client";
-import { ChevronDown, FileText, Info } from "lucide-react";
+import { ChevronDown, Info } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -208,25 +208,8 @@ export function ProviderForm({
     sourceProvider?.limitConcurrentSessions ?? null
   );
   const [allowedModels, setAllowedModels] = useState<string[]>(sourceProvider?.allowedModels ?? []);
-  const [joinClaudePool, setJoinClaudePool] = useState<boolean>(
-    sourceProvider?.joinClaudePool ?? false
-  );
   const [cacheTtlPreference, setCacheTtlPreference] = useState<"inherit" | "5m" | "1h">(
     sourceProvider?.cacheTtlPreference ?? "inherit"
-  );
-
-  // Unified client id configuration
-  const [useUnifiedClientId, setUseUnifiedClientId] = useState<boolean>(
-    sourceProvider?.useUnifiedClientId ?? false
-  );
-  const [unifiedClientId, setUnifiedClientId] = useState<string>(
-    sourceProvider?.unifiedClientId ?? ""
-  );
-  const [simulateCacheEnabled, setSimulateCacheEnabled] = useState<boolean>(
-    sourceProvider?.simulateCacheEnabled ?? false
-  );
-  const [supplementaryPromptEnabled, setSupplementaryPromptEnabled] = useState<boolean>(
-    sourceProvider?.supplementaryPromptEnabled ?? false
   );
 
   // 1M Context Window 偏好配置（仅对 Anthropic 类型供应商有效）
@@ -251,6 +234,7 @@ export function ProviderForm({
     useState<CodexParallelToolCallsPreference>(
       sourceProvider?.codexParallelToolCallsPreference ?? "inherit"
     );
+
   // 熔断器配置（以分钟为单位显示，提交时转换为毫秒）
   // 允许 undefined，用户可以清空输入框，提交时使用默认值
   const [failureThreshold, setFailureThreshold] = useState<number | undefined>(
@@ -427,15 +411,6 @@ export function ProviderForm({
     });
   };
 
-  // Generate 64-hex unified client id
-  const generateUnifiedClientId = () => {
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    return Array.from(array)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -504,7 +479,6 @@ export function ProviderForm({
             provider_type?: ProviderType;
             model_redirects?: Record<string, string> | null;
             allowed_models?: string[] | null;
-            join_claude_pool?: boolean;
             priority?: number;
             weight?: number;
             cost_multiplier?: number;
@@ -535,10 +509,6 @@ export function ProviderForm({
             website_url?: string | null;
             mcp_passthrough_type?: McpPassthroughType;
             mcp_passthrough_url?: string | null;
-            use_unified_client_id?: boolean;
-            unified_client_id?: string | null;
-            simulate_cache_enabled?: boolean;
-            supplementary_prompt_enabled?: boolean;
             preserve_client_ip?: boolean;
             tpm?: number | null;
             rpm?: number | null;
@@ -551,7 +521,6 @@ export function ProviderForm({
             preserve_client_ip: preserveClientIp,
             model_redirects: parsedModelRedirects,
             allowed_models: allowedModels.length > 0 ? allowedModels : null,
-            join_claude_pool: joinClaudePool,
             priority: priority,
             weight: weight,
             cost_multiplier: costMultiplier,
@@ -591,10 +560,6 @@ export function ProviderForm({
             website_url: websiteUrl.trim() || null,
             mcp_passthrough_type: mcpPassthroughType,
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
-            use_unified_client_id: useUnifiedClientId,
-            unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
-            simulate_cache_enabled: simulateCacheEnabled,
-            supplementary_prompt_enabled: supplementaryPromptEnabled,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -617,7 +582,6 @@ export function ProviderForm({
             preserve_client_ip: preserveClientIp,
             model_redirects: parsedModelRedirects,
             allowed_models: allowedModels.length > 0 ? allowedModels : null,
-            join_claude_pool: joinClaudePool,
             // 使用配置的默认值：默认不启用、权重=1
             is_enabled: PROVIDER_DEFAULTS.IS_ENABLED,
             weight: weight,
@@ -661,10 +625,6 @@ export function ProviderForm({
             website_url: websiteUrl.trim() || null,
             mcp_passthrough_type: mcpPassthroughType,
             mcp_passthrough_url: mcpPassthroughUrl.trim() || null,
-            use_unified_client_id: useUnifiedClientId,
-            unified_client_id: useUnifiedClientId ? unifiedClientId || null : null,
-            simulate_cache_enabled: simulateCacheEnabled,
-            supplementary_prompt_enabled: supplementaryPromptEnabled,
             tpm: null,
             rpm: null,
             rpd: null,
@@ -686,10 +646,6 @@ export function ProviderForm({
           setPreserveClientIp(false);
           setModelRedirects({});
           setAllowedModels([]);
-          setJoinClaudePool(false);
-          setUseUnifiedClientId(false);
-          setUnifiedClientId("");
-          setSimulateCacheEnabled(PROVIDER_DEFAULTS.SIMULATE_CACHE_ENABLED);
           setPriority(0);
           setWeight(1);
           setCostMultiplier(1.0);
@@ -997,150 +953,6 @@ export function ProviderForm({
                     disabled={isPending}
                   />
                 </div>
-
-                {/* joinClaudePool 开关 - 仅非 Claude 供应商显示 */}
-                {providerType !== "claude" &&
-                  (() => {
-                    // 检查是否有重定向到 Claude 模型的映射
-                    const hasClaudeRedirects = Object.values(modelRedirects).some((target) =>
-                      target.startsWith("claude-")
-                    );
-
-                    if (!hasClaudeRedirects) return null;
-
-                    return (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="space-y-0.5">
-                            <Label htmlFor={isEdit ? "edit-join-claude-pool" : "join-claude-pool"}>
-                              {t("sections.routing.joinClaudePool.label")}
-                            </Label>
-                            <p className="text-xs text-muted-foreground">
-                              {t("sections.routing.joinClaudePool.desc")}
-                            </p>
-                          </div>
-                          <Switch
-                            id={isEdit ? "edit-join-claude-pool" : "join-claude-pool"}
-                            checked={joinClaudePool}
-                            onCheckedChange={setJoinClaudePool}
-                            disabled={isPending}
-                          />
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {t("sections.routing.joinClaudePool.help")}
-                        </p>
-                      </div>
-                    );
-                  })()}
-
-                {/* 统一客户端标识配置 - 仅 Claude/Claude-Auth 供应商显示 */}
-                {(providerType === "claude" || providerType === "claude-auth") && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label
-                          htmlFor={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
-                        >
-                          {t("sections.routing.unifiedClientId.label")}
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          {t("sections.routing.unifiedClientId.desc")}
-                        </p>
-                      </div>
-                      <Switch
-                        id={isEdit ? "edit-use-unified-client-id" : "use-unified-client-id"}
-                        checked={useUnifiedClientId}
-                        onCheckedChange={(checked) => {
-                          setUseUnifiedClientId(checked);
-                          if (checked && !unifiedClientId) {
-                            setUnifiedClientId(generateUnifiedClientId());
-                          }
-                        }}
-                        disabled={isPending}
-                      />
-                    </div>
-
-                    {useUnifiedClientId && (
-                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800/50">
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                            {t("sections.routing.unifiedClientId.idLabel")}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setUnifiedClientId(generateUnifiedClientId())}
-                            disabled={isPending}
-                          >
-                            {t("sections.routing.unifiedClientId.regenerate")}
-                          </Button>
-                        </div>
-                        <code className="block w-full select-all break-all rounded bg-gray-100 px-3 py-2 font-mono text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300">
-                          {unifiedClientId}
-                        </code>
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          {t("sections.routing.unifiedClientId.help")}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 模拟缓存配置 - 仅 Claude/Claude-Auth 供应商显示 */}
-                {(providerType === "claude" || providerType === "claude-auth") && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label htmlFor={isEdit ? "edit-simulate-cache" : "simulate-cache"}>
-                          {t("sections.routing.simulateCache.label")}
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          {t("sections.routing.simulateCache.desc")}
-                        </p>
-                      </div>
-                      <Switch
-                        id={isEdit ? "edit-simulate-cache" : "simulate-cache"}
-                        checked={simulateCacheEnabled}
-                        onCheckedChange={setSimulateCacheEnabled}
-                        disabled={isPending}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {t("sections.routing.simulateCache.help")}
-                    </p>
-                  </div>
-                )}
-
-                {/* 补充提示词注入配置 - 仅 Claude/Claude-Auth 供应商显示 */}
-                {(providerType === "claude" || providerType === "claude-auth") && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4" />
-                          <Label
-                            htmlFor={isEdit ? "edit-supplementary-prompt" : "supplementary-prompt"}
-                          >
-                            {t("sections.routing.supplementaryPrompt.label")}
-                          </Label>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {t("sections.routing.supplementaryPrompt.desc")}
-                        </p>
-                      </div>
-                      <Switch
-                        id={isEdit ? "edit-supplementary-prompt" : "supplementary-prompt"}
-                        checked={supplementaryPromptEnabled}
-                        onCheckedChange={setSupplementaryPromptEnabled}
-                        disabled={isPending}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {t("sections.routing.supplementaryPrompt.help")}
-                    </p>
-                  </div>
-                )}
 
                 {/* 模型白名单配置 */}
                 <div className="space-y-1">

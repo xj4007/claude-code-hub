@@ -1,15 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const generateSessionIdMock = vi.hoisted(() => vi.fn(() => "sess_generated"));
+
 const rateLimitServiceMock = {
   checkTotalCostLimit: vi.fn(),
-  checkSessionLimit: vi.fn(),
+  checkAndTrackKeyUserSession: vi.fn(),
   checkRpmLimit: vi.fn(),
-  checkCostLimits: vi.fn(),
+  checkCostLimitsWithLease: vi.fn(),
   checkUserDailyCost: vi.fn(),
 };
 
 vi.mock("@/lib/rate-limit", () => ({
   RateLimitService: rateLimitServiceMock,
+}));
+
+vi.mock("@/lib/session-manager", () => ({
+  SessionManager: {
+    generateSessionId: generateSessionIdMock,
+  },
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -67,7 +75,8 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
       limitConcurrentSessions: number;
     }>;
   }) => {
-    return {
+    const session = {
+      sessionId: "sess_test",
       authState: {
         user: {
           id: 1,
@@ -97,25 +106,41 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
         },
       },
     } as any;
+
+    session.setSessionId = (id: string) => {
+      session.sessionId = id;
+    };
+
+    return session;
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    generateSessionIdMock.mockReturnValue("sess_generated");
 
     rateLimitServiceMock.checkTotalCostLimit.mockResolvedValue({ allowed: true });
-    rateLimitServiceMock.checkSessionLimit.mockResolvedValue({ allowed: true });
+    rateLimitServiceMock.checkAndTrackKeyUserSession.mockResolvedValue({
+      allowed: true,
+      keyCount: 0,
+      userCount: 0,
+      trackedKey: false,
+      trackedUser: false,
+    });
     rateLimitServiceMock.checkRpmLimit.mockResolvedValue({ allowed: true });
     rateLimitServiceMock.checkUserDailyCost.mockResolvedValue({ allowed: true });
-    rateLimitServiceMock.checkCostLimits.mockResolvedValue({ allowed: true });
+    rateLimitServiceMock.checkCostLimitsWithLease.mockResolvedValue({ allowed: true });
   });
 
   it("当用户未设置每日额度时，Key 每日额度已超限也必须拦截", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
-      .mockResolvedValueOnce({ allowed: false, reason: "Key 每日消费上限已达到（20.0000/10）" }); // key daily
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "Key daily cost limit reached (usage: 20.0000/10.0000)",
+      }); // key daily
 
     const session = createSession({
       user: { dailyQuota: null },
@@ -131,7 +156,7 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
 
     expect(rateLimitServiceMock.checkUserDailyCost).not.toHaveBeenCalled();
 
-    expect(rateLimitServiceMock.checkCostLimits).toHaveBeenCalledWith(2, "key", {
+    expect(rateLimitServiceMock.checkCostLimitsWithLease).toHaveBeenCalledWith(2, "key", {
       limit_5h_usd: null,
       limit_daily_usd: 10,
       daily_reset_mode: "fixed",
@@ -144,10 +169,13 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("当 Key 每日额度超限时，应在用户每日检查之前直接拦截（Key 优先）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
-      .mockResolvedValueOnce({ allowed: false, reason: "Key 每日消费上限已达到（20.0000/10）" }); // key daily
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "Key daily cost limit reached (usage: 20.0000/10.0000)",
+      }); // key daily
 
     const session = createSession({
       user: { dailyQuota: 999 },
@@ -165,16 +193,14 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("当 Key 未设置每日额度且用户每日额度已超限时，仍应拦截用户每日额度", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkUserDailyCost.mockResolvedValue({
-      allowed: false,
-      current: 20,
-      reason: "用户每日消费上限已达到（$20.0000/$10）",
-    });
-
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
-      .mockResolvedValueOnce({ allowed: true }); // key daily (limit null)
+      .mockResolvedValueOnce({ allowed: true }) // key daily (limit null)
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "User daily cost limit reached (usage: 20.0000/10.0000)",
+      }); // user daily
 
     const session = createSession({
       user: { dailyQuota: 10 },
@@ -188,8 +214,16 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
       limitValue: 10,
     });
 
-    expect(rateLimitServiceMock.checkUserDailyCost).toHaveBeenCalledTimes(1);
-    expect(getErrorMessageServerMock).toHaveBeenCalledTimes(1);
+    // User daily 现在使用 checkCostLimitsWithLease 而不是 checkUserDailyCost
+    expect(rateLimitServiceMock.checkUserDailyCost).not.toHaveBeenCalled();
+    expect(rateLimitServiceMock.checkCostLimitsWithLease).toHaveBeenCalledWith(1, "user", {
+      limit_5h_usd: null,
+      limit_daily_usd: 10,
+      daily_reset_time: "00:00",
+      daily_reset_mode: "fixed",
+      limit_weekly_usd: null,
+      limit_monthly_usd: null,
+    });
   });
 
   it("Key 总限额超限应拦截（usd_total）", async () => {
@@ -235,9 +269,15 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("Key 并发 Session 超限应拦截（concurrent_sessions）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkSessionLimit.mockResolvedValueOnce({
+    rateLimitServiceMock.checkAndTrackKeyUserSession.mockResolvedValueOnce({
       allowed: false,
-      reason: "Key并发 Session 上限已达到（2/1）",
+      rejectedBy: "key",
+      reasonCode: "RATE_LIMIT_CONCURRENT_SESSIONS_EXCEEDED",
+      reasonParams: { current: 2, limit: 1, target: "key" },
+      keyCount: 2,
+      userCount: 0,
+      trackedKey: false,
+      trackedUser: false,
     });
 
     const session = createSession({
@@ -255,9 +295,16 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("User 并发 Session 超限应拦截（concurrent_sessions）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkSessionLimit
-      .mockResolvedValueOnce({ allowed: true }) // key session
-      .mockResolvedValueOnce({ allowed: false, reason: "User并发 Session 上限已达到（2/1）" });
+    rateLimitServiceMock.checkAndTrackKeyUserSession.mockResolvedValueOnce({
+      allowed: false,
+      rejectedBy: "user",
+      reasonCode: "RATE_LIMIT_CONCURRENT_SESSIONS_EXCEEDED",
+      reasonParams: { current: 2, limit: 1, target: "user" },
+      keyCount: 0,
+      userCount: 2,
+      trackedKey: false,
+      trackedUser: false,
+    });
 
     const session = createSession({
       user: { limitConcurrentSessions: 1 },
@@ -270,6 +317,25 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
       currentUsage: 2,
       limitValue: 1,
     });
+  });
+
+  it("当 Key 并发未设置（0）且 User 并发已设置时，Key 并发检查应继承 User 并发上限", async () => {
+    const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
+
+    const session = createSession({
+      user: { limitConcurrentSessions: 15 },
+      key: { limitConcurrentSessions: 0 },
+    });
+
+    await expect(ProxyRateLimitGuard.ensure(session)).resolves.toBeUndefined();
+
+    expect(rateLimitServiceMock.checkAndTrackKeyUserSession).toHaveBeenCalledWith(
+      2,
+      1,
+      "sess_test",
+      15,
+      15
+    );
   });
 
   it("User RPM 超限应拦截（rpm）", async () => {
@@ -296,9 +362,9 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("Key 5h 超限应拦截（usd_5h）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits.mockResolvedValueOnce({
+    rateLimitServiceMock.checkCostLimitsWithLease.mockResolvedValueOnce({
       allowed: false,
-      reason: "Key 5小时消费上限已达到（20.0000/10）",
+      reason: "Key 5h cost limit reached (usage: 20.0000/10.0000)",
     });
 
     const session = createSession({
@@ -316,9 +382,12 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("User 5h 超限应拦截（usd_5h）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
-      .mockResolvedValueOnce({ allowed: false, reason: "User 5小时消费上限已达到（20.0000/10）" }); // user 5h
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "User 5h cost limit reached (usage: 20.0000/10.0000)",
+      }); // user 5h
 
     const session = createSession({
       user: { limit5hUsd: 10 },
@@ -335,11 +404,15 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("Key 周限额超限应拦截（usd_weekly）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
       .mockResolvedValueOnce({ allowed: true }) // key daily
-      .mockResolvedValueOnce({ allowed: false, reason: "Key 周消费上限已达到（100.0000/10）" }); // key weekly
+      .mockResolvedValueOnce({ allowed: true }) // user daily (new with lease migration)
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "Key weekly cost limit reached (usage: 100.0000/10.0000)",
+      }); // key weekly
 
     const session = createSession({
       key: { limitWeeklyUsd: 10 },
@@ -356,12 +429,16 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("User 周限额超限应拦截（usd_weekly）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
       .mockResolvedValueOnce({ allowed: true }) // key daily
+      .mockResolvedValueOnce({ allowed: true }) // user daily (new with lease migration)
       .mockResolvedValueOnce({ allowed: true }) // key weekly
-      .mockResolvedValueOnce({ allowed: false, reason: "User 周消费上限已达到（100.0000/10）" }); // user weekly
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "User weekly cost limit reached (usage: 100.0000/10.0000)",
+      }); // user weekly
 
     const session = createSession({
       user: { limitWeeklyUsd: 10 },
@@ -378,13 +455,17 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("Key 月限额超限应拦截（usd_monthly）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
       .mockResolvedValueOnce({ allowed: true }) // key daily
+      .mockResolvedValueOnce({ allowed: true }) // user daily (new with lease migration)
       .mockResolvedValueOnce({ allowed: true }) // key weekly
       .mockResolvedValueOnce({ allowed: true }) // user weekly
-      .mockResolvedValueOnce({ allowed: false, reason: "Key 月消费上限已达到（200.0000/10）" }); // key monthly
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "Key monthly cost limit reached (usage: 200.0000/10.0000)",
+      }); // key monthly
 
     const session = createSession({
       key: { limitMonthlyUsd: 10 },
@@ -401,14 +482,18 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
   it("User 月限额超限应拦截（usd_monthly）", async () => {
     const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
 
-    rateLimitServiceMock.checkCostLimits
+    rateLimitServiceMock.checkCostLimitsWithLease
       .mockResolvedValueOnce({ allowed: true }) // key 5h
       .mockResolvedValueOnce({ allowed: true }) // user 5h
       .mockResolvedValueOnce({ allowed: true }) // key daily
+      .mockResolvedValueOnce({ allowed: true }) // user daily (new with lease migration)
       .mockResolvedValueOnce({ allowed: true }) // key weekly
       .mockResolvedValueOnce({ allowed: true }) // user weekly
       .mockResolvedValueOnce({ allowed: true }) // key monthly
-      .mockResolvedValueOnce({ allowed: false, reason: "User 月消费上限已达到（200.0000/10）" }); // user monthly
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "User monthly cost limit reached (usage: 200.0000/10.0000)",
+      }); // user monthly
 
     const session = createSession({
       user: { limitMonthlyUsd: 10 },
@@ -427,5 +512,88 @@ describe("ProxyRateLimitGuard - key daily limit enforcement", () => {
 
     const session = createSession();
     await expect(ProxyRateLimitGuard.ensure(session)).resolves.toBeUndefined();
+  });
+
+  it("当 sessionId 缺失时，应兜底生成并继续并发检查", async () => {
+    const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
+
+    const session = createSession() as any;
+    session.sessionId = undefined;
+
+    await expect(ProxyRateLimitGuard.ensure(session)).resolves.toBeUndefined();
+
+    expect(generateSessionIdMock).toHaveBeenCalledTimes(1);
+    expect(session.sessionId).toBe("sess_generated");
+    expect(rateLimitServiceMock.checkAndTrackKeyUserSession).toHaveBeenCalledWith(
+      2,
+      1,
+      "sess_generated",
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
+
+  it("User daily (rolling mode) 超限应使用 checkCostLimitsWithLease", async () => {
+    const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
+
+    rateLimitServiceMock.checkCostLimitsWithLease
+      .mockResolvedValueOnce({ allowed: true }) // key 5h
+      .mockResolvedValueOnce({ allowed: true }) // user 5h
+      .mockResolvedValueOnce({ allowed: true }) // key daily (limit null)
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: "User daily cost limit reached (usage: 15.0000/10.0000)",
+      }); // user daily rolling
+
+    const session = createSession({
+      user: { dailyQuota: 10, dailyResetMode: "rolling", dailyResetTime: "12:00" },
+      key: { limitDailyUsd: null },
+    });
+
+    await expect(ProxyRateLimitGuard.ensure(session)).rejects.toMatchObject({
+      name: "RateLimitError",
+      limitType: "daily_quota",
+      currentUsage: 15,
+      limitValue: 10,
+      resetTime: null, // rolling 模式没有固定重置时间
+    });
+
+    // Verify checkCostLimitsWithLease was called with rolling mode
+    expect(rateLimitServiceMock.checkCostLimitsWithLease).toHaveBeenCalledWith(1, "user", {
+      limit_5h_usd: null,
+      limit_daily_usd: 10,
+      daily_reset_time: "12:00",
+      daily_reset_mode: "rolling",
+      limit_weekly_usd: null,
+      limit_monthly_usd: null,
+    });
+
+    // checkUserDailyCost should NOT be called (migrated to lease)
+    expect(rateLimitServiceMock.checkUserDailyCost).not.toHaveBeenCalled();
+  });
+
+  it("User daily 检查顺序：Key daily 先于 User daily", async () => {
+    const { ProxyRateLimitGuard } = await import("@/app/v1/_lib/proxy/rate-limit-guard");
+
+    const callOrder: string[] = [];
+
+    rateLimitServiceMock.checkCostLimitsWithLease.mockImplementation(async (_id, type, limits) => {
+      if (limits.limit_daily_usd !== null) {
+        callOrder.push(`${type}_daily`);
+      }
+      return { allowed: true };
+    });
+
+    const session = createSession({
+      user: { dailyQuota: 10 },
+      key: { limitDailyUsd: 20 },
+    });
+
+    await ProxyRateLimitGuard.ensure(session);
+
+    // Key daily should be checked before User daily
+    const keyDailyIdx = callOrder.indexOf("key_daily");
+    const userDailyIdx = callOrder.indexOf("user_daily");
+    expect(keyDailyIdx).toBeLessThan(userDailyIdx);
   });
 });

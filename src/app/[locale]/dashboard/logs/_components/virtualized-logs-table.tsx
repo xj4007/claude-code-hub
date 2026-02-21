@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { RelativeTime } from "@/components/ui/relative-time";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useVirtualizer } from "@/hooks/use-virtualizer";
+import type { LogsTableColumn } from "@/lib/column-visibility";
 import { cn, formatTokenAmount } from "@/lib/utils";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
 import type { CurrencyCode } from "@/lib/utils/currency";
@@ -21,6 +22,7 @@ import {
   NON_BILLING_ENDPOINT,
   shouldHideOutputRate,
 } from "@/lib/utils/performance-formatter";
+import type { ProviderChainItem } from "@/types/message";
 import type { BillingModelSource } from "@/types/system-config";
 import { ErrorDetailsDialog } from "./error-details-dialog";
 import { ModelDisplayWithRedirect } from "./model-display-with-redirect";
@@ -43,15 +45,6 @@ export interface VirtualizedLogsTableFilters {
   minRetryCount?: number;
 }
 
-type VirtualizedLogsTableColumn =
-  | "user"
-  | "key"
-  | "sessionId"
-  | "provider"
-  | "tokens"
-  | "cache"
-  | "performance";
-
 interface VirtualizedLogsTableProps {
   filters: VirtualizedLogsTableFilters;
   currencyCode?: CurrencyCode;
@@ -60,7 +53,7 @@ interface VirtualizedLogsTableProps {
   autoRefreshIntervalMs?: number;
   hideStatusBar?: boolean;
   hideScrollToTop?: boolean;
-  hiddenColumns?: VirtualizedLogsTableColumn[];
+  hiddenColumns?: LogsTableColumn[];
   bodyClassName?: string;
 }
 
@@ -86,12 +79,15 @@ export function VirtualizedLogsTable({
   const hideSessionIdColumn = hiddenColumns?.includes("sessionId") ?? false;
   const hideTokensColumn = hiddenColumns?.includes("tokens") ?? false;
   const hideCacheColumn = hiddenColumns?.includes("cache") ?? false;
+  const hideCostColumn = hiddenColumns?.includes("cost") ?? false;
   const hidePerformanceColumn = hiddenColumns?.includes("performance") ?? false;
 
-  // Dialog state for model redirect click
+  // Dialog state for model redirect click and chain item click
   const [dialogState, setDialogState] = useState<{
     logId: number | null;
     scrollToRedirect: boolean;
+    targetTab?: "summary" | "logic-trace" | "performance";
+    expandedChainIndex?: number;
   }>({ logId: null, scrollToRedirect: false });
 
   const handleCopySessionIdClick = useCallback(
@@ -270,12 +266,14 @@ export function VirtualizedLogsTable({
                   {t("logs.columns.cache")}
                 </div>
               )}
-              <div
-                className="flex-[0.7] min-w-[60px] text-right px-1.5 truncate"
-                title={t("logs.columns.cost")}
-              >
-                {t("logs.columns.cost")}
-              </div>
+              {hideCostColumn ? null : (
+                <div
+                  className="flex-[0.7] min-w-[60px] text-right px-1.5 truncate"
+                  title={t("logs.columns.cost")}
+                >
+                  {t("logs.columns.cost")}
+                </div>
+              )}
               {hidePerformanceColumn ? null : (
                 <div
                   className="flex-[0.8] min-w-[80px] text-right px-1.5 truncate"
@@ -433,6 +431,28 @@ export function VirtualizedLogsTable({
                                   Number.isFinite(multiplier) &&
                                   multiplier !== 1;
 
+                                // Calculate actual request count (same logic as ProviderChainPopover)
+                                const isActualRequest = (item: ProviderChainItem) => {
+                                  if (item.reason === "concurrent_limit_failed") return true;
+                                  if (
+                                    item.reason === "retry_failed" ||
+                                    item.reason === "system_error"
+                                  )
+                                    return true;
+                                  if (
+                                    (item.reason === "request_success" ||
+                                      item.reason === "retry_success") &&
+                                    item.statusCode
+                                  ) {
+                                    return true;
+                                  }
+                                  return false;
+                                };
+                                const actualRequestCount =
+                                  log.providerChain?.filter(isActualRequest).length ?? 0;
+                                // Only show badge in table when no retry (Popover shows badge when retry)
+                                const showBadgeInTable = hasCostBadge && actualRequestCount <= 1;
+
                                 return (
                                   <>
                                     <div className="flex-1 min-w-0 overflow-hidden">
@@ -446,16 +466,24 @@ export function VirtualizedLogsTable({
                                           tChain("circuit.unknown")
                                         }
                                         hasCostBadge={hasCostBadge}
+                                        onChainItemClick={(chainIndex) => {
+                                          setDialogState({
+                                            logId: log.id,
+                                            scrollToRedirect: false,
+                                            targetTab: "logic-trace",
+                                            expandedChainIndex: chainIndex,
+                                          });
+                                        }}
                                       />
                                     </div>
-                                    {/* Cost multiplier badge */}
-                                    {hasCostBadge && (
+                                    {/* Cost multiplier badge - only show when no retry */}
+                                    {showBadgeInTable && (
                                       <Badge
                                         variant="outline"
                                         className={
                                           multiplier > 1
-                                            ? "text-xs bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-300 dark:border-orange-800 shrink-0"
-                                            : "text-xs bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-800 shrink-0"
+                                            ? "text-[10px] px-1 py-0 bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-300 dark:border-orange-800 shrink-0"
+                                            : "text-[10px] px-1 py-0 bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-800 shrink-0"
                                         }
                                       >
                                         x{multiplier.toFixed(2)}
@@ -527,8 +555,8 @@ export function VirtualizedLogsTable({
                         <TooltipProvider>
                           <Tooltip delayDuration={250}>
                             <TooltipTrigger asChild>
-                              <div className="cursor-help flex flex-col items-end leading-tight tabular-nums">
-                                <div className="flex items-center gap-1">
+                              <div className="cursor-help flex flex-col w-full leading-tight tabular-nums">
+                                <div className="flex items-center gap-1 w-full">
                                   {log.cacheTtlApplied ? (
                                     <Badge
                                       variant="outline"
@@ -537,9 +565,11 @@ export function VirtualizedLogsTable({
                                       {log.cacheTtlApplied}
                                     </Badge>
                                   ) : null}
-                                  <span>{formatTokenAmount(log.cacheCreationInputTokens)}</span>
+                                  <span className="ml-auto text-right">
+                                    {formatTokenAmount(log.cacheCreationInputTokens)}
+                                  </span>
                                 </div>
-                                <span className="text-muted-foreground">
+                                <span className="text-muted-foreground text-right">
                                   {formatTokenAmount(log.cacheReadInputTokens)}
                                 </span>
                               </div>
@@ -577,46 +607,51 @@ export function VirtualizedLogsTable({
                     )}
 
                     {/* Cost */}
-                    <div className="flex-[0.7] min-w-[60px] text-right font-mono text-xs px-1.5">
-                      {isNonBilling ? (
-                        "-"
-                      ) : log.costUsd ? (
-                        <TooltipProvider>
-                          <Tooltip delayDuration={250}>
-                            <TooltipTrigger asChild>
-                              <span className="cursor-help inline-flex items-center gap-1">
-                                {formatCurrency(log.costUsd, currencyCode, 6)}
+                    {hideCostColumn ? null : (
+                      <div className="flex-[0.7] min-w-[60px] text-right font-mono text-xs px-1.5">
+                        {isNonBilling ? (
+                          "-"
+                        ) : log.costUsd != null ? (
+                          <TooltipProvider>
+                            <Tooltip delayDuration={250}>
+                              <TooltipTrigger asChild>
+                                <span className="cursor-help inline-flex items-center gap-1">
+                                  {formatCurrency(log.costUsd, currencyCode, 6)}
+                                  {log.context1mApplied && (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] leading-tight px-1 bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-800"
+                                    >
+                                      1M
+                                    </Badge>
+                                  )}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent
+                                align="end"
+                                className="text-xs space-y-1 max-w-[300px]"
+                              >
                                 {log.context1mApplied && (
-                                  <Badge
-                                    variant="outline"
-                                    className="text-[10px] leading-tight px-1 bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-800"
-                                  >
-                                    1M
-                                  </Badge>
+                                  <div className="text-purple-600 dark:text-purple-400 font-medium">
+                                    {t("logs.billingDetails.context1m")}
+                                  </div>
                                 )}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent align="end" className="text-xs space-y-1 max-w-[300px]">
-                              {log.context1mApplied && (
-                                <div className="text-purple-600 dark:text-purple-400 font-medium">
-                                  {t("logs.billingDetails.context1m")}
+                                <div>
+                                  {t("logs.billingDetails.input")}:{" "}
+                                  {formatTokenAmount(log.inputTokens)} tokens
                                 </div>
-                              )}
-                              <div>
-                                {t("logs.billingDetails.input")}:{" "}
-                                {formatTokenAmount(log.inputTokens)} tokens
-                              </div>
-                              <div>
-                                {t("logs.billingDetails.output")}:{" "}
-                                {formatTokenAmount(log.outputTokens)} tokens
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ) : (
-                        "-"
-                      )}
-                    </div>
+                                <div>
+                                  {t("logs.billingDetails.output")}:{" "}
+                                  {formatTokenAmount(log.outputTokens)} tokens
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          "-"
+                        )}
+                      </div>
+                    )}
 
                     {/* Performance */}
                     {hidePerformanceColumn ? null : (
@@ -713,6 +748,12 @@ export function VirtualizedLogsTable({
                         }}
                         scrollToRedirect={
                           dialogState.logId === log.id && dialogState.scrollToRedirect
+                        }
+                        initialTab={
+                          dialogState.logId === log.id ? dialogState.targetTab : undefined
+                        }
+                        initialExpandedChainIndex={
+                          dialogState.logId === log.id ? dialogState.expandedChainIndex : undefined
                         }
                       />
                     </div>

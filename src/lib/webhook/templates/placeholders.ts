@@ -26,7 +26,7 @@ export const TEMPLATE_PLACEHOLDERS = {
     {
       key: "{{timestamp_local}}",
       label: "本地时间",
-      description: "本地格式化时间（Asia/Shanghai）",
+      description: "本地格式化时间（系统时区）",
     },
     { key: "{{title}}", label: "消息标题", description: "通知标题" },
     { key: "{{level}}", label: "消息级别", description: "info / warning / error" },
@@ -38,6 +38,13 @@ export const TEMPLATE_PLACEHOLDERS = {
     { key: "{{failure_count}}", label: "失败次数", description: "连续失败计数" },
     { key: "{{retry_at}}", label: "恢复时间", description: "预计恢复时间" },
     { key: "{{last_error}}", label: "错误信息", description: "最后一次错误详情" },
+    {
+      key: "{{incident_source}}",
+      label: "熔断来源",
+      description: "provider(Key 熔断) 或 endpoint(Endpoint 熔断)",
+    },
+    { key: "{{endpoint_id}}", label: "端点ID", description: "触发熔断的端点 ID" },
+    { key: "{{endpoint_url}}", label: "端点地址", description: "触发熔断的端点 URL" },
   ],
   daily_leaderboard: [
     { key: "{{date}}", label: "统计日期", description: "YYYY-MM-DD 格式" },
@@ -70,14 +77,15 @@ export function buildTemplateVariables(params: {
   message: StructuredMessage;
   notificationType?: WebhookNotificationType;
   data?: unknown;
+  timezone?: string;
 }): Record<string, string> {
-  const { message, notificationType, data } = params;
+  const { message, notificationType, data, timezone } = params;
 
   const values: Record<string, string> = {};
 
   // 通用字段
   values["{{timestamp}}"] = message.timestamp.toISOString();
-  values["{{timestamp_local}}"] = formatLocalTimestamp(message.timestamp);
+  values["{{timestamp_local}}"] = formatLocalTimestamp(message.timestamp, timezone);
   values["{{title}}"] = message.header.title;
   values["{{level}}"] = message.header.level;
   values["{{sections}}"] = renderMessageSections(message);
@@ -90,6 +98,9 @@ export function buildTemplateVariables(params: {
     values["{{failure_count}}"] = cb?.failureCount !== undefined ? String(cb.failureCount) : "";
     values["{{retry_at}}"] = cb?.retryAt ?? "";
     values["{{last_error}}"] = cb?.lastError ?? "";
+    values["{{incident_source}}"] = cb?.incidentSource ?? "provider";
+    values["{{endpoint_id}}"] = cb?.endpointId !== undefined ? String(cb.endpointId) : "";
+    values["{{endpoint_url}}"] = cb?.endpointUrl ?? "";
   }
 
   if (notificationType === "daily_leaderboard") {
@@ -129,17 +140,31 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-function formatLocalTimestamp(date: Date): string {
-  return date.toLocaleString("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
+function formatLocalTimestamp(date: Date, timezone?: string): string {
+  try {
+    return date.toLocaleString("zh-CN", {
+      timeZone: timezone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    // Fallback to UTC if timezone is invalid
+    return date.toLocaleString("zh-CN", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  }
 }
 
 function renderMessageSections(message: StructuredMessage): string {

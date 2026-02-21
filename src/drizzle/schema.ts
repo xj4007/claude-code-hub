@@ -6,6 +6,7 @@ import {
   timestamp,
   boolean,
   integer,
+  bigint,
   numeric,
   jsonb,
   index,
@@ -93,7 +94,7 @@ export const keys = pgTable('keys', {
   key: varchar('key').notNull(),
   name: varchar('name').notNull(),
   isEnabled: boolean('is_enabled').default(true),
-  expiresAt: timestamp('expires_at'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
 
   // Web UI 登录权限控制
   canLoginWebUi: boolean('can_login_web_ui').default(false),
@@ -151,14 +152,17 @@ export const providers = pgTable('providers', {
   description: text('description'),
   url: varchar('url').notNull(),
   key: varchar('key').notNull(),
-  providerVendorId: integer('provider_vendor_id').references(() => providerVendors.id, {
-    onDelete: 'restrict',
-  }),
+  providerVendorId: integer('provider_vendor_id')
+    .notNull()
+    .references(() => providerVendors.id, {
+      onDelete: 'restrict',
+    }),
   isEnabled: boolean('is_enabled').notNull().default(true),
   weight: integer('weight').notNull().default(1),
 
   // 优先级和分组配置
   priority: integer('priority').notNull().default(0),
+  groupPriorities: jsonb('group_priorities').$type<Record<string, number> | null>().default(null),
   costMultiplier: numeric('cost_multiplier', { precision: 10, scale: 4 }).default('1.0'),
   groupTag: varchar('group_tag', { length: 50 }),
 
@@ -277,6 +281,24 @@ export const providers = pgTable('providers', {
   codexTextVerbosityPreference: varchar('codex_text_verbosity_preference', { length: 10 }),
   codexParallelToolCallsPreference: varchar('codex_parallel_tool_calls_preference', { length: 10 }),
 
+  // Anthropic (Messages API) parameter overrides (only for claude/claude-auth providers)
+  // - 'inherit' or null: follow client request
+  // - numeric string: force override to that value
+  anthropicMaxTokensPreference: varchar('anthropic_max_tokens_preference', { length: 20 }),
+  anthropicThinkingBudgetPreference: varchar('anthropic_thinking_budget_preference', { length: 20 }),
+
+  // Anthropic adaptive thinking config (JSONB)
+  // Independent config for adaptive thinking mode; takes priority over budget override when model matches
+  anthropicAdaptiveThinking: jsonb('anthropic_adaptive_thinking')
+    .$type<{ effort: string; modelMatchMode: string; models: string[] } | null>()
+    .default(null),
+
+  // Gemini (generateContent API) parameter overrides (only for gemini/gemini-cli providers)
+  // - 'inherit' or null: follow client request
+  // - 'enabled': force inject googleSearch tool
+  // - 'disabled': force remove googleSearch tool from request
+  geminiGoogleSearchPreference: varchar('gemini_google_search_preference', { length: 20 }),
+
   // 废弃（保留向后兼容，但不再使用）
   tpm: integer('tpm').default(0),
   rpm: integer('rpm').default(0),
@@ -328,7 +350,7 @@ export const providerEndpoints = pgTable('provider_endpoints', {
     table.vendorId,
     table.providerType,
     table.url
-  ),
+  ).where(sql`${table.deletedAt} IS NULL`),
   providerEndpointsVendorTypeIdx: index('idx_provider_endpoints_vendor_type').on(
     table.vendorId,
     table.providerType
@@ -401,13 +423,13 @@ export const messageRequest = pgTable('message_request', {
   originalModel: varchar('original_model', { length: 128 }),
 
   // Token 使用信息
-  inputTokens: integer('input_tokens'),
-  outputTokens: integer('output_tokens'),
+  inputTokens: bigint('input_tokens', { mode: 'number' }),
+  outputTokens: bigint('output_tokens', { mode: 'number' }),
   ttfbMs: integer('ttfb_ms'),
-  cacheCreationInputTokens: integer('cache_creation_input_tokens'),
-  cacheReadInputTokens: integer('cache_read_input_tokens'),
-  cacheCreation5mInputTokens: integer('cache_creation_5m_input_tokens'),
-  cacheCreation1hInputTokens: integer('cache_creation_1h_input_tokens'),
+  cacheCreationInputTokens: bigint('cache_creation_input_tokens', { mode: 'number' }),
+  cacheReadInputTokens: bigint('cache_read_input_tokens', { mode: 'number' }),
+  cacheCreation5mInputTokens: bigint('cache_creation_5m_input_tokens', { mode: 'number' }),
+  cacheCreation1hInputTokens: bigint('cache_creation_1h_input_tokens', { mode: 'number' }),
   cacheTtlApplied: varchar('cache_ttl_applied', { length: 10 }),
 
   // 1M Context Window 应用状态
@@ -564,6 +586,11 @@ export const systemSettings = pgTable('system_settings', {
   // 计费模型来源配置: 'original' (重定向前) | 'redirected' (重定向后)
   billingModelSource: varchar('billing_model_source', { length: 20 }).notNull().default('original'),
 
+  // 系统时区配置 (IANA timezone identifier)
+  // 用于统一后端时间边界计算和前端日期/时间显示
+  // null 表示使用环境变量 TZ 或默认 UTC
+  timezone: varchar('timezone', { length: 64 }),
+
   // 日志清理配置
   enableAutoCleanup: boolean('enable_auto_cleanup').default(false),
   cleanupRetentionDays: integer('cleanup_retention_days').default(30),
@@ -591,9 +618,27 @@ export const systemSettings = pgTable('system_settings', {
     .notNull()
     .default(true),
 
+  // thinking budget 整流器（默认开启）
+  // 开启后：当 Anthropic 类型供应商出现 budget_tokens < 1024 错误时，自动整流并重试一次
+  enableThinkingBudgetRectifier: boolean('enable_thinking_budget_rectifier')
+    .notNull()
+    .default(true),
+
+  // billing header 整流器（默认开启）
+  // 开启后：主动移除 Claude Code 客户端注入到 system 提示中的 x-anthropic-billing-header 文本块
+  enableBillingHeaderRectifier: boolean('enable_billing_header_rectifier')
+    .notNull()
+    .default(true),
+
   // Codex Session ID 补全（默认开启）
   // 开启后：当 Codex 请求缺少 session_id / prompt_cache_key 时，自动补全或生成稳定的会话标识
   enableCodexSessionIdCompletion: boolean('enable_codex_session_id_completion')
+    .notNull()
+    .default(true),
+
+  // Claude metadata.user_id 注入（默认开启）
+  // 开启后：当 Claude 请求缺少 metadata.user_id 时，自动注入稳定标识用于提升缓存命中
+  enableClaudeMetadataUserIdInjection: boolean('enable_claude_metadata_user_id_injection')
     .notNull()
     .default(true),
 
@@ -608,6 +653,14 @@ export const systemSettings = pgTable('system_settings', {
       maxJsonDepth: 200,
       maxFixSize: 1024 * 1024,
     }),
+
+  // Quota lease settings
+  quotaDbRefreshIntervalSeconds: integer('quota_db_refresh_interval_seconds').default(10),
+  quotaLeasePercent5h: numeric('quota_lease_percent_5h', { precision: 5, scale: 4 }).default('0.05'),
+  quotaLeasePercentDaily: numeric('quota_lease_percent_daily', { precision: 5, scale: 4 }).default('0.05'),
+  quotaLeasePercentWeekly: numeric('quota_lease_percent_weekly', { precision: 5, scale: 4 }).default('0.05'),
+  quotaLeasePercentMonthly: numeric('quota_lease_percent_monthly', { precision: 5, scale: 4 }).default('0.05'),
+  quotaLeaseCapUsd: numeric('quota_lease_cap_usd', { precision: 10, scale: 2 }),
 
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
@@ -688,8 +741,9 @@ export const notificationTargetBindings = pgTable(
     isEnabled: boolean('is_enabled').notNull().default(true),
 
     // 定时配置覆盖（可选，仅用于定时类通知）
+    // null 表示使用系统时区（由运行时 resolveSystemTimezone() 决定）
     scheduleCron: varchar('schedule_cron', { length: 100 }),
-    scheduleTimezone: varchar('schedule_timezone', { length: 50 }).default('Asia/Shanghai'),
+    scheduleTimezone: varchar('schedule_timezone', { length: 50 }),
 
     // 模板覆盖（可选，主要用于 custom webhook）
     templateOverride: jsonb('template_override'),

@@ -64,6 +64,20 @@ Register via this link to get started → <a href="https://co.yes.vg/register?re
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="200">
+<a href="https://www.sssaicode.com/register?ref=NQMO05">
+<img src="public/readme/sssaicode.jpg" alt="SSSAiCode Logo" width="180"/>
+</a>
+</td>
+<td>
+<b>💎 Special Offer</b>: <a href="https://www.sssaicode.com/register?ref=NQMO05">SSSAiCode</a> is a stable and reliable API relay service, dedicated to providing stable, reliable, and affordable Claude and CodeX model services. <b>Offering cost-effective official Claude services at 0.5 CNY/$</b>, with multiple billing options including monthly plans and Pay-as-you-go, plus same-day invoice support.<br/>
+SSSAiCode offers a special bonus for users of this software. Register via this link to enjoy an extra $10 bonus on monthly plan purchases → <a href="https://www.sssaicode.com/register?ref=NQMO05">Visit Now</a>
+</td>
+</tr>
+</table>
+
 ## ✨ Core Highlights
 
 - 🤖 **Intelligent load balancing**: Weight + priority + grouping scheduler with built-in circuit breaker and up to three failover retries to keep requests stable.
@@ -73,7 +87,7 @@ Register via this link to get started → <a href="https://co.yes.vg/register?re
 - 📊 **Real-time monitoring & analytics**: Dashboards, active sessions, consumption leaderboards, decision-chain tracing, and proxy health tracking provide second-level visibility.
 - 💰 **Price sheet management**: Paginated SQL queries with debounce search and LiteLLM sync keep thousands of model prices searchable in milliseconds.
 - 🔁 **Session management**: Five-minute context cache preserves decision trails, reduces vendor switches, and maintains full auditability.
-- 🔄 **OpenAI compatibility layer**: Supports `/v1/chat/completions`, handles format conversions, tool calls, reasoning fields, and Codex CLI instruction injection automatically.
+- 🔄 **OpenAI-compatible endpoint**: Supports `/v1/chat/completions` (OpenAI-compatible format), passes through tool calls and reasoning fields, enforces strict same-format routing with no cross-format conversion.
 
 ## ⚡️ Quick Start
 
@@ -217,7 +231,7 @@ Multi-provider pool (Claude / OpenAI / Gemini / others) + PostgreSQL + Redis
 2. **Context control**: `SessionManager` fetches the five-minute cache from Redis, enforces concurrency, and records the decision chain.
 3. **Rate limiting**: `RateLimitService` applies Lua-driven atomic counters for RPM, spend, and session caps, falling back gracefully if Redis is unavailable.
 4. **Routing**: `ProxyProviderResolver` scores vendors with weights, priorities, breaker states, and session reuse, retrying up to three times.
-5. **Forwarding & compatibility**: `ProxyForwarder` plus `ResponseTransformer` adapt Claude/OpenAI/Response formats, handle proxies, and honor model redirects.
+5. **Forwarding & response handling**: `ProxyForwarder` sends requests upstream; `ProxyResponseHandler` processes response streams while preserving endpoint-native formats, with proxy support and model redirects.
 6. **Observability**: Dashboards, leaderboards, and price sheets query PostgreSQL via repositories with hourly aggregations.
 
 ## 🚢 Deployment
@@ -276,6 +290,9 @@ Docker Compose is the **preferred deployment method** — it automatically provi
 | `REDIS_URL`                                | `redis://localhost:6379` | Redis endpoint, supports `rediss://` for TLS providers.                                              |
 | `REDIS_TLS_REJECT_UNAUTHORIZED`            | `true`                   | Validate Redis TLS certificates; set `false` to skip (for self-signed/shared certs).                 |
 | `ENABLE_RATE_LIMIT`                        | `true`                   | Toggles multi-dimensional rate limiting; Fail-Open handles Redis outages gracefully.                 |
+| `ENABLE_API_KEY_VACUUM_FILTER`             | `true`                   | Enables API Key Vacuum Filter (negative short-circuit only; set to `false/0` to disable).            |
+| `ENABLE_API_KEY_REDIS_CACHE`               | `true`                   | Enables API Key auth Redis cache (requires Redis; auto-fallback to DB on errors).                    |
+| `API_KEY_AUTH_CACHE_TTL_SECONDS`           | `60`                     | API Key auth cache TTL in seconds (default 60, max 3600).                                             |
 | `SESSION_TTL`                              | `300`                    | Session cache window (seconds) that drives vendor reuse.                                             |
 | `ENABLE_SECURE_COOKIES`                    | `true`                   | Browsers require HTTPS for Secure cookies; set to `false` when serving plain HTTP outside localhost. |
 | `ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS` | `false`                  | When `true`, network errors also trip the circuit breaker for quicker isolation.                     |
@@ -283,7 +300,7 @@ Docker Compose is the **preferred deployment method** — it automatically provi
 | `APP_URL`                                  | empty                    | Populate to expose correct `servers` entries in OpenAPI docs.                                        |
 | `API_TEST_TIMEOUT_MS`                      | `15000`                  | Timeout (ms) for provider API connectivity tests. Accepts 5000-120000 for regional tuning.           |
 
-> Boolean values should be `true/false` or `1/0` without quotes; otherwise Zod may coerce strings incorrectly. See `.env.example` for the full list.
+> Boolean values support `true/false` or `1/0`. Quoting in `.env` is also fine (dotenv will strip quotes). See `.env.example` for the full list.
 
 ## ❓ FAQ
 

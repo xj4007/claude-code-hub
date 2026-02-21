@@ -8,6 +8,10 @@
       "title": "API エンドポイント",
       "desc": "API リクエストのベース URL を設定"
     },
+    "endpointPool": {
+      "title": "エンドポイントプール",
+      "desc": "このプロバイダー種別のエンドポイントを管理"
+    },
     "auth": {
       "title": "認証",
       "desc": "認証用の API キーを入力"
@@ -44,32 +48,6 @@
     },
     "summary": "{failureThreshold} 回失敗 / {openDuration} 分間ブレーク / {successThreshold} 回成功で回復 / 各プロバイダー最大 {maxRetryAttempts} 回試行",
     "title": "サーキットブレーカー設定"
-  },
-  "codexStrategy": {
-    "desc": "Codex リクエストの instructions フィールドの扱いを制御します。上流ゲートウェイとの互換性に影響します。",
-    "hint": "ヒント: 88code や foxcode など一部の厳格な Codex 中継では公式 instructions が必要です。「自動」または「公式を強制」を選択してください。",
-    "select": {
-      "auto": {
-        "desc": "クライアントの instructions を透過し、400 エラー時は公式プロンプトで自動再試行",
-        "label": "自動（推奨）"
-      },
-      "force": {
-        "desc": "常に公式の Codex CLI instructions を使用（約 4000+ 文字）",
-        "label": "公式を強制"
-      },
-      "keep": {
-        "desc": "常にクライアントの instructions を透過し、自動再試行しない（緩い中継向け）",
-        "label": "そのまま透過"
-      },
-      "label": "ポリシー選択",
-      "placeholder": "戦略を選択"
-    },
-    "summary": {
-      "auto": "自動（推奨）",
-      "force": "公式を強制",
-      "keep": "そのまま透過"
-    },
-    "title": "Codex Instructions ポリシー"
   },
   "mcpPassthrough": {
     "desc": "有効にすると、MCP ツール呼び出しを指定された AI プロバイダにパススルーします（例：minimax の画像認識、Web 検索）",
@@ -197,6 +175,8 @@
       }
     },
     "codexOverrides": {
+      "title": "Codex パラメータオーバーライド",
+      "desc": "プロバイダーレベルで Codex (Responses API) リクエストパラメータをオーバーライド",
       "parallelToolCalls": {
         "help": "並列の tool calls を許可するかどうかを制御します。「クライアントに従う」は parallel_tool_calls を変更しません。無効化すると並列度が下がる可能性があります。",
         "label": "並列ツール呼び出しオーバーライド",
@@ -236,6 +216,67 @@
           "inherit": "オーバーライドしない（クライアントに従う）",
           "low": "low",
           "medium": "medium（デフォルト）"
+        }
+      }
+    },
+    "anthropicOverrides": {
+      "maxTokens": {
+        "label": "Max Tokens オーバーライド",
+        "help": "リクエストボディの max_tokens を上書きします。範囲：1-64000。「継承」はクライアントリクエストに従います。",
+        "options": {
+          "inherit": "上書きなし（クライアントに従う）",
+          "custom": "カスタム"
+        },
+        "placeholder": "例: 32000"
+      },
+      "thinkingBudget": {
+        "label": "思考予算オーバーライド",
+        "help": "リクエストボディの thinking.budget_tokens を上書きします。範囲：1024-32000。設定すると thinking.type が 'enabled' に強制されます。アダプティブ思考も有効でモデルが一致する場合、アダプティブが優先されます。",
+        "options": {
+          "inherit": "上書きなし（クライアントに従う）",
+          "custom": "カスタム"
+        },
+        "placeholder": "例: 10240",
+        "maxOutButton": "最大化 (32000)"
+      },
+      "adaptiveThinking": {
+        "label": "アダプティブ思考",
+        "help": "アダプティブ思考モードを有効にします。有効かつモデルが一致する場合、思考予算オーバーライドより優先されます。一致しないモデルは思考予算オーバーライドにフォールバックします。",
+        "effort": {
+          "label": "思考レベル",
+          "help": "推論の深さを制御します。高いほど深く考えます。",
+          "options": {
+            "low": "低",
+            "medium": "中",
+            "high": "高（推奨）",
+            "max": "最大"
+          }
+        },
+        "modelMatchMode": {
+          "label": "モデルマッチング",
+          "help": "アダプティブ思考を使用するモデル。",
+          "options": {
+            "all": "全モデル",
+            "specific": "特定モデルのみ"
+          }
+        },
+        "models": {
+          "label": "対象モデル",
+          "help": "アダプティブ思考を使用するモデルリスト。一致しないモデルはそのまま透過されます。",
+          "placeholder": "例: claude-opus-4-6",
+          "addButton": "モデル追加"
+        }
+      }
+    },
+    "geminiOverrides": {
+      "title": "Gemini パラメータオーバーライド",
+      "desc": "プロバイダーレベルで Gemini API リクエストパラメータを上書きします",
+      "googleSearch": {
+        "label": "Google Search（ウェブアクセス）",
+        "options": {
+          "inherit": "上書きなし（クライアントに従う）",
+          "enabled": "強制有効",
+          "disabled": "強制無効"
         }
       }
     },
@@ -305,6 +346,12 @@
         "desc": "グループタグ。リストから選択するか、新しい名前を入力して Enter で作成（最大50文字）。providerGroup が一致するユーザーのみがこのプロバイダーを使用できます。",
         "label": "プロバイダーグループ",
         "placeholder": "例: premium, economy"
+      },
+      "groupPriorities": {
+        "label": "グループ別優先度",
+        "desc": "特定のグループに個別の優先度を設定します。空欄の場合は上記のグローバル優先度を使用します。",
+        "placeholder": "グローバル優先度を使用",
+        "noGroups": "グループ別優先度を設定するには、先にグループタグを設定してください"
       },
       "priority": {
         "desc": "値が小さいほど優先度が高くなります（0 が最も高い）。システムは最も高い優先度のプロバイダーのみから選択します。推奨: メイン=0、予備=1、緊急=2",

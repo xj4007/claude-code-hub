@@ -12,6 +12,7 @@
  */
 
 import "@/lib/polyfills/file";
+import "@/lib/auth-session-storage.node";
 import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { apiReference } from "@scalar/hono-api-reference";
@@ -96,6 +97,7 @@ const { route: getUsersRoute, handler: getUsersHandler } = createActionRoute(
     description: "获取用户列表 (管理员获取所有用户，普通用户仅获取自己)",
     summary: "获取用户列表",
     tags: ["用户管理"],
+    allowReadOnlyAccess: true,
   }
 );
 app.openapi(getUsersRoute, getUsersHandler);
@@ -231,6 +233,7 @@ const { route: getUserLimitUsageRoute, handler: getUserLimitUsageHandler } = cre
     description: "获取用户限额使用情况",
     summary: "获取用户限额使用情况",
     tags: ["用户管理"],
+    allowReadOnlyAccess: true,
   }
 );
 app.openapi(getUserLimitUsageRoute, getUserLimitUsageHandler);
@@ -783,6 +786,7 @@ const { route: getUserStatisticsRoute, handler: getUserStatisticsHandler } = cre
     description: "获取用户统计数据",
     summary: "根据时间范围获取使用统计 (管理员看所有,用户看自己)",
     tags: ["统计分析"],
+    allowReadOnlyAccess: true,
   }
 );
 app.openapi(getUserStatisticsRoute, getUserStatisticsHandler);
@@ -813,6 +817,7 @@ const { route: getUsageLogsRoute, handler: getUsageLogsHandler } = createActionR
     description: "获取使用日志",
     summary: "查询使用日志,支持多种过滤条件",
     tags: ["使用日志"],
+    allowReadOnlyAccess: true,
   }
 );
 app.openapi(getUsageLogsRoute, getUsageLogsHandler);
@@ -886,7 +891,7 @@ const { route: getMyQuotaRoute, handler: getMyQuotaHandler } = createActionRoute
       keyLimitWeeklyUsd: z.number().nullable(),
       keyLimitMonthlyUsd: z.number().nullable(),
       keyLimitTotalUsd: z.number().nullable(),
-      keyLimitConcurrentSessions: z.number().nullable(),
+      keyLimitConcurrentSessions: z.number(),
       keyCurrent5hUsd: z.number(),
       keyCurrentDailyUsd: z.number(),
       keyCurrentWeeklyUsd: z.number(),
@@ -1092,6 +1097,7 @@ const { route: getOverviewDataRoute, handler: getOverviewDataHandler } = createA
     description: "获取首页概览数据",
     summary: "包含并发数、今日统计、活跃用户等",
     tags: ["概览"],
+    allowReadOnlyAccess: true,
   }
 );
 app.openapi(getOverviewDataRoute, getOverviewDataHandler);
@@ -1210,6 +1216,7 @@ const { route: getActiveSessionsRoute, handler: getActiveSessionsHandler } = cre
     description: "获取活跃 Session 列表",
     summary: "获取活跃 Session 列表",
     tags: ["Session 管理"],
+    allowReadOnlyAccess: true,
   }
 );
 app.openapi(getActiveSessionsRoute, getActiveSessionsHandler);

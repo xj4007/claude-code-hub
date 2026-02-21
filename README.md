@@ -64,6 +64,20 @@ PackyCode 为本软件的用户提供了特别优惠，使用此链接注册并�
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="200">
+<a href="https://www.sssaicode.com/register?ref=NQMO05">
+<img src="public/readme/sssaicode.jpg" alt="SSSAiCode Logo" width="180"/>
+</a>
+</td>
+<td>
+<b>💎 特别优惠</b>：<a href="https://www.sssaicode.com/register?ref=NQMO05">SSSAiCode</a> 是一家稳定可靠的 API 中转站，致力于提供稳定、可靠、平价的 Claude、CodeX 模型服务，<b>提供高性价比折合 0.5￥/$ 的官方 Claude 服务</b>，支持包月、Paygo 多种计费方式、支持当日快速开票。<br/>
+SSSAiCode 为本软件的用户提供特别优惠，使用此链接注册可长期享受购买月卡每次 10$ 的额外奖励 → <a href="https://www.sssaicode.com/register?ref=NQMO05">立即访问</a>
+</td>
+</tr>
+</table>
+
 ## ✨ 核心功能 Highlights
 
 - 🤖 **智能负载均衡**：权重 + 优先级 + 分组调度，内置熔断保护与最多 3 次故障转移，保障请求稳定。
@@ -73,7 +87,7 @@ PackyCode 为本软件的用户提供了特别优惠，使用此链接注册并�
 - 📊 **实时监控与统计**：仪表盘、活跃 Session、消耗排行榜、决策链记录、代理状态追踪，秒级掌控运行态势。
 - 💰 **价格表管理**：分页查询 + SQL 优化，支持搜索防抖、LiteLLM 同步，千级模型也能快速检索。
 - 🔁 **Session 管理**：5 分钟上下文缓存，记录决策链，避免频繁切换供应商并保留全链路审计。
-- 🔄 **OpenAI 兼容层**：支持 `/v1/chat/completions`，自动格式转换、工具调用、reasoning 字段与 Codex CLI 指令注入。
+- 🔄 **OpenAI 兼容端点**：支持 `/v1/chat/completions`（OpenAI 兼容格式），工具调用与 reasoning 字段透传，严格同格式路由，无跨格式转换。
 
 ## ⚡️ 快速开始 Quick Start
 
@@ -220,7 +234,7 @@ Hono + Proxy Pipeline (认证 → Session 分配 → 限流 → 供应商选择 
 2. **上下文管理**：`SessionManager` 从 Redis 读取 5 分钟缓存，控制并发并记录决策链。
 3. **限流**：`RateLimitService` 使用 Lua 脚本原子写入 RPM/金额/并发指标，Redis 不可用则 Fail-Open 降级。
 4. **调度**：`ProviderResolver` 根据权重、优先级、熔断状态与 Session 复用策略选择最佳供应商，至多 3 次重试。
-5. **转发与兼容**：`ProxyForwarder` + `ResponseTransformer` 适配 Claude/OpenAI/Response API，支持代理与模型重定向。
+5. **转发与响应处理**：`ProxyForwarder` 负责上游请求转发，`ProxyResponseHandler` 处理响应流并保留端点原生格式，支持代理与模型重定向。
 6. **监控**：日志、排行榜、价格表等 UI 通过 `repository` 查询 PostgreSQL，以小时级聚合呈现指标。
 
 ## 🚢 部署指南 Deployment
@@ -286,6 +300,9 @@ Docker Compose 是**首选部署方式**，自动配置数据库、Redis 和应�
 | `REDIS_URL`                                | `redis://localhost:6379` | Redis 地址，支持 `rediss://` 用于 TLS。                                      |
 | `REDIS_TLS_REJECT_UNAUTHORIZED`            | `true`                   | 是否验证 Redis TLS 证书；设为 `false` 可跳过验证（用于自签/共享证书）。      |
 | `ENABLE_RATE_LIMIT`                        | `true`                   | 控制多维限流开关；Fail-Open 策略在 Redis 不可用时自动降级。                  |
+| `ENABLE_API_KEY_VACUUM_FILTER`             | `true`                   | 是否启用 API Key 真空过滤器（仅负向短路无效 key；可设为 `false/0` 关闭用于排查/节省内存）。 |
+| `ENABLE_API_KEY_REDIS_CACHE`               | `true`                   | 是否启用 API Key 鉴权 Redis 缓存（需 Redis 可用；异常自动回落到 DB）。       |
+| `API_KEY_AUTH_CACHE_TTL_SECONDS`           | `60`                     | API Key 鉴权缓存 TTL（秒，默认 60，最大 3600）。                              |
 | `SESSION_TTL`                              | `300`                    | Session 缓存时间（秒），影响供应商复用策略。                                 |
 | `ENABLE_SECURE_COOKIES`                    | `true`                   | 仅 HTTPS 场景能设置 Secure Cookie；HTTP 访问（非 localhost）需改为 `false`。 |
 | `ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS` | `false`                  | 是否将网络错误计入熔断器；开启后能更激进地阻断异常线路。                     |
@@ -293,7 +310,7 @@ Docker Compose 是**首选部署方式**，自动配置数据库、Redis 和应�
 | `APP_URL`                                  | 空                       | 设置后 OpenAPI 文档 `servers` 将展示正确域名/端口。                          |
 | `API_TEST_TIMEOUT_MS`                      | `15000`                  | 供应商 API 测试超时时间（毫秒，范围 5000-120000），跨境网络可适当提高。      |
 
-> 布尔变量请直接写 `true/false` 或 `1/0`，勿加引号，避免被 Zod 转换为真值。更多字段参考 `.env.example`。
+> 布尔变量支持 `true/false` 或 `1/0`；在 `.env` 文件里写成带引号形式也没问题（dotenv 会解析并去掉引号）。更多字段参考 `.env.example`。
 
 ## ❓ FAQ
 

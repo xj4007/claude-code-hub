@@ -29,14 +29,20 @@ const DEFAULT_SETTINGS: Pick<
   | "enableHttp2"
   | "interceptAnthropicWarmupRequests"
   | "enableThinkingSignatureRectifier"
+  | "enableThinkingBudgetRectifier"
+  | "enableBillingHeaderRectifier"
   | "enableCodexSessionIdCompletion"
+  | "enableClaudeMetadataUserIdInjection"
   | "enableResponseFixer"
   | "responseFixerConfig"
 > = {
   enableHttp2: false,
   interceptAnthropicWarmupRequests: false,
   enableThinkingSignatureRectifier: true,
+  enableThinkingBudgetRectifier: true,
+  enableBillingHeaderRectifier: true,
   enableCodexSessionIdCompletion: true,
+  enableClaudeMetadataUserIdInjection: true,
   enableResponseFixer: true,
   responseFixerConfig: {
     fixTruncatedJson: true,
@@ -96,6 +102,7 @@ export async function getCachedSystemSettings(): Promise<SystemSettings> {
       allowGlobalUsageView: false,
       currencyDisplay: "USD",
       billingModelSource: "original",
+      timezone: null,
       verboseProviderError: false,
       enableAutoCleanup: false,
       cleanupRetentionDays: 30,
@@ -105,9 +112,18 @@ export async function getCachedSystemSettings(): Promise<SystemSettings> {
       enableHttp2: DEFAULT_SETTINGS.enableHttp2,
       interceptAnthropicWarmupRequests: DEFAULT_SETTINGS.interceptAnthropicWarmupRequests,
       enableThinkingSignatureRectifier: DEFAULT_SETTINGS.enableThinkingSignatureRectifier,
+      enableThinkingBudgetRectifier: DEFAULT_SETTINGS.enableThinkingBudgetRectifier,
+      enableBillingHeaderRectifier: DEFAULT_SETTINGS.enableBillingHeaderRectifier,
       enableCodexSessionIdCompletion: DEFAULT_SETTINGS.enableCodexSessionIdCompletion,
+      enableClaudeMetadataUserIdInjection: DEFAULT_SETTINGS.enableClaudeMetadataUserIdInjection,
       enableResponseFixer: DEFAULT_SETTINGS.enableResponseFixer,
       responseFixerConfig: DEFAULT_SETTINGS.responseFixerConfig,
+      quotaDbRefreshIntervalSeconds: 10,
+      quotaLeasePercent5h: 0.05,
+      quotaLeasePercentDaily: 0.05,
+      quotaLeasePercentWeekly: 0.05,
+      quotaLeasePercentMonthly: 0.05,
+      quotaLeaseCapUsd: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     } satisfies SystemSettings;

@@ -24,6 +24,8 @@ interface ProviderChainPopoverProps {
   finalProvider: string;
   /** Whether a cost badge is displayed, affects name max width */
   hasCostBadge?: boolean;
+  /** Callback when a chain item is clicked in the popover */
+  onChainItemClick?: (chainIndex: number) => void;
 }
 
 /**
@@ -32,10 +34,26 @@ interface ProviderChainPopoverProps {
 function isActualRequest(item: ProviderChainItem): boolean {
   if (item.reason === "concurrent_limit_failed") return true;
   if (item.reason === "retry_failed" || item.reason === "system_error") return true;
+  if (item.reason === "endpoint_pool_exhausted") return true;
+  if (item.reason === "vendor_type_all_timeout") return true;
+  if (item.reason === "client_error_non_retryable") return true;
   if ((item.reason === "request_success" || item.reason === "retry_success") && item.statusCode) {
     return true;
   }
   return false;
+}
+
+function parseGroupTags(groupTag?: string | null): string[] {
+  if (!groupTag) return [];
+  const seen = new Set<string>();
+  const groups: string[] = [];
+  for (const raw of groupTag.split(",")) {
+    const trimmed = raw.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    groups.push(trimmed);
+  }
+  return groups;
 }
 
 /**
@@ -74,6 +92,13 @@ function getItemStatus(item: ProviderChainItem): {
       bgColor: "bg-orange-50 dark:bg-orange-950/30",
     };
   }
+  if (item.reason === "endpoint_pool_exhausted" || item.reason === "vendor_type_all_timeout") {
+    return {
+      icon: XCircle,
+      color: "text-rose-600",
+      bgColor: "bg-rose-50 dark:bg-rose-950/30",
+    };
+  }
   return {
     icon: RefreshCw,
     color: "text-slate-500",
@@ -85,9 +110,15 @@ export function ProviderChainPopover({
   chain,
   finalProvider,
   hasCostBadge = false,
+  onChainItemClick,
 }: ProviderChainPopoverProps) {
   const t = useTranslations("dashboard");
   const tChain = useTranslations("provider-chain");
+
+  // “假 200”识别发生在 SSE 流式结束后：此时响应内容可能已透传给客户端，但内部会按失败统计/熔断。
+  const hasFake200PostStreamFailure = chain.some(
+    (item) => typeof item.errorMessage === "string" && item.errorMessage.startsWith("FAKE_200_")
+  );
 
   // Calculate actual request count (excluding intermediate states)
   const requestCount = chain.filter(isActualRequest).length;
@@ -135,6 +166,14 @@ export function ProviderChainPopover({
               <div className="space-y-2">
                 {/* Provider name */}
                 <div className="font-medium text-xs">{displayName}</div>
+
+                {/* 注意：假 200 检测发生在 SSE 流式结束后；此时内容已可能透传给客户端。 */}
+                {hasFake200PostStreamFailure && (
+                  <div className="flex items-start gap-1.5 text-[10px] text-amber-500 dark:text-amber-400">
+                    <InfoIcon className="h-3 w-3 shrink-0 mt-0.5" aria-hidden="true" />
+                    <span>{t("logs.details.fake200ForwardedNotice")}</span>
+                  </div>
+                )}
 
                 {/* Session reuse detailed info */}
                 {isSessionReuse && (
@@ -279,6 +318,7 @@ export function ProviderChainPopover({
     .find((item) => item.reason === "request_success" || item.reason === "retry_success");
   const finalCostMultiplier = successfulProvider?.costMultiplier;
   const finalGroupTag = successfulProvider?.groupTag;
+  const finalGroupTags = parseGroupTags(finalGroupTag);
   const hasFinalCostBadge =
     finalCostMultiplier !== undefined &&
     finalCostMultiplier !== null &&
@@ -318,15 +358,22 @@ export function ProviderChainPopover({
                 x{finalCostMultiplier.toFixed(2)}
               </Badge>
             )}
-            {/* Group tag badge (if present) */}
-            {finalGroupTag && (
-              <Badge
-                variant="outline"
-                className="text-[10px] px-1 py-0 shrink-0 bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900/30 dark:text-slate-400 dark:border-slate-700"
-              >
-                {finalGroupTag}
-              </Badge>
-            )}
+            {/* Group tag badges (if present) */}
+            {finalGroupTags.map((group) => (
+              <TooltipProvider key={group}>
+                <Tooltip delayDuration={200}>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1 py-0 shrink-0 bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900/30 dark:text-slate-400 dark:border-slate-700 max-w-[120px] truncate"
+                    >
+                      {group}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{group}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ))}
             {/* Info icon */}
             <InfoIcon className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden="true" />
           </span>
@@ -351,7 +398,36 @@ export function ProviderChainPopover({
             const isLast = index === actualRequests.length - 1;
 
             return (
-              <div key={`${item.id}-${index}`} className="relative flex gap-2">
+              <div
+                key={`${item.id}-${index}`}
+                className={cn(
+                  "relative flex gap-2",
+                  onChainItemClick &&
+                    "cursor-pointer hover:bg-muted/50 rounded-md p-1 -m-1 transition-colors"
+                )}
+                onClick={
+                  onChainItemClick
+                    ? () => {
+                        // Map actualRequests index back to original chain index
+                        const originalIndex = chain.indexOf(item);
+                        onChainItemClick(originalIndex);
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  onChainItemClick
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          const originalIndex = chain.indexOf(item);
+                          onChainItemClick(originalIndex);
+                        }
+                      }
+                    : undefined
+                }
+                role={onChainItemClick ? "button" : undefined}
+                tabIndex={onChainItemClick ? 0 : undefined}
+              >
                 {/* Timeline connector */}
                 <div className="flex flex-col items-center">
                   <div
@@ -400,8 +476,16 @@ export function ProviderChainPopover({
         </div>
 
         <div className="p-2 border-t bg-muted/30">
+          {hasFake200PostStreamFailure && (
+            <div className="flex items-start justify-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-300 px-2 pb-1">
+              <InfoIcon className="h-3 w-3 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="text-center">{t("logs.details.fake200ForwardedNotice")}</span>
+            </div>
+          )}
           <p className="text-[10px] text-muted-foreground text-center">
-            {t("logs.details.clickStatusCode")}
+            {onChainItemClick
+              ? t("logs.providerChain.clickItemForDetails")
+              : t("logs.details.clickStatusCode")}
           </p>
         </div>
       </PopoverContent>

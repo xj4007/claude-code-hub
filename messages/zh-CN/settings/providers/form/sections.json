@@ -8,6 +8,10 @@
       "title": "API 端点",
       "desc": "配置 API 请求的基础 URL"
     },
+    "endpointPool": {
+      "title": "端点池",
+      "desc": "管理该供应商类型的端点池"
+    },
     "auth": {
       "title": "身份认证",
       "desc": "提供用于认证的 API 密钥"
@@ -30,11 +34,6 @@
     "modelRedirects": {
       "label": "模型重定向配置",
       "optional": "(可选)"
-    },
-    "joinClaudePool": {
-      "label": "加入 Claude 调度池",
-      "desc": "启用后，此供应商将与 Claude 类型供应商一起参与负载均衡调度",
-      "help": "仅当模型重定向配置中存在映射到 claude-* 模型时可用。启用后，当用户请求 claude-* 模型时，此供应商也会参与调度选择。"
     },
     "preserveClientIp": {
       "label": "透传客户端 IP",
@@ -71,6 +70,12 @@
         "label": "供应商分组",
         "placeholder": "例如 premium, economy",
         "desc": "分组标签。从列表选择或输入新名称后按 Enter 创建（最多50字符）。只有 providerGroup 匹配的用户才能使用此供应商。"
+      },
+      "groupPriorities": {
+        "label": "分组优先级覆盖",
+        "desc": "为特定分组设置独立的优先级。留空则使用上方的全局优先级。",
+        "placeholder": "使用全局优先级",
+        "noGroups": "请先设置分组标签，才能配置分组优先级"
       }
     },
     "cacheTtl": {
@@ -91,7 +96,26 @@
       },
       "desc": "配置 1M 上下文窗口支持。仅对 Sonnet 模型生效（claude-sonnet-4-5、claude-sonnet-4）。启用后将应用阶梯定价。"
     },
+    "unifiedClientId": {
+      "label": "统一客户端标识",
+      "desc": "启用后，将使用统一的客户端标识向上游发送请求（仅 Claude / Claude-Auth 供应商生效）",
+      "idLabel": "统一客户端 ID",
+      "regenerate": "重新生成",
+      "help": "ID 为 64 位十六进制字符串，建议保持默认自动生成，不要在不同实例之间复用。"
+    },
+    "simulateCache": {
+      "label": "模拟缓存",
+      "desc": "为下游客户端注入模拟的缓存 usage 字段（不影响本项目计费）",
+      "help": "启用后，响应中会包含 cache_creation_input_tokens 和 cache_read_input_tokens 等字段，用于下游客户端计费与展示"
+    },
+    "supplementaryPrompt": {
+      "label": "补充提示词注入",
+      "desc": "向请求中注入自定义指令（如大文件输出分块提示等）",
+      "help": "启用后，将在请求体的 <system-reminder> 标签中注入自定义指令。注意：仅对主代理请求生效，子代理请求不注入"
+    },
     "codexOverrides": {
+      "title": "Codex 参数覆写",
+      "desc": "在供应商级别覆写 Codex (Responses API) 请求参数",
       "reasoningEffort": {
         "label": "推理等级覆写",
         "help": "控制模型在输出前用于推理的强度（推理 token 数量）。选择“跟随客户端”表示不改写请求；选择其他值则强制覆写 reasoning.effort。注意：none 仅 GPT-5.1 系列支持；xhigh 仅 GPT-5.1-Codex-Max 支持，模型不支持会返回错误。",
@@ -126,7 +150,7 @@
       },
       "parallelToolCalls": {
         "label": "并行工具调用覆写",
-        "help": "控制是否允许并行 tool calls。关闭可能降低工具调用并发能力；“跟随客户端”不改写 parallel_tool_calls。",
+        "help": "控制是否允许并行 tool calls。关闭可能降低工具调用并发能力；'跟随客户端'不改写 parallel_tool_calls。",
         "options": {
           "inherit": "不覆写（跟随客户端）",
           "true": "强制开启",
@@ -134,22 +158,66 @@
         }
       }
     },
-    "unifiedClientId": {
-      "label": "统一客户端标识",
-      "desc": "启用后，将使用统一的客户端标识向上游发送请求（仅 Claude / Claude-Auth 供应商生效）",
-      "idLabel": "统一客户端 ID",
-      "regenerate": "重新生成",
-      "help": "ID 为 64 位十六进制字符串，建议保持默认自动生成，不要在不同实例之间复用。"
+    "anthropicOverrides": {
+      "maxTokens": {
+        "label": "Max Tokens 覆写",
+        "help": "覆写请求体中的 max_tokens。范围：1-64000。'继承' 表示遵循客户端请求。",
+        "options": {
+          "inherit": "不覆写（遵循客户端）",
+          "custom": "自定义"
+        },
+        "placeholder": "如 32000"
+      },
+      "thinkingBudget": {
+        "label": "思考预算覆写",
+        "help": "覆写请求体中的 thinking.budget_tokens。范围：1024-32000。设置后会强制 thinking.type 为 'enabled'。如果同时启用了自适应思考且模型匹配，则自适应优先。",
+        "options": {
+          "inherit": "不覆写（遵循客户端）",
+          "custom": "自定义"
+        },
+        "placeholder": "如 10240",
+        "maxOutButton": "拉满 (32000)"
+      },
+      "adaptiveThinking": {
+        "label": "自适应思考",
+        "help": "启用自适应思考模式。启用且模型匹配时优先于思考预算覆写，不匹配的模型回退到思考预算覆写。",
+        "effort": {
+          "label": "思考深度",
+          "help": "控制推理深度。越高 = 思考越深入。",
+          "options": {
+            "low": "低",
+            "medium": "中",
+            "high": "高（推荐）",
+            "max": "最大"
+          }
+        },
+        "modelMatchMode": {
+          "label": "模型匹配",
+          "help": "哪些模型启用自适应思考。",
+          "options": {
+            "all": "所有模型",
+            "specific": "仅特定模型"
+          }
+        },
+        "models": {
+          "label": "目标模型",
+          "help": "启用自适应思考的模型列表。不匹配的模型保持原样透传。",
+          "placeholder": "如 claude-opus-4-6",
+          "addButton": "添加模型"
+        }
+      }
     },
-    "simulateCache": {
-      "label": "模拟缓存",
-      "desc": "为下游客户端注入模拟的缓存 usage 字段（不影响本项目计费）",
-      "help": "启用后，响应中会包含 cache_creation_input_tokens 和 cache_read_input_tokens 等字段，用于下游客户端计费与展示"
-    },
-    "supplementaryPrompt": {
-      "label": "补充提示词注入",
-      "desc": "向请求中注入自定义指令（如大文件输出分块提示等）",
-      "help": "启用后，将在请求体的 <system-reminder> 标签中注入自定义指令。注意：仅对主代理请求生效，子代理请求不注入"
+    "geminiOverrides": {
+      "title": "Gemini 参数覆写",
+      "desc": "在供应商层面覆写 Gemini API 请求参数",
+      "googleSearch": {
+        "label": "Google Search 联网",
+        "options": {
+          "inherit": "不覆写（遵循客户端）",
+          "enabled": "强制开启",
+          "disabled": "强制关闭"
+        }
+      }
     }
   },
   "rateLimit": {
@@ -286,32 +354,6 @@
     "summary": "验证供应商与模型连通性",
     "desc": "测试供应商模型是否可用，默认与路由配置中选择的供应商类型保持一致。",
     "testLabel": "供应商模型测试"
-  },
-  "codexStrategy": {
-    "title": "Codex Instructions 策略",
-    "summary": {
-      "auto": "自动 (推荐)",
-      "force": "强制官方",
-      "keep": "透传原样"
-    },
-    "desc": "控制如何处理 Codex 请求的 instructions 字段，影响与上游中转站的兼容性",
-    "select": {
-      "label": "策略选择",
-      "auto": {
-        "label": "自动 (推荐)",
-        "desc": "透传客户端 instructions，400 错误时自动重试官方 prompt"
-      },
-      "force": {
-        "label": "强制官方",
-        "desc": "始终使用官方 Codex CLI instructions（约 4000+ 字）"
-      },
-      "keep": {
-        "label": "透传原样",
-        "desc": "始终透传客户端 instructions，不自动重试（适用于宽松中转站）"
-      },
-      "placeholder": "选择策略"
-    },
-    "hint": "提示: 部分严格的 Codex 中转站（如 88code、foxcode）需要官方 instructions，选择\"自动\"或\"强制官方\"策略"
   },
   "mcpPassthrough": {
     "title": "MCP 透传配置",

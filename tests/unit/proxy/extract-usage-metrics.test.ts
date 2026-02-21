@@ -341,6 +341,170 @@ describe("extractUsageMetrics", () => {
       // output_tokens = candidatesTokenCount + thoughtsTokenCount
       expect(result.usageMetrics?.output_tokens).toBe(600);
     });
+
+    it("应从 candidatesTokensDetails 提取 IMAGE modality tokens", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 326,
+          candidatesTokenCount: 2340,
+          candidatesTokensDetails: [
+            { modality: "IMAGE", tokenCount: 2000 },
+            { modality: "TEXT", tokenCount: 340 },
+          ],
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.output_image_tokens).toBe(2000);
+      expect(result.usageMetrics?.output_tokens).toBe(340);
+    });
+
+    it("应从 promptTokensDetails 提取 IMAGE modality tokens", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 886,
+          candidatesTokenCount: 500,
+          promptTokensDetails: [
+            { modality: "TEXT", tokenCount: 326 },
+            { modality: "IMAGE", tokenCount: 560 },
+          ],
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.input_image_tokens).toBe(560);
+      expect(result.usageMetrics?.input_tokens).toBe(326);
+    });
+
+    it("应正确解析混合输入输出的完整 usage", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 357,
+          candidatesTokenCount: 2100,
+          totalTokenCount: 2580,
+          promptTokensDetails: [
+            { modality: "TEXT", tokenCount: 99 },
+            { modality: "IMAGE", tokenCount: 258 },
+          ],
+          candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 2000 }],
+          thoughtsTokenCount: 123,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.input_tokens).toBe(99);
+      expect(result.usageMetrics?.input_image_tokens).toBe(258);
+      // output_tokens = (candidatesTokenCount - IMAGE详情) + thoughtsTokenCount
+      // = (2100 - 2000) + 123 = 223
+      expect(result.usageMetrics?.output_tokens).toBe(223);
+      expect(result.usageMetrics?.output_image_tokens).toBe(2000);
+    });
+
+    it("应处理只有 IMAGE modality 的 candidatesTokensDetails", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 2000,
+          candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 2000 }],
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.output_image_tokens).toBe(2000);
+      // candidatesTokenCount = 2000, IMAGE = 2000, 未分类 = 0
+      expect(result.usageMetrics?.output_tokens).toBe(0);
+    });
+
+    it("应计算 candidatesTokenCount 与 details 的差值作为未分类 TEXT", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 326,
+          candidatesTokenCount: 2340,
+          candidatesTokensDetails: [{ modality: "IMAGE", tokenCount: 2000 }],
+          thoughtsTokenCount: 337,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      // 未分类 = 2340 - 2000 = 340
+      // output_tokens = 340 + 337 (thoughts) = 677
+      expect(result.usageMetrics?.output_tokens).toBe(677);
+      expect(result.usageMetrics?.output_image_tokens).toBe(2000);
+    });
+
+    it("应处理缺失 candidatesTokensDetails 的情况（向后兼容）", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 1000,
+          candidatesTokenCount: 500,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.output_tokens).toBe(500);
+      expect(result.usageMetrics?.output_image_tokens).toBeUndefined();
+      expect(result.usageMetrics?.input_image_tokens).toBeUndefined();
+    });
+
+    it("应处理空的 candidatesTokensDetails 数组", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 1000,
+          candidatesTokenCount: 500,
+          candidatesTokensDetails: [],
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.output_tokens).toBe(500);
+      expect(result.usageMetrics?.output_image_tokens).toBeUndefined();
+    });
+
+    it("应处理 candidatesTokensDetails 中无效 tokenCount 的情况", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 1000,
+          candidatesTokenCount: 500,
+          candidatesTokensDetails: [
+            { modality: "TEXT" },
+            { modality: "IMAGE", tokenCount: null },
+            { modality: "TEXT", tokenCount: -1 },
+          ],
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      // 无效数据不应覆盖原始 candidatesTokenCount
+      expect(result.usageMetrics?.output_tokens).toBe(500);
+      expect(result.usageMetrics?.output_image_tokens).toBeUndefined();
+    });
+
+    it("应处理 modality 大小写变体", () => {
+      const response = JSON.stringify({
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 2340,
+          candidatesTokensDetails: [
+            { modality: "image", tokenCount: 2000 },
+            { modality: "Image", tokenCount: 100 },
+            { modality: "TEXT", tokenCount: 240 },
+          ],
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "gemini");
+
+      expect(result.usageMetrics?.output_image_tokens).toBe(2100);
+      expect(result.usageMetrics?.output_tokens).toBe(240);
+    });
   });
 
   describe("OpenAI Response API 格式", () => {
@@ -504,6 +668,88 @@ describe("extractUsageMetrics", () => {
       const result = parseUsageFromResponseText(response, "claude");
 
       expect(result.usageMetrics).toBeNull();
+    });
+  });
+
+  describe("OpenAI chat completion format (prompt_tokens/completion_tokens)", () => {
+    it("should extract prompt_tokens as input_tokens", () => {
+      const response = JSON.stringify({
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          total_tokens: 150,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "openai");
+
+      expect(result.usageMetrics).not.toBeNull();
+      expect(result.usageMetrics?.input_tokens).toBe(100);
+      expect(result.usageMetrics?.output_tokens).toBe(50);
+    });
+
+    it("should extract completion_tokens as output_tokens", () => {
+      const response = JSON.stringify({
+        usage: {
+          completion_tokens: 200,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "openai");
+
+      expect(result.usageMetrics).not.toBeNull();
+      expect(result.usageMetrics?.output_tokens).toBe(200);
+    });
+
+    it("should prefer input_tokens over prompt_tokens (Claude format priority)", () => {
+      const response = JSON.stringify({
+        usage: {
+          input_tokens: 500,
+          output_tokens: 300,
+          prompt_tokens: 100,
+          completion_tokens: 50,
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "openai");
+
+      expect(result.usageMetrics?.input_tokens).toBe(500);
+      expect(result.usageMetrics?.output_tokens).toBe(300);
+    });
+
+    it("should handle OpenAI streaming chunk with usage in final event", () => {
+      const sse = [
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"}}]}',
+        "",
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":33,"completion_tokens":31,"total_tokens":64}}',
+        "",
+        "data: [DONE]",
+      ].join("\n");
+
+      const result = parseUsageFromResponseText(sse, "openai");
+
+      expect(result.usageMetrics).not.toBeNull();
+      expect(result.usageMetrics?.input_tokens).toBe(33);
+      expect(result.usageMetrics?.output_tokens).toBe(31);
+    });
+
+    it("should handle OpenAI completion_tokens_details (reasoning_tokens)", () => {
+      const response = JSON.stringify({
+        usage: {
+          prompt_tokens: 66,
+          completion_tokens: 57,
+          total_tokens: 123,
+          completion_tokens_details: {
+            reasoning_tokens: 0,
+          },
+        },
+      });
+
+      const result = parseUsageFromResponseText(response, "openai-compatible");
+
+      expect(result.usageMetrics).not.toBeNull();
+      expect(result.usageMetrics?.input_tokens).toBe(66);
+      expect(result.usageMetrics?.output_tokens).toBe(57);
     });
   });
 });

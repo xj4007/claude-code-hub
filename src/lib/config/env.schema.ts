@@ -98,10 +98,22 @@ export const EnvSchema = z.object({
   // - false (默认)：存储请求/响应体但对 message 内容脱敏 [REDACTED]
   // - true：原样存储 message 内容（注意隐私和存储空间影响）
   STORE_SESSION_MESSAGES: z.string().default("false").transform(booleanTransform),
+  // 会话响应体存储开关
+  // - true (默认)：存储响应体（SSE/JSON），用于调试/回放/问题定位（Redis 临时缓存，默认 5 分钟）
+  // - false：不存储响应体（注意：不影响本次请求处理；仅影响后续在 UI/诊断中查看 response body）
+  //
+  // 说明：
+  // - 该开关只影响“写入 Redis 的响应体内容”，不影响内部统计逻辑读取响应体（例如 tokens/费用统计、SSE 结束后的假 200 检测）。
+  // - message 内容是否脱敏仍由 STORE_SESSION_MESSAGES 控制。
+  STORE_SESSION_RESPONSE_BODY: z.string().default("true").transform(booleanTransform),
   DEBUG_MODE: z.string().default("false").transform(booleanTransform),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   TZ: z.string().default("Asia/Shanghai"),
   ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS: z.string().default("false").transform(booleanTransform),
+  // 端点级别熔断器开关
+  // - false (默认)：禁用端点熔断器，所有端点均可使用
+  // - true：启用端点熔断器，连续失败的端点会被临时屏蔽
+  ENABLE_ENDPOINT_CIRCUIT_BREAKER: z.string().default("false").transform(booleanTransform),
   // 供应商缓存开关
   // - true (默认)：启用进程级缓存，30s TTL，提升供应商查询性能
   // - false：禁用缓存，每次请求直接查询数据库

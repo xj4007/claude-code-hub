@@ -41,6 +41,12 @@ export async function getPreferredProviderEndpoints(input: {
     return [];
   }
 
+  // When endpoint circuit breaker is disabled, skip circuit check entirely
+  const { getEnvConfig } = await import("@/lib/config/env.schema");
+  if (!getEnvConfig().ENABLE_ENDPOINT_CIRCUIT_BREAKER) {
+    return rankProviderEndpoints(filtered);
+  }
+
   const circuitResults = await Promise.all(
     filtered.map(async (endpoint) => ({
       endpoint,
@@ -51,6 +57,44 @@ export async function getPreferredProviderEndpoints(input: {
   const candidates = circuitResults.filter(({ isOpen }) => !isOpen).map(({ endpoint }) => endpoint);
 
   return rankProviderEndpoints(candidates);
+}
+
+export interface EndpointFilterStats {
+  total: number;
+  enabled: number;
+  circuitOpen: number;
+  available: number;
+}
+
+/**
+ * Collect endpoint filter statistics for a given vendor/type.
+ *
+ * Used for audit trail when all endpoints are exhausted (strict block).
+ * Returns null only when the raw endpoint query itself fails.
+ */
+export async function getEndpointFilterStats(input: {
+  vendorId: number;
+  providerType: ProviderType;
+}): Promise<EndpointFilterStats> {
+  const endpoints = await findProviderEndpointsByVendorAndType(input.vendorId, input.providerType);
+  const total = endpoints.length;
+  const enabled = endpoints.filter((e) => e.isEnabled && !e.deletedAt).length;
+
+  // When endpoint circuit breaker is disabled, no endpoints can be circuit-open
+  const { getEnvConfig } = await import("@/lib/config/env.schema");
+  if (!getEnvConfig().ENABLE_ENDPOINT_CIRCUIT_BREAKER) {
+    return { total, enabled, circuitOpen: 0, available: enabled };
+  }
+
+  const circuitResults = await Promise.all(
+    endpoints
+      .filter((e) => e.isEnabled && !e.deletedAt)
+      .map(async (e) => isEndpointCircuitOpen(e.id))
+  );
+  const circuitOpen = circuitResults.filter(Boolean).length;
+  const available = enabled - circuitOpen;
+
+  return { total, enabled, circuitOpen, available };
 }
 
 export async function pickBestProviderEndpoint(input: {

@@ -19,8 +19,16 @@ import type {
 } from "@/types/session";
 import type { SpecialSetting } from "@/types/special-settings";
 import { getRedisClient } from "./redis";
+import {
+  getGlobalActiveSessionsKey,
+  getKeyActiveSessionsKey,
+  getUserActiveSessionsKey,
+} from "./redis/active-session-keys";
 import { SessionTracker } from "./session-tracker";
 
+/**
+ * 将已脱敏的 header 文本解析为可序列化对象（用于写入 Session 元信息）。
+ */
 function headersToSanitizedObject(headers: Headers): Record<string, string> {
   const sanitizedText = sanitizeHeaders(headers);
   if (!sanitizedText || sanitizedText === "(empty)") {
@@ -46,6 +54,12 @@ function headersToSanitizedObject(headers: Headers): Record<string, string> {
   return obj;
 }
 
+/**
+ * 解析存储在 Redis 中的 header JSON 字符串。
+ *
+ * - 成功返回 `{ [name]: value }`
+ * - 解析失败/结构不合法则返回 null
+ */
 function parseHeaderRecord(value: string): Record<string, string> | null {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -105,22 +119,21 @@ export class SessionManager {
    * 从客户端请求中提取 session_id（支持 metadata 或 header）
    *
    * 优先级:
-   * 1. metadata.user_id (Claude Code 主要方式，格式: "{user}_session_{sessionId}")
+   * 1. metadata.user_id (Claude Code 主要方式，典型格式: "user_{hash}_account__session_{sessionId}")
    * 2. metadata.session_id (备选方式)
    */
   static extractClientSessionId(
     requestMessage: Record<string, unknown>,
     headers?: Headers | null,
-    userAgent?: string | null
+    _userAgent?: string | null
   ): string | null {
     // Codex 请求：优先尝试从 headers/body 提取稳定的 session_id
     if (headers && Array.isArray(requestMessage.input)) {
-      const result = extractCodexSessionId(headers, requestMessage, userAgent ?? null);
+      const result = extractCodexSessionId(headers, requestMessage);
       if (result.sessionId) {
         logger.trace("SessionManager: Extracted session from Codex request", {
           sessionId: result.sessionId,
           source: result.source,
-          isCodexClient: result.isCodexClient,
         });
         return result.sessionId;
       }
@@ -136,7 +149,7 @@ export class SessionManager {
     const metadataObj = metadata as Record<string, unknown>;
 
     // 方案 A: 从 metadata.user_id 中提取 (Claude Code 主要方式)
-    // 格式: "user_identifier_session_actual_session_id"
+    // 典型格式: "user_{hash}_account__session_{sessionId}"
     if (typeof metadataObj.user_id === "string" && metadataObj.user_id.length > 0) {
       const userId = metadataObj.user_id;
       const sessionMarker = "_session_";
@@ -555,6 +568,21 @@ export class SessionManager {
     }
 
     return null;
+  }
+
+  /**
+   * 清除 session 绑定的 provider（用于跨模型 session 绑定过时时）
+   */
+  static async clearSessionProvider(sessionId: string): Promise<void> {
+    const redis = getRedisClient();
+    if (!redis || redis.status !== "ready") return;
+
+    try {
+      await redis.del(`session:${sessionId}:provider`);
+      logger.trace("SessionManager: Cleared session provider binding", { sessionId });
+    } catch (error) {
+      logger.error("SessionManager: Failed to clear session provider", { error, sessionId });
+    }
   }
 
   /**
@@ -1332,7 +1360,11 @@ export class SessionManager {
   /**
    * 存储 session 响应体（临时存储，5分钟过期）
    *
-   * 存储策略受 STORE_SESSION_MESSAGES 控制：
+   * 存储行为受 STORE_SESSION_RESPONSE_BODY 控制：
+   * - true (默认)：存储响应体到 Redis 临时缓存
+   * - false：不存储（注意：不影响本次请求处理与统计，仅影响后续查看 response body）
+   *
+   * 存储策略（脱敏/原样）受 STORE_SESSION_MESSAGES 控制：
    * - true：原样存储响应内容
    * - false（默认）：对 JSON 响应体中的 message 内容脱敏 [REDACTED]
    *
@@ -1345,6 +1377,10 @@ export class SessionManager {
     response: string | object,
     requestSequence?: number
   ): Promise<void> {
+    // 允许通过环境变量显式关闭响应体存储（例如隐私/节省 Redis 内存）。
+    // 注意：这里仅关闭“写入 Redis”这一步；调用方仍然可能在内存中读取响应体用于统计或错误检测。
+    if (!getEnvConfig().STORE_SESSION_RESPONSE_BODY) return;
+
     const redis = getRedisClient();
     if (!redis || redis.status !== "ready") return;
 
@@ -1908,15 +1944,22 @@ export class SessionManager {
       // 1. 先查询绑定信息（用于从 ZSET 中移除）
       let providerId: number | null = null;
       let keyId: number | null = null;
+      let userId: number | null = null;
 
       try {
-        const [providerIdStr, keyIdStr] = await Promise.all([
+        const [providerIdStr, keyIdStr, userIdStr] = await Promise.all([
           redis.get(`session:${sessionId}:provider`),
           redis.get(`session:${sessionId}:key`),
+          redis.hget(`session:${sessionId}:info`, "userId"),
         ]);
 
         providerId = providerIdStr ? parseInt(providerIdStr, 10) : null;
         keyId = keyIdStr ? parseInt(keyIdStr, 10) : null;
+        userId = userIdStr ? parseInt(userIdStr, 10) : null;
+
+        if (!Number.isFinite(userId)) {
+          userId = null;
+        }
       } catch (lookupError) {
         // Redis 查询失败不应阻止清理操作，继续执行删除
         logger.warn(
@@ -1943,14 +1986,18 @@ export class SessionManager {
       pipeline.del(`session:${sessionId}:response`);
 
       // 3. 从 ZSET 中移除（始终尝试，即使查询失败）
-      pipeline.zrem("global:active_sessions", sessionId);
+      pipeline.zrem(getGlobalActiveSessionsKey(), sessionId);
 
       if (providerId) {
         pipeline.zrem(`provider:${providerId}:active_sessions`, sessionId);
       }
 
       if (keyId) {
-        pipeline.zrem(`key:${keyId}:active_sessions`, sessionId);
+        pipeline.zrem(getKeyActiveSessionsKey(keyId), sessionId);
+      }
+
+      if (userId) {
+        pipeline.zrem(getUserActiveSessionsKey(userId), sessionId);
       }
 
       // 4. 删除 hash 映射（如果存在）

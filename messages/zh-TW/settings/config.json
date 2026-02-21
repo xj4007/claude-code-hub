@@ -51,8 +51,14 @@
     "enableResponseFixerDesc": "自動修復上游回應中常見的編碼、SSE 與 JSON 格式問題（預設開啟）。",
     "enableThinkingSignatureRectifier": "啟用 thinking 簽名整流器",
     "enableThinkingSignatureRectifierDesc": "當 Anthropic 類型供應商返回 thinking 簽名不相容或非法請求等錯誤時，自動移除不相容的 thinking 相關區塊並對同一供應商重試一次（預設開啟）。",
+    "enableThinkingBudgetRectifier": "啟用 thinking 預算整流器",
+    "enableThinkingBudgetRectifierDesc": "當 Anthropic 類型供應商返回 budget_tokens < 1024 錯誤時，自動將 thinking 預算設為最大值（32000），並在需要時將 max_tokens 設為 64000，然後重試一次（預設開啟）。",
+    "enableBillingHeaderRectifier": "啟用計費標頭整流器",
+    "enableBillingHeaderRectifierDesc": "主動移除 Claude Code 客戶端注入到 system 提示中的 x-anthropic-billing-header 文字區塊，防止 Amazon Bedrock 等非原生 Anthropic 上游回傳 400 錯誤（預設開啟）。",
     "enableCodexSessionIdCompletion": "啟用 Codex Session ID 補全",
     "enableCodexSessionIdCompletionDesc": "當 Codex 請求僅提供 session_id（請求頭）或 prompt_cache_key（請求體）之一時，自動補全另一個；若兩者皆缺失，則產生 UUID v7 會話 ID，並在同一對話內穩定複用。",
+    "enableClaudeMetadataUserIdInjection": "啟用 Claude metadata.user_id 注入",
+    "enableClaudeMetadataUserIdInjectionDesc": "當 Claude 請求缺少 metadata.user_id 時，自動注入穩定 user_id（格式：user_{hash}_account__session_{sessionId}）；若客戶端已提供則保留原值不覆蓋。",
     "interceptAnthropicWarmupRequests": "攔截 Warmup 請求（Anthropic）",
     "interceptAnthropicWarmupRequestsDesc": "開啟後，識別到 Claude Code 的 Warmup 探測請求將由 CCH 直接搶答短回應，避免存取上游供應商；該請求會記錄在日誌中，但不計費、不限流、不計入統計。",
     "keepDays": "保留天數",
@@ -73,7 +79,32 @@
     "siteTitlePlaceholder": "例：Claude Code Hub",
     "siteTitleRequired": "站台標題不能為空",
     "verboseProviderError": "詳細供應商錯誤資訊",
-    "verboseProviderErrorDesc": "開啟後，當所有供應商不可用時返回詳細錯誤資訊（包含供應商數量、限流原因等）；關閉後僅返回簡潔錯誤碼。"
+    "verboseProviderErrorDesc": "開啟後，當所有供應商不可用時返回詳細錯誤資訊（包含供應商數量、限流原因等）；關閉後僅返回簡潔錯誤碼。",
+    "timezoneLabel": "系統時區",
+    "timezoneDescription": "設定系統時區，用於統一後端時間邊界計算和前端日期/時間顯示。留空時使用環境變數 TZ 或預設 UTC。",
+    "timezoneAuto": "自動 (使用環境變數 TZ)",
+    "quotaLease": {
+      "title": "配額租約設定",
+      "description": "設定限額檢查時的租約刷新間隔和切片比例。租約機制用於減少 DB 查詢壓力，同時保持限額精度。",
+      "dbRefreshInterval": "DB 刷新間隔（秒）",
+      "dbRefreshIntervalDesc": "從資料庫刷新配額使用量的間隔時間（1-300 秒）",
+      "leasePercent5h": "5 小時窗口租約比例",
+      "leasePercent5hDesc": "每次租約切片佔 5 小時限額的比例（0-1）",
+      "leasePercentDaily": "每日窗口租約比例",
+      "leasePercentDailyDesc": "每次租約切片佔每日限額的比例（0-1）",
+      "leasePercentWeekly": "每週窗口租約比例",
+      "leasePercentWeeklyDesc": "每次租約切片佔每週限額的比例（0-1）",
+      "leasePercentMonthly": "每月窗口租約比例",
+      "leasePercentMonthlyDesc": "每次租約切片佔每月限額的比例（0-1）",
+      "leaseCapUsd": "租約上限（USD）",
+      "leaseCapUsdDesc": "單次租約切片的絕對上限（美元），為空則不限制",
+      "warnings": {
+        "dbRefreshIntervalTooLow": "目前刷新間隔為 {value}s，可能增加 DB 壓力。",
+        "dbRefreshIntervalTooHigh": "目前刷新間隔為 {value}s，配額/限額狀態可能更新不及時。",
+        "leasePercentZero": "目前比例為 0，可能導致租約預算始終為 0。",
+        "leaseCapZero": "租約上限為 0 可能導致單次租約預算為 0。"
+      }
+    }
   },
   "section": {
     "autoCleanup": {

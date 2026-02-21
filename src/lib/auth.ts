@@ -1,10 +1,29 @@
 import { cookies, headers } from "next/headers";
 import { config } from "@/lib/config/config";
 import { getEnvConfig } from "@/lib/config/env.schema";
-import { findActiveKeyByKeyString } from "@/repository/key";
-import { findUserById } from "@/repository/user";
+import { validateApiKeyAndGetUser } from "@/repository/key";
 import type { Key } from "@/types/key";
 import type { User } from "@/types/user";
+
+export type ScopedAuthContext = {
+  session: AuthSession;
+  /**
+   * 本次请求在 adapter 层 validateKey 时使用的 allowReadOnlyAccess 参数。
+   * - true：允许 canLoginWebUi=false 的 key 作为“只读会话”使用
+   * - false：严格要求 canLoginWebUi=true
+   */
+  allowReadOnlyAccess: boolean;
+};
+
+export type AuthSessionStorage = {
+  run<T>(store: ScopedAuthContext, callback: () => T): T;
+  getStore(): ScopedAuthContext | undefined;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cchAuthSessionStorage: AuthSessionStorage | undefined;
+}
 
 const AUTH_COOKIE_NAME = "auth-token";
 const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
@@ -12,6 +31,26 @@ const AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 export interface AuthSession {
   user: User;
   key: Key;
+}
+
+export function runWithAuthSession<T>(
+  session: AuthSession,
+  fn: () => T,
+  options?: { allowReadOnlyAccess?: boolean }
+): T {
+  const storage = globalThis.__cchAuthSessionStorage;
+  if (!storage) return fn();
+  return storage.run({ session, allowReadOnlyAccess: options?.allowReadOnlyAccess ?? false }, fn);
+}
+
+export function getScopedAuthSession(): AuthSession | null {
+  const storage = globalThis.__cchAuthSessionStorage;
+  return storage?.getStore()?.session ?? null;
+}
+
+export function getScopedAuthContext(): ScopedAuthContext | null {
+  const storage = globalThis.__cchAuthSessionStorage;
+  return storage?.getStore() ?? null;
 }
 
 export async function validateKey(
@@ -67,18 +106,24 @@ export async function validateKey(
     return { user: adminUser, key: adminKey };
   }
 
-  const key = await findActiveKeyByKeyString(keyString);
-  if (!key) {
+  // 默认鉴权链路：Vacuum Filter（仅负向短路） → Redis（key/user 缓存） → DB（权威校验）
+  const authResult = await validateApiKeyAndGetUser(keyString);
+  if (!authResult) {
+    return null;
+  }
+
+  const { user, key } = authResult;
+
+  // 用户状态校验：与 v1 proxy 侧保持一致，避免禁用/过期用户继续登录或持有会话
+  if (!user.isEnabled) {
+    return null;
+  }
+  if (user.expiresAt && user.expiresAt.getTime() <= Date.now()) {
     return null;
   }
 
   // 检查 Web UI 登录权限
   if (!allowReadOnlyAccess && !key.canLoginWebUi) {
-    return null;
-  }
-
-  const user = await findUserById(key.userId);
-  if (!user) {
     return null;
   }
 
@@ -119,6 +164,18 @@ export async function getSession(options?: {
    */
   allowReadOnlyAccess?: boolean;
 }): Promise<AuthSession | null> {
+  // 优先读取 adapter 注入的请求级会话（适配 /api/actions 等非 Next 原生上下文场景）
+  const scoped = getScopedAuthContext();
+  if (scoped) {
+    // 关键：scoped 会话必须遵循其"创建时语义"，仅允许内部显式降权（不允许提权）
+    const effectiveAllowReadOnlyAccess =
+      scoped.allowReadOnlyAccess && (options?.allowReadOnlyAccess ?? true);
+    if (!effectiveAllowReadOnlyAccess && !scoped.session.key.canLoginWebUi) {
+      return null;
+    }
+    return scoped.session;
+  }
+
   const keyString = await getAuthToken();
   if (!keyString) {
     return null;

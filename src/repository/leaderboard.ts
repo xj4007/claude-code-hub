@@ -3,7 +3,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/drizzle/db";
 import { messageRequest, providers, users } from "@/drizzle/schema";
-import { getEnvConfig } from "@/lib/config";
+import { resolveSystemTimezone } from "@/lib/utils/timezone";
 import type { ProviderType } from "@/types/provider";
 import { EXCLUDE_WARMUP_CONDITION } from "./_shared/message-request-conditions";
 import { getSystemSettings } from "./system-config";
@@ -41,6 +41,19 @@ export interface ProviderLeaderboardEntry {
   successRate: number; // 0-1 之间的小数，UI 层负责格式化为百分比
   avgTtfbMs: number; // 毫秒
   avgTokensPerSecond: number; // tok/s（仅统计流式且可计算的请求）
+  avgCostPerRequest: number | null; // totalCost / totalRequests, null when totalRequests === 0
+  avgCostPerMillionTokens: number | null; // totalCost * 1_000_000 / totalTokens, null when totalTokens === 0
+}
+
+/**
+ * 供应商缓存命中率 - 模型级统计
+ */
+export interface ModelCacheHitStat {
+  model: string;
+  totalRequests: number;
+  cacheReadTokens: number;
+  totalInputTokens: number;
+  cacheHitRate: number; // 0-1
 }
 
 /**
@@ -58,6 +71,7 @@ export interface ProviderCacheHitRateLeaderboardEntry {
   /** @deprecated Use totalInputTokens instead */
   totalTokens: number;
   cacheHitRate: number; // 0-1 之间的小数，UI 层负责格式化为百分比
+  modelStats: ModelCacheHitStat[];
 }
 
 /**
@@ -73,34 +87,34 @@ export interface ModelLeaderboardEntry {
 
 /**
  * 查询今日消耗排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于配置时区（Asia/Shanghai）
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于系统时区
  */
 export async function findDailyLeaderboard(
   userFilters?: UserLeaderboardFilters
 ): Promise<LeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findLeaderboardWithTimezone("daily", timezone, undefined, userFilters);
 }
 
 /**
  * 查询本月消耗排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于配置时区（Asia/Shanghai）
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于系统时区
  */
 export async function findMonthlyLeaderboard(
   userFilters?: UserLeaderboardFilters
 ): Promise<LeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findLeaderboardWithTimezone("monthly", timezone, undefined, userFilters);
 }
 
 /**
  * 查询本周消耗排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"本周"基于配置时区
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"本周"基于系统时区
  */
 export async function findWeeklyLeaderboard(
   userFilters?: UserLeaderboardFilters
 ): Promise<LeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findLeaderboardWithTimezone("weekly", timezone, undefined, userFilters);
 }
 
@@ -110,7 +124,7 @@ export async function findWeeklyLeaderboard(
 export async function findAllTimeLeaderboard(
   userFilters?: UserLeaderboardFilters
 ): Promise<LeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findLeaderboardWithTimezone("allTime", timezone, undefined, userFilters);
 }
 
@@ -119,7 +133,7 @@ export async function findAllTimeLeaderboard(
  * 使用滚动24小时窗口而非日历日
  */
 export async function findLast24HoursLeaderboard(): Promise<LeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findLeaderboardWithTimezone("last24h", timezone);
 }
 
@@ -244,29 +258,29 @@ export async function findCustomRangeLeaderboard(
   dateRange: DateRangeParams,
   userFilters?: UserLeaderboardFilters
 ): Promise<LeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findLeaderboardWithTimezone("custom", timezone, dateRange, userFilters);
 }
 
 /**
  * 查询今日供应商消耗排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于配置时区（Asia/Shanghai）
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于系统时区
  */
 export async function findDailyProviderLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderLeaderboardWithTimezone("daily", timezone, undefined, providerType);
 }
 
 /**
  * 查询本月供应商消耗排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于配置时区（Asia/Shanghai）
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于系统时区
  */
 export async function findMonthlyProviderLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderLeaderboardWithTimezone("monthly", timezone, undefined, providerType);
 }
 
@@ -276,7 +290,7 @@ export async function findMonthlyProviderLeaderboard(
 export async function findWeeklyProviderLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderLeaderboardWithTimezone("weekly", timezone, undefined, providerType);
 }
 
@@ -286,7 +300,7 @@ export async function findWeeklyProviderLeaderboard(
 export async function findAllTimeProviderLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderLeaderboardWithTimezone("allTime", timezone, undefined, providerType);
 }
 
@@ -296,7 +310,7 @@ export async function findAllTimeProviderLeaderboard(
 export async function findDailyProviderCacheHitRateLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderCacheHitRateLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderCacheHitRateLeaderboardWithTimezone(
     "daily",
     timezone,
@@ -311,7 +325,7 @@ export async function findDailyProviderCacheHitRateLeaderboard(
 export async function findMonthlyProviderCacheHitRateLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderCacheHitRateLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderCacheHitRateLeaderboardWithTimezone(
     "monthly",
     timezone,
@@ -326,7 +340,7 @@ export async function findMonthlyProviderCacheHitRateLeaderboard(
 export async function findWeeklyProviderCacheHitRateLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderCacheHitRateLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderCacheHitRateLeaderboardWithTimezone(
     "weekly",
     timezone,
@@ -341,7 +355,7 @@ export async function findWeeklyProviderCacheHitRateLeaderboard(
 export async function findAllTimeProviderCacheHitRateLeaderboard(
   providerType?: ProviderType
 ): Promise<ProviderCacheHitRateLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderCacheHitRateLeaderboardWithTimezone(
     "allTime",
     timezone,
@@ -413,16 +427,23 @@ async function findProviderLeaderboardWithTimezone(
     .groupBy(messageRequest.providerId, providers.name)
     .orderBy(desc(sql`sum(${messageRequest.costUsd})`));
 
-  return rankings.map((entry) => ({
-    providerId: entry.providerId,
-    providerName: entry.providerName,
-    totalRequests: entry.totalRequests,
-    totalCost: parseFloat(entry.totalCost),
-    totalTokens: entry.totalTokens,
-    successRate: entry.successRate ?? 0,
-    avgTtfbMs: entry.avgTtfbMs ?? 0,
-    avgTokensPerSecond: entry.avgTokensPerSecond ?? 0,
-  }));
+  return rankings.map((entry) => {
+    const totalCost = parseFloat(entry.totalCost);
+    const totalRequests = entry.totalRequests;
+    const totalTokens = entry.totalTokens;
+    return {
+      providerId: entry.providerId,
+      providerName: entry.providerName,
+      totalRequests,
+      totalCost,
+      totalTokens,
+      successRate: entry.successRate ?? 0,
+      avgTtfbMs: entry.avgTtfbMs ?? 0,
+      avgTokensPerSecond: entry.avgTokensPerSecond ?? 0,
+      avgCostPerRequest: totalRequests > 0 ? totalCost / totalRequests : null,
+      avgCostPerMillionTokens: totalTokens > 0 ? (totalCost * 1_000_000) / totalTokens : null,
+    };
+  });
 }
 
 /**
@@ -439,9 +460,9 @@ async function findProviderCacheHitRateLeaderboardWithTimezone(
   providerType?: ProviderType
 ): Promise<ProviderCacheHitRateLeaderboardEntry[]> {
   const totalInputTokensExpr = sql<number>`(
-    COALESCE(${messageRequest.inputTokens}, 0) +
-    COALESCE(${messageRequest.cacheCreationInputTokens}, 0) +
-    COALESCE(${messageRequest.cacheReadInputTokens}, 0)
+    COALESCE(${messageRequest.inputTokens}, 0)::double precision +
+    COALESCE(${messageRequest.cacheCreationInputTokens}, 0)::double precision +
+    COALESCE(${messageRequest.cacheReadInputTokens}, 0)::double precision
   )`;
 
   const cacheRequiredCondition = sql`(
@@ -488,6 +509,56 @@ async function findProviderCacheHitRateLeaderboardWithTimezone(
     .groupBy(messageRequest.providerId, providers.name)
     .orderBy(desc(cacheHitRateExpr), desc(sql`count(*)`));
 
+  // Model-level cache hit breakdown per provider
+  const systemSettings = await getSystemSettings();
+  const billingModelSource = systemSettings.billingModelSource;
+  const modelField =
+    billingModelSource === "original"
+      ? sql<string>`COALESCE(${messageRequest.originalModel}, ${messageRequest.model})`
+      : sql<string>`COALESCE(${messageRequest.model}, ${messageRequest.originalModel})`;
+
+  const modelTotalInput = sql<number>`COALESCE(sum(${totalInputTokensExpr})::double precision, 0::double precision)`;
+  const modelCacheRead = sql<number>`COALESCE(sum(COALESCE(${messageRequest.cacheReadInputTokens}, 0))::double precision, 0::double precision)`;
+  const modelCacheHitRate = sql<number>`COALESCE(
+    ${modelCacheRead} / NULLIF(${modelTotalInput}, 0::double precision),
+    0::double precision
+  )`;
+
+  const modelRows = await db
+    .select({
+      providerId: messageRequest.providerId,
+      model: modelField,
+      totalRequests: sql<number>`count(*)::double precision`,
+      cacheReadTokens: modelCacheRead,
+      totalInputTokens: modelTotalInput,
+      cacheHitRate: modelCacheHitRate,
+    })
+    .from(messageRequest)
+    .innerJoin(
+      providers,
+      and(sql`${messageRequest.providerId} = ${providers.id}`, isNull(providers.deletedAt))
+    )
+    .where(
+      and(...whereConditions.filter((c): c is NonNullable<(typeof whereConditions)[number]> => !!c))
+    )
+    .groupBy(messageRequest.providerId, modelField)
+    .orderBy(desc(modelCacheHitRate), desc(sql`count(*)`));
+
+  // Group model stats by providerId
+  const modelStatsByProvider = new Map<number, ModelCacheHitStat[]>();
+  for (const row of modelRows) {
+    if (!row.model || row.model.trim() === "") continue;
+    const stats = modelStatsByProvider.get(row.providerId) ?? [];
+    stats.push({
+      model: row.model,
+      totalRequests: row.totalRequests,
+      cacheReadTokens: row.cacheReadTokens,
+      totalInputTokens: row.totalInputTokens,
+      cacheHitRate: Math.min(Math.max(row.cacheHitRate ?? 0, 0), 1),
+    });
+    modelStatsByProvider.set(row.providerId, stats);
+  }
+
   return rankings.map((entry) => ({
     providerId: entry.providerId,
     providerName: entry.providerName,
@@ -498,6 +569,7 @@ async function findProviderCacheHitRateLeaderboardWithTimezone(
     totalInputTokens: entry.totalInputTokens,
     totalTokens: entry.totalInputTokens, // deprecated, for backward compatibility
     cacheHitRate: Math.min(Math.max(entry.cacheHitRate ?? 0, 0), 1),
+    modelStats: modelStatsByProvider.get(entry.providerId) ?? [],
   }));
 }
 
@@ -508,7 +580,7 @@ export async function findCustomRangeProviderLeaderboard(
   dateRange: DateRangeParams,
   providerType?: ProviderType
 ): Promise<ProviderLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderLeaderboardWithTimezone("custom", timezone, dateRange, providerType);
 }
 
@@ -519,7 +591,7 @@ export async function findCustomRangeProviderCacheHitRateLeaderboard(
   dateRange: DateRangeParams,
   providerType?: ProviderType
 ): Promise<ProviderCacheHitRateLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findProviderCacheHitRateLeaderboardWithTimezone(
     "custom",
     timezone,
@@ -530,19 +602,19 @@ export async function findCustomRangeProviderCacheHitRateLeaderboard(
 
 /**
  * 查询今日模型调用排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于配置时区（Asia/Shanghai）
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"今日"基于系统时区
  */
 export async function findDailyModelLeaderboard(): Promise<ModelLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findModelLeaderboardWithTimezone("daily", timezone);
 }
 
 /**
  * 查询本月模型调用排行榜（不限制数量）
- * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于配置时区（Asia/Shanghai）
+ * 使用 SQL AT TIME ZONE 进行时区转换，确保"本月"基于系统时区
  */
 export async function findMonthlyModelLeaderboard(): Promise<ModelLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findModelLeaderboardWithTimezone("monthly", timezone);
 }
 
@@ -550,7 +622,7 @@ export async function findMonthlyModelLeaderboard(): Promise<ModelLeaderboardEnt
  * 查询本周模型调用排行榜（不限制数量）
  */
 export async function findWeeklyModelLeaderboard(): Promise<ModelLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findModelLeaderboardWithTimezone("weekly", timezone);
 }
 
@@ -558,7 +630,7 @@ export async function findWeeklyModelLeaderboard(): Promise<ModelLeaderboardEntr
  * 查询全部时间模型调用排行榜（不限制数量）
  */
 export async function findAllTimeModelLeaderboard(): Promise<ModelLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findModelLeaderboardWithTimezone("allTime", timezone);
 }
 
@@ -631,6 +703,6 @@ async function findModelLeaderboardWithTimezone(
 export async function findCustomRangeModelLeaderboard(
   dateRange: DateRangeParams
 ): Promise<ModelLeaderboardEntry[]> {
-  const timezone = getEnvConfig().TZ;
+  const timezone = await resolveSystemTimezone();
   return findModelLeaderboardWithTimezone("custom", timezone, dateRange);
 }

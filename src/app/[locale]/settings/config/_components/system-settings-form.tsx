@@ -2,8 +2,11 @@
 
 import {
   AlertTriangle,
+  ChevronDown,
+  Clock,
   Eye,
   FileCode,
+  Globe,
   Network,
   Pencil,
   Terminal,
@@ -17,6 +20,8 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { saveSystemSettings } from "@/actions/system-config";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { InlineWarning } from "@/components/ui/inline-warning";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -29,6 +34,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import type { CurrencyCode } from "@/lib/utils";
 import { CURRENCY_CONFIG } from "@/lib/utils";
+import { COMMON_TIMEZONES, getTimezoneLabel } from "@/lib/utils/timezone";
+import {
+  shouldWarnQuotaDbRefreshIntervalTooHigh,
+  shouldWarnQuotaDbRefreshIntervalTooLow,
+  shouldWarnQuotaLeaseCapZero,
+  shouldWarnQuotaLeasePercentZero,
+} from "@/lib/utils/validation/quota-lease-warnings";
 import type { BillingModelSource, SystemSettings } from "@/types/system-config";
 
 interface SystemSettingsFormProps {
@@ -38,14 +50,31 @@ interface SystemSettingsFormProps {
     | "allowGlobalUsageView"
     | "currencyDisplay"
     | "billingModelSource"
+    | "timezone"
     | "verboseProviderError"
     | "enableHttp2"
     | "interceptAnthropicWarmupRequests"
     | "enableThinkingSignatureRectifier"
+    | "enableBillingHeaderRectifier"
+    | "enableThinkingBudgetRectifier"
     | "enableCodexSessionIdCompletion"
+    | "enableClaudeMetadataUserIdInjection"
     | "enableResponseFixer"
     | "responseFixerConfig"
+    | "quotaDbRefreshIntervalSeconds"
+    | "quotaLeasePercent5h"
+    | "quotaLeasePercentDaily"
+    | "quotaLeasePercentWeekly"
+    | "quotaLeasePercentMonthly"
+    | "quotaLeaseCapUsd"
   >;
+}
+
+function clampQuotaDbRefreshIntervalSeconds(raw: string): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 1;
+  const rounded = Math.round(parsed);
+  return Math.min(300, Math.max(1, rounded));
 }
 
 export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps) {
@@ -62,6 +91,7 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
   const [billingModelSource, setBillingModelSource] = useState<BillingModelSource>(
     initialSettings.billingModelSource
   );
+  const [timezone, setTimezone] = useState<string | null>(initialSettings.timezone);
   const [verboseProviderError, setVerboseProviderError] = useState(
     initialSettings.verboseProviderError
   );
@@ -72,8 +102,17 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
   const [enableThinkingSignatureRectifier, setEnableThinkingSignatureRectifier] = useState(
     initialSettings.enableThinkingSignatureRectifier
   );
+  const [enableBillingHeaderRectifier, setEnableBillingHeaderRectifier] = useState(
+    initialSettings.enableBillingHeaderRectifier
+  );
+  const [enableThinkingBudgetRectifier, setEnableThinkingBudgetRectifier] = useState(
+    initialSettings.enableThinkingBudgetRectifier
+  );
   const [enableCodexSessionIdCompletion, setEnableCodexSessionIdCompletion] = useState(
     initialSettings.enableCodexSessionIdCompletion
+  );
+  const [enableClaudeMetadataUserIdInjection, setEnableClaudeMetadataUserIdInjection] = useState(
+    initialSettings.enableClaudeMetadataUserIdInjection
   );
   const [enableResponseFixer, setEnableResponseFixer] = useState(
     initialSettings.enableResponseFixer
@@ -81,7 +120,33 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
   const [responseFixerConfig, setResponseFixerConfig] = useState(
     initialSettings.responseFixerConfig
   );
+  const [quotaDbRefreshIntervalSecondsStr, setQuotaDbRefreshIntervalSecondsStr] = useState(
+    String(initialSettings.quotaDbRefreshIntervalSeconds ?? 10)
+  );
+  const quotaDbRefreshIntervalSeconds = (() => {
+    const trimmed = quotaDbRefreshIntervalSecondsStr.trim();
+    if (!trimmed) return Number.NaN;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  })();
+  const [quotaLeasePercent5h, setQuotaLeasePercent5h] = useState(
+    initialSettings.quotaLeasePercent5h ?? 0.05
+  );
+  const [quotaLeasePercentDaily, setQuotaLeasePercentDaily] = useState(
+    initialSettings.quotaLeasePercentDaily ?? 0.05
+  );
+  const [quotaLeasePercentWeekly, setQuotaLeasePercentWeekly] = useState(
+    initialSettings.quotaLeasePercentWeekly ?? 0.05
+  );
+  const [quotaLeasePercentMonthly, setQuotaLeasePercentMonthly] = useState(
+    initialSettings.quotaLeasePercentMonthly ?? 0.05
+  );
+  const [quotaLeaseCapUsd, setQuotaLeaseCapUsd] = useState<string>(
+    initialSettings.quotaLeaseCapUsd != null ? String(initialSettings.quotaLeaseCapUsd) : ""
+  );
   const [isPending, startTransition] = useTransition();
+  const [responseFixerOpen, setResponseFixerOpen] = useState(false);
+  const [quotaLeaseOpen, setQuotaLeaseOpen] = useState(false);
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -91,19 +156,33 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
       return;
     }
 
+    const quotaDbRefreshIntervalSecondsToSave = clampQuotaDbRefreshIntervalSeconds(
+      quotaDbRefreshIntervalSecondsStr
+    );
+
     startTransition(async () => {
       const result = await saveSystemSettings({
         siteTitle,
         allowGlobalUsageView,
         currencyDisplay,
         billingModelSource,
+        timezone,
         verboseProviderError,
         enableHttp2,
         interceptAnthropicWarmupRequests,
         enableThinkingSignatureRectifier,
+        enableBillingHeaderRectifier,
+        enableThinkingBudgetRectifier,
         enableCodexSessionIdCompletion,
+        enableClaudeMetadataUserIdInjection,
         enableResponseFixer,
         responseFixerConfig,
+        quotaDbRefreshIntervalSeconds: quotaDbRefreshIntervalSecondsToSave,
+        quotaLeasePercent5h,
+        quotaLeasePercentDaily,
+        quotaLeasePercentWeekly,
+        quotaLeasePercentMonthly,
+        quotaLeaseCapUsd: quotaLeaseCapUsd.trim() === "" ? null : parseFloat(quotaLeaseCapUsd),
       });
 
       if (!result.ok) {
@@ -116,13 +195,27 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
         setAllowGlobalUsageView(result.data.allowGlobalUsageView);
         setCurrencyDisplay(result.data.currencyDisplay);
         setBillingModelSource(result.data.billingModelSource);
+        setTimezone(result.data.timezone);
         setVerboseProviderError(result.data.verboseProviderError);
         setEnableHttp2(result.data.enableHttp2);
         setInterceptAnthropicWarmupRequests(result.data.interceptAnthropicWarmupRequests);
         setEnableThinkingSignatureRectifier(result.data.enableThinkingSignatureRectifier);
+        setEnableBillingHeaderRectifier(result.data.enableBillingHeaderRectifier);
+        setEnableThinkingBudgetRectifier(result.data.enableThinkingBudgetRectifier);
         setEnableCodexSessionIdCompletion(result.data.enableCodexSessionIdCompletion);
+        setEnableClaudeMetadataUserIdInjection(result.data.enableClaudeMetadataUserIdInjection);
         setEnableResponseFixer(result.data.enableResponseFixer);
         setResponseFixerConfig(result.data.responseFixerConfig);
+        setQuotaDbRefreshIntervalSecondsStr(
+          String(result.data.quotaDbRefreshIntervalSeconds ?? 10)
+        );
+        setQuotaLeasePercent5h(result.data.quotaLeasePercent5h ?? 0.05);
+        setQuotaLeasePercentDaily(result.data.quotaLeasePercentDaily ?? 0.05);
+        setQuotaLeasePercentWeekly(result.data.quotaLeasePercentWeekly ?? 0.05);
+        setQuotaLeasePercentMonthly(result.data.quotaLeasePercentMonthly ?? 0.05);
+        setQuotaLeaseCapUsd(
+          result.data.quotaLeaseCapUsd != null ? String(result.data.quotaLeaseCapUsd) : ""
+        );
       }
 
       toast.success(t("configUpdated"));
@@ -200,6 +293,34 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">{t("billingModelSourceDesc")}</p>
+      </div>
+
+      {/* Timezone Select */}
+      <div className="space-y-2">
+        <Label htmlFor="timezone" className="text-sm font-medium text-foreground">
+          <div className="flex items-center gap-2">
+            <Globe className="h-4 w-4" />
+            {t("timezoneLabel")}
+          </div>
+        </Label>
+        <Select
+          value={timezone ?? "__auto__"}
+          onValueChange={(value) => setTimezone(value === "__auto__" ? null : value)}
+          disabled={isPending}
+        >
+          <SelectTrigger id="timezone" className={selectTriggerClassName}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__auto__">{t("timezoneAuto")}</SelectItem>
+            {COMMON_TIMEZONES.map((tz) => (
+              <SelectItem key={tz} value={tz}>
+                {getTimezoneLabel(tz)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">{t("timezoneDescription")}</p>
       </div>
 
       {/* Toggle Settings */}
@@ -309,6 +430,52 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
           />
         </div>
 
+        {/* Enable Thinking Budget Rectifier */}
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-violet-500/10 text-violet-400 shrink-0">
+              <Pencil className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {t("enableThinkingBudgetRectifier")}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("enableThinkingBudgetRectifierDesc")}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="enable-thinking-budget-rectifier"
+            checked={enableThinkingBudgetRectifier}
+            onCheckedChange={(checked) => setEnableThinkingBudgetRectifier(checked)}
+            disabled={isPending}
+          />
+        </div>
+
+        {/* Enable Billing Header Rectifier */}
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 shrink-0">
+              <FileCode className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {t("enableBillingHeaderRectifier")}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("enableBillingHeaderRectifierDesc")}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="enable-billing-header-rectifier"
+            checked={enableBillingHeaderRectifier}
+            onCheckedChange={(checked) => setEnableBillingHeaderRectifier(checked)}
+            disabled={isPending}
+          />
+        </div>
+
         {/* Enable Codex Session ID Completion */}
         <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
           <div className="flex items-start gap-3">
@@ -328,6 +495,29 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
             id="enable-codex-session-id-completion"
             checked={enableCodexSessionIdCompletion}
             onCheckedChange={(checked) => setEnableCodexSessionIdCompletion(checked)}
+            disabled={isPending}
+          />
+        </div>
+
+        {/* Enable Claude metadata.user_id Injection */}
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-teal-500/10 text-teal-400 shrink-0">
+              <Terminal className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {t("enableClaudeMetadataUserIdInjection")}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("enableClaudeMetadataUserIdInjectionDesc")}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="enable-claude-metadata-user-id-injection"
+            checked={enableClaudeMetadataUserIdInjection}
+            onCheckedChange={(checked) => setEnableClaudeMetadataUserIdInjection(checked)}
             disabled={isPending}
           />
         </div>
@@ -355,84 +545,302 @@ export function SystemSettingsForm({ initialSettings }: SystemSettingsFormProps)
           </div>
 
           {enableResponseFixer && (
-            <div className="mt-4 space-y-3 pl-11 border-l border-white/10 ml-4">
-              {/* Fix Encoding */}
-              <div className="flex items-center justify-between py-2">
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 flex items-center justify-center rounded-md bg-indigo-500/10 text-indigo-400 shrink-0">
-                    <FileCode className="h-3.5 w-3.5" />
+            <Collapsible open={responseFixerOpen} onOpenChange={setResponseFixerOpen}>
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 mt-3 ml-11 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 transition-transform ${responseFixerOpen ? "" : "-rotate-90"}`}
+                  />
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-2 space-y-3 pl-11 border-l border-white/10 ml-4">
+                  {/* Fix Encoding */}
+                  <div className="flex items-center justify-between py-2">
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 flex items-center justify-center rounded-md bg-indigo-500/10 text-indigo-400 shrink-0">
+                        <FileCode className="h-3.5 w-3.5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">
+                          {t("responseFixerFixEncoding")}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {t("responseFixerFixEncodingDesc")}
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="response-fixer-encoding"
+                      checked={responseFixerConfig.fixEncoding}
+                      onCheckedChange={(checked) =>
+                        setResponseFixerConfig((prev) => ({ ...prev, fixEncoding: checked }))
+                      }
+                      disabled={isPending}
+                    />
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {t("responseFixerFixEncoding")}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {t("responseFixerFixEncodingDesc")}
-                    </p>
-                  </div>
-                </div>
-                <Switch
-                  id="response-fixer-encoding"
-                  checked={responseFixerConfig.fixEncoding}
-                  onCheckedChange={(checked) =>
-                    setResponseFixerConfig((prev) => ({ ...prev, fixEncoding: checked }))
-                  }
-                  disabled={isPending}
-                />
-              </div>
 
-              {/* Fix SSE Format */}
-              <div className="flex items-center justify-between py-2">
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 flex items-center justify-center rounded-md bg-teal-500/10 text-teal-400 shrink-0">
-                    <Network className="h-3.5 w-3.5" />
+                  {/* Fix SSE Format */}
+                  <div className="flex items-center justify-between py-2">
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 flex items-center justify-center rounded-md bg-teal-500/10 text-teal-400 shrink-0">
+                        <Network className="h-3.5 w-3.5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">
+                          {t("responseFixerFixSseFormat")}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {t("responseFixerFixSseFormatDesc")}
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="response-fixer-sse"
+                      checked={responseFixerConfig.fixSseFormat}
+                      onCheckedChange={(checked) =>
+                        setResponseFixerConfig((prev) => ({ ...prev, fixSseFormat: checked }))
+                      }
+                      disabled={isPending}
+                    />
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {t("responseFixerFixSseFormat")}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {t("responseFixerFixSseFormatDesc")}
-                    </p>
-                  </div>
-                </div>
-                <Switch
-                  id="response-fixer-sse"
-                  checked={responseFixerConfig.fixSseFormat}
-                  onCheckedChange={(checked) =>
-                    setResponseFixerConfig((prev) => ({ ...prev, fixSseFormat: checked }))
-                  }
-                  disabled={isPending}
-                />
-              </div>
 
-              {/* Fix Truncated JSON */}
-              <div className="flex items-center justify-between py-2">
-                <div className="flex items-start gap-3">
-                  <div className="w-6 h-6 flex items-center justify-center rounded-md bg-rose-500/10 text-rose-400 shrink-0">
-                    <FileCode className="h-3.5 w-3.5" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {t("responseFixerFixTruncatedJson")}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {t("responseFixerFixTruncatedJsonDesc")}
-                    </p>
+                  {/* Fix Truncated JSON */}
+                  <div className="flex items-center justify-between py-2">
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 flex items-center justify-center rounded-md bg-rose-500/10 text-rose-400 shrink-0">
+                        <FileCode className="h-3.5 w-3.5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-foreground">
+                          {t("responseFixerFixTruncatedJson")}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {t("responseFixerFixTruncatedJsonDesc")}
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      id="response-fixer-json"
+                      checked={responseFixerConfig.fixTruncatedJson}
+                      onCheckedChange={(checked) =>
+                        setResponseFixerConfig((prev) => ({ ...prev, fixTruncatedJson: checked }))
+                      }
+                      disabled={isPending}
+                    />
                   </div>
                 </div>
-                <Switch
-                  id="response-fixer-json"
-                  checked={responseFixerConfig.fixTruncatedJson}
-                  onCheckedChange={(checked) =>
-                    setResponseFixerConfig((prev) => ({ ...prev, fixTruncatedJson: checked }))
-                  }
-                  disabled={isPending}
-                />
-              </div>
-            </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
         </div>
+        <Collapsible open={quotaLeaseOpen} onOpenChange={setQuotaLeaseOpen}>
+          <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center gap-3 w-full cursor-pointer"
+                disabled={isPending}
+              >
+                <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 shrink-0">
+                  <Clock className="h-4 w-4" />
+                </div>
+                <div className="flex-1 text-left">
+                  <p className="text-sm font-medium text-foreground">{t("quotaLease.title")}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t("quotaLease.description")}
+                  </p>
+                </div>
+                <ChevronDown
+                  className={`h-4 w-4 text-muted-foreground transition-transform shrink-0 ${quotaLeaseOpen ? "" : "-rotate-90"}`}
+                />
+              </button>
+            </CollapsibleTrigger>
+
+            <CollapsibleContent>
+              <div className="space-y-4 pl-11 mt-4">
+                {/* DB Refresh Interval */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="quota-db-refresh-interval"
+                    className="text-sm font-medium text-foreground"
+                  >
+                    {t("quotaLease.dbRefreshInterval")}
+                  </Label>
+                  <Input
+                    id="quota-db-refresh-interval"
+                    type="number"
+                    min={1}
+                    max={300}
+                    step={1}
+                    value={quotaDbRefreshIntervalSecondsStr}
+                    onChange={(e) => setQuotaDbRefreshIntervalSecondsStr(e.target.value)}
+                    onBlur={() => {
+                      setQuotaDbRefreshIntervalSecondsStr(
+                        String(clampQuotaDbRefreshIntervalSeconds(quotaDbRefreshIntervalSecondsStr))
+                      );
+                    }}
+                    disabled={isPending}
+                    className={inputClassName}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("quotaLease.dbRefreshIntervalDesc")}
+                  </p>
+                  {shouldWarnQuotaDbRefreshIntervalTooLow(quotaDbRefreshIntervalSeconds) && (
+                    <InlineWarning>
+                      {t("quotaLease.warnings.dbRefreshIntervalTooLow", {
+                        value: quotaDbRefreshIntervalSeconds,
+                      })}
+                    </InlineWarning>
+                  )}
+                  {shouldWarnQuotaDbRefreshIntervalTooHigh(quotaDbRefreshIntervalSeconds) && (
+                    <InlineWarning>
+                      {t("quotaLease.warnings.dbRefreshIntervalTooHigh", {
+                        value: quotaDbRefreshIntervalSeconds,
+                      })}
+                    </InlineWarning>
+                  )}
+                </div>
+
+                {/* Lease Percent 5h */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="quota-lease-percent-5h"
+                    className="text-sm font-medium text-foreground"
+                  >
+                    {t("quotaLease.leasePercent5h")}
+                  </Label>
+                  <Input
+                    id="quota-lease-percent-5h"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={quotaLeasePercent5h}
+                    onChange={(e) => setQuotaLeasePercent5h(Number(e.target.value))}
+                    disabled={isPending}
+                    className={inputClassName}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("quotaLease.leasePercent5hDesc")}
+                  </p>
+                  {shouldWarnQuotaLeasePercentZero(quotaLeasePercent5h) && (
+                    <InlineWarning>{t("quotaLease.warnings.leasePercentZero")}</InlineWarning>
+                  )}
+                </div>
+
+                {/* Lease Percent Daily */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="quota-lease-percent-daily"
+                    className="text-sm font-medium text-foreground"
+                  >
+                    {t("quotaLease.leasePercentDaily")}
+                  </Label>
+                  <Input
+                    id="quota-lease-percent-daily"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={quotaLeasePercentDaily}
+                    onChange={(e) => setQuotaLeasePercentDaily(Number(e.target.value))}
+                    disabled={isPending}
+                    className={inputClassName}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("quotaLease.leasePercentDailyDesc")}
+                  </p>
+                  {shouldWarnQuotaLeasePercentZero(quotaLeasePercentDaily) && (
+                    <InlineWarning>{t("quotaLease.warnings.leasePercentZero")}</InlineWarning>
+                  )}
+                </div>
+
+                {/* Lease Percent Weekly */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="quota-lease-percent-weekly"
+                    className="text-sm font-medium text-foreground"
+                  >
+                    {t("quotaLease.leasePercentWeekly")}
+                  </Label>
+                  <Input
+                    id="quota-lease-percent-weekly"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={quotaLeasePercentWeekly}
+                    onChange={(e) => setQuotaLeasePercentWeekly(Number(e.target.value))}
+                    disabled={isPending}
+                    className={inputClassName}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("quotaLease.leasePercentWeeklyDesc")}
+                  </p>
+                  {shouldWarnQuotaLeasePercentZero(quotaLeasePercentWeekly) && (
+                    <InlineWarning>{t("quotaLease.warnings.leasePercentZero")}</InlineWarning>
+                  )}
+                </div>
+
+                {/* Lease Percent Monthly */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="quota-lease-percent-monthly"
+                    className="text-sm font-medium text-foreground"
+                  >
+                    {t("quotaLease.leasePercentMonthly")}
+                  </Label>
+                  <Input
+                    id="quota-lease-percent-monthly"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={quotaLeasePercentMonthly}
+                    onChange={(e) => setQuotaLeasePercentMonthly(Number(e.target.value))}
+                    disabled={isPending}
+                    className={inputClassName}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("quotaLease.leasePercentMonthlyDesc")}
+                  </p>
+                  {shouldWarnQuotaLeasePercentZero(quotaLeasePercentMonthly) && (
+                    <InlineWarning>{t("quotaLease.warnings.leasePercentZero")}</InlineWarning>
+                  )}
+                </div>
+
+                {/* Lease Cap USD */}
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="quota-lease-cap-usd"
+                    className="text-sm font-medium text-foreground"
+                  >
+                    {t("quotaLease.leaseCapUsd")}
+                  </Label>
+                  <Input
+                    id="quota-lease-cap-usd"
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={quotaLeaseCapUsd}
+                    onChange={(e) => setQuotaLeaseCapUsd(e.target.value)}
+                    placeholder=""
+                    disabled={isPending}
+                    className={inputClassName}
+                  />
+                  <p className="text-xs text-muted-foreground">{t("quotaLease.leaseCapUsdDesc")}</p>
+                  {shouldWarnQuotaLeaseCapZero(quotaLeaseCapUsd) && (
+                    <InlineWarning>{t("quotaLease.warnings.leaseCapZero")}</InlineWarning>
+                  )}
+                </div>
+              </div>
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
       </div>
 
       <div className="flex justify-end pt-2">

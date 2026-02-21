@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Info, Layers, Route, Scale, Settings, Timer, Users } from "lucide-react";
+import { Info, Layers, Route, Scale, Settings, Timer } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -19,10 +19,13 @@ import { TagInput } from "@/components/ui/tag-input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getProviderTypeConfig } from "@/lib/provider-type-utils";
 import type {
+  AnthropicAdaptiveThinkingEffort,
+  AnthropicAdaptiveThinkingModelMatchMode,
   CodexParallelToolCallsPreference,
   CodexReasoningEffortPreference,
   CodexReasoningSummaryPreference,
   CodexTextVerbosityPreference,
+  GeminiGoogleSearchPreference,
   ProviderType,
 } from "@/types/provider";
 import { ModelMultiSelect } from "../../../model-multi-select";
@@ -62,10 +65,6 @@ export function RoutingSection() {
     }
     dispatch({ type: "SET_GROUP_TAG", payload: nextTags });
   };
-
-  const hasClaudeRedirects = Object.values(state.routing.modelRedirects).some((target) =>
-    target.startsWith("claude-")
-  );
 
   const providerTypes: ProviderType[] = ["claude", "codex", "gemini", "openai-compatible"];
   const isClaudeProvider =
@@ -178,25 +177,6 @@ export function RoutingSection() {
                 disabled={state.ui.isPending}
               />
             </FieldGroup>
-
-            {/* Join Claude Pool */}
-            {state.routing.providerType !== "claude" && hasClaudeRedirects && (
-              <ToggleRow
-                label={t("sections.routing.joinClaudePool.label")}
-                description={t("sections.routing.joinClaudePool.desc")}
-                icon={Users}
-                iconColor="text-blue-500"
-              >
-                <Switch
-                  id={isEdit ? "edit-join-claude-pool" : "join-claude-pool"}
-                  checked={state.routing.joinClaudePool}
-                  onCheckedChange={(checked) =>
-                    dispatch({ type: "SET_JOIN_CLAUDE_POOL", payload: checked })
-                  }
-                  disabled={state.ui.isPending}
-                />
-              </ToggleRow>
-            )}
 
             {/* Allowed Models */}
             <FieldGroup label={t("sections.routing.modelWhitelist.label")}>
@@ -314,6 +294,46 @@ export function RoutingSection() {
               />
             </SmartInputWrapper>
           </div>
+
+          {/* Per-Group Priority Override */}
+          {state.routing.groupTag.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <div className="text-sm font-medium">
+                {t("sections.routing.scheduleParams.groupPriorities.label")}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("sections.routing.scheduleParams.groupPriorities.desc")}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {state.routing.groupTag.map((group) => (
+                  <div key={group} className="flex items-center gap-2">
+                    <Badge variant="outline" className="font-mono text-xs shrink-0">
+                      {group}
+                    </Badge>
+                    <Input
+                      type="number"
+                      value={state.routing.groupPriorities[group] ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const next = { ...state.routing.groupPriorities };
+                        if (val === "") {
+                          delete next[group];
+                        } else {
+                          next[group] = parseInt(val, 10) || 0;
+                        }
+                        dispatch({ type: "SET_GROUP_PRIORITIES", payload: next });
+                      }}
+                      placeholder={t("sections.routing.scheduleParams.groupPriorities.placeholder")}
+                      disabled={state.ui.isPending}
+                      min="0"
+                      step="1"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </SectionCard>
 
         {/* Advanced Settings */}
@@ -486,8 +506,8 @@ export function RoutingSection() {
         {/* Codex Overrides - Codex type only */}
         {state.routing.providerType === "codex" && (
           <SectionCard
-            title={t("sections.codexStrategy.title")}
-            description={t("sections.codexStrategy.desc")}
+            title={t("sections.routing.codexOverrides.title")}
+            description={t("sections.routing.codexOverrides.desc")}
             icon={Timer}
           >
             <div className="space-y-4">
@@ -607,6 +627,339 @@ export function RoutingSection() {
                 </Select>
               </SmartInputWrapper>
             </div>
+          </SectionCard>
+        )}
+
+        {/* Anthropic Overrides - Claude type only */}
+        {(state.routing.providerType === "claude" ||
+          state.routing.providerType === "claude-auth") && (
+          <SectionCard
+            title={t("sections.routing.anthropicOverrides.maxTokens.label")}
+            description={t("sections.routing.anthropicOverrides.maxTokens.help")}
+            icon={Timer}
+          >
+            <div className="space-y-4">
+              <SmartInputWrapper label={t("sections.routing.anthropicOverrides.maxTokens.label")}>
+                <div className="flex gap-2">
+                  <Select
+                    value={
+                      state.routing.anthropicMaxTokensPreference === "inherit"
+                        ? "inherit"
+                        : "custom"
+                    }
+                    onValueChange={(val) => {
+                      if (val === "inherit") {
+                        dispatch({ type: "SET_ANTHROPIC_MAX_TOKENS", payload: "inherit" });
+                      } else {
+                        dispatch({ type: "SET_ANTHROPIC_MAX_TOKENS", payload: "8192" });
+                      }
+                    }}
+                    disabled={state.ui.isPending}
+                  >
+                    <SelectTrigger className="w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">
+                        {t("sections.routing.anthropicOverrides.maxTokens.options.inherit")}
+                      </SelectItem>
+                      <SelectItem value="custom">
+                        {t("sections.routing.anthropicOverrides.maxTokens.options.custom")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {state.routing.anthropicMaxTokensPreference !== "inherit" && (
+                    <Input
+                      type="number"
+                      value={
+                        state.routing.anthropicMaxTokensPreference === "inherit"
+                          ? ""
+                          : state.routing.anthropicMaxTokensPreference
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "") {
+                          dispatch({ type: "SET_ANTHROPIC_MAX_TOKENS", payload: "inherit" });
+                        } else {
+                          dispatch({ type: "SET_ANTHROPIC_MAX_TOKENS", payload: val });
+                        }
+                      }}
+                      placeholder={t("sections.routing.anthropicOverrides.maxTokens.placeholder")}
+                      disabled={state.ui.isPending}
+                      min="1"
+                      max="64000"
+                      className="flex-1"
+                    />
+                  )}
+                </div>
+              </SmartInputWrapper>
+
+              <SmartInputWrapper
+                label={t("sections.routing.anthropicOverrides.thinkingBudget.label")}
+              >
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex gap-2 items-center">
+                      <Select
+                        value={
+                          state.routing.anthropicThinkingBudgetPreference === "inherit"
+                            ? "inherit"
+                            : "custom"
+                        }
+                        onValueChange={(val) => {
+                          if (val === "inherit") {
+                            dispatch({
+                              type: "SET_ANTHROPIC_THINKING_BUDGET",
+                              payload: "inherit",
+                            });
+                          } else {
+                            dispatch({
+                              type: "SET_ANTHROPIC_THINKING_BUDGET",
+                              payload: "10240",
+                            });
+                          }
+                        }}
+                        disabled={state.ui.isPending}
+                      >
+                        <SelectTrigger className="w-40">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">
+                            {t(
+                              "sections.routing.anthropicOverrides.thinkingBudget.options.inherit"
+                            )}
+                          </SelectItem>
+                          <SelectItem value="custom">
+                            {t("sections.routing.anthropicOverrides.thinkingBudget.options.custom")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {state.routing.anthropicThinkingBudgetPreference !== "inherit" && (
+                        <>
+                          <Input
+                            type="number"
+                            value={state.routing.anthropicThinkingBudgetPreference}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === "") {
+                                dispatch({
+                                  type: "SET_ANTHROPIC_THINKING_BUDGET",
+                                  payload: "inherit",
+                                });
+                              } else {
+                                dispatch({
+                                  type: "SET_ANTHROPIC_THINKING_BUDGET",
+                                  payload: val,
+                                });
+                              }
+                            }}
+                            placeholder={t(
+                              "sections.routing.anthropicOverrides.thinkingBudget.placeholder"
+                            )}
+                            disabled={state.ui.isPending}
+                            min="1024"
+                            max="32000"
+                            className="flex-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              dispatch({
+                                type: "SET_ANTHROPIC_THINKING_BUDGET",
+                                payload: "32000",
+                              })
+                            }
+                            className="px-3 py-2 text-xs bg-primary/10 hover:bg-primary/20 text-primary rounded-md transition-colors whitespace-nowrap"
+                            disabled={state.ui.isPending}
+                          >
+                            {t("sections.routing.anthropicOverrides.thinkingBudget.maxOutButton")}
+                          </button>
+                        </>
+                      )}
+                      <Info className="h-4 w-4 text-muted-foreground shrink-0" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs">
+                    <p className="text-sm">
+                      {t("sections.routing.anthropicOverrides.thinkingBudget.help")}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </SmartInputWrapper>
+
+              <ToggleRow
+                label={t("sections.routing.anthropicOverrides.adaptiveThinking.label")}
+                description={t("sections.routing.anthropicOverrides.adaptiveThinking.help")}
+              >
+                <Switch
+                  checked={state.routing.anthropicAdaptiveThinking !== null}
+                  onCheckedChange={(checked) =>
+                    dispatch({ type: "SET_ADAPTIVE_THINKING_ENABLED", payload: checked })
+                  }
+                  disabled={state.ui.isPending}
+                />
+              </ToggleRow>
+
+              {state.routing.anthropicAdaptiveThinking && (
+                <div className="ml-4 space-y-3 border-l-2 border-primary/20 pl-4">
+                  <SmartInputWrapper
+                    label={t("sections.routing.anthropicOverrides.adaptiveThinking.effort.label")}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex gap-2 items-center">
+                          <Select
+                            value={state.routing.anthropicAdaptiveThinking.effort}
+                            onValueChange={(val) =>
+                              dispatch({
+                                type: "SET_ADAPTIVE_THINKING_EFFORT",
+                                payload: val as AnthropicAdaptiveThinkingEffort,
+                              })
+                            }
+                            disabled={state.ui.isPending}
+                          >
+                            <SelectTrigger className="w-40">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(["low", "medium", "high", "max"] as const).map((level) => (
+                                <SelectItem key={level} value={level}>
+                                  {t(
+                                    `sections.routing.anthropicOverrides.adaptiveThinking.effort.options.${level}`
+                                  )}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Info className="h-4 w-4 text-muted-foreground shrink-0" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p className="text-sm">
+                          {t("sections.routing.anthropicOverrides.adaptiveThinking.effort.help")}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </SmartInputWrapper>
+
+                  <SmartInputWrapper
+                    label={t(
+                      "sections.routing.anthropicOverrides.adaptiveThinking.modelMatchMode.label"
+                    )}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex gap-2 items-center">
+                          <Select
+                            value={state.routing.anthropicAdaptiveThinking.modelMatchMode}
+                            onValueChange={(val) =>
+                              dispatch({
+                                type: "SET_ADAPTIVE_THINKING_MODEL_MATCH_MODE",
+                                payload: val as AnthropicAdaptiveThinkingModelMatchMode,
+                              })
+                            }
+                            disabled={state.ui.isPending}
+                          >
+                            <SelectTrigger className="w-40">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">
+                                {t(
+                                  "sections.routing.anthropicOverrides.adaptiveThinking.modelMatchMode.options.all"
+                                )}
+                              </SelectItem>
+                              <SelectItem value="specific">
+                                {t(
+                                  "sections.routing.anthropicOverrides.adaptiveThinking.modelMatchMode.options.specific"
+                                )}
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Info className="h-4 w-4 text-muted-foreground shrink-0" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p className="text-sm">
+                          {t(
+                            "sections.routing.anthropicOverrides.adaptiveThinking.modelMatchMode.help"
+                          )}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </SmartInputWrapper>
+
+                  {state.routing.anthropicAdaptiveThinking.modelMatchMode === "specific" && (
+                    <SmartInputWrapper
+                      label={t("sections.routing.anthropicOverrides.adaptiveThinking.models.label")}
+                    >
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex gap-2 items-center">
+                            <TagInput
+                              value={state.routing.anthropicAdaptiveThinking.models}
+                              onChange={(models) =>
+                                dispatch({
+                                  type: "SET_ADAPTIVE_THINKING_MODELS",
+                                  payload: models,
+                                })
+                              }
+                              placeholder={t(
+                                "sections.routing.anthropicOverrides.adaptiveThinking.models.placeholder"
+                              )}
+                              disabled={state.ui.isPending}
+                            />
+                            <Info className="h-4 w-4 text-muted-foreground shrink-0" />
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p className="text-sm">
+                            {t("sections.routing.anthropicOverrides.adaptiveThinking.models.help")}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </SmartInputWrapper>
+                  )}
+                </div>
+              )}
+            </div>
+          </SectionCard>
+        )}
+
+        {/* Gemini Overrides - Gemini type only */}
+        {(state.routing.providerType === "gemini" ||
+          state.routing.providerType === "gemini-cli") && (
+          <SectionCard
+            title={t("sections.routing.geminiOverrides.title")}
+            description={t("sections.routing.geminiOverrides.desc")}
+            icon={Settings}
+          >
+            <SmartInputWrapper label={t("sections.routing.geminiOverrides.googleSearch.label")}>
+              <Select
+                value={state.routing.geminiGoogleSearchPreference}
+                onValueChange={(val) =>
+                  dispatch({
+                    type: "SET_GEMINI_GOOGLE_SEARCH",
+                    payload: val as GeminiGoogleSearchPreference,
+                  })
+                }
+                disabled={state.ui.isPending}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue
+                    placeholder={t("sections.routing.geminiOverrides.googleSearch.options.inherit")}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {(["inherit", "enabled", "disabled"] as const).map((val) => (
+                    <SelectItem key={val} value={val}>
+                      {t(`sections.routing.geminiOverrides.googleSearch.options.${val}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SmartInputWrapper>
           </SectionCard>
         )}
       </motion.div>

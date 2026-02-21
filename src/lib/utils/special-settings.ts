@@ -75,6 +75,39 @@ function buildSettingKey(setting: SpecialSetting): string {
         setting.source,
         setting.sessionId,
       ]);
+    case "claude_metadata_user_id_injection":
+      return JSON.stringify([
+        setting.type,
+        setting.hit,
+        setting.action,
+        setting.reason,
+        setting.keyId,
+        setting.sessionId,
+      ]);
+    case "thinking_budget_rectifier":
+      return JSON.stringify([
+        setting.type,
+        setting.hit,
+        setting.providerId ?? null,
+        setting.trigger,
+        setting.attemptNumber,
+        setting.retryAttemptNumber,
+        setting.before.maxTokens,
+        setting.before.thinkingBudgetTokens,
+        setting.after.maxTokens,
+        setting.after.thinkingBudgetTokens,
+      ]);
+    case "billing_header_rectifier":
+      return JSON.stringify([setting.type, setting.hit, setting.removedCount]);
+    case "gemini_google_search_override":
+      return JSON.stringify([
+        setting.type,
+        setting.hit,
+        setting.providerId ?? null,
+        setting.action,
+        setting.preference,
+        setting.hadGoogleSearchInRequest,
+      ]);
     default: {
       // 兜底：保证即使未来扩展类型也不会导致运行时崩溃
       const _exhaustive: never = setting;

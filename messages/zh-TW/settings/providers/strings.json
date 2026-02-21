@@ -65,6 +65,7 @@
   "circuitStatus": "熔斷狀態",
   "vendorTypeCircuit": "供應商類型熔斷",
   "vendorFallbackName": "服務商 #{id}",
+  "vendorAggregationRule": "按官方網站網域聚合",
   "orphanedProviders": "未知服務商",
   "vendorTypeCircuitUpdated": "已更新服務商類型熔斷器",
   "noEndpoints": "尚未設定端點",
@@ -81,10 +82,13 @@
   "probeOk": "正常",
   "probeError": "異常",
   "addEndpointDesc": "為此供應商新增一個 {providerType} 端點。",
+  "addEndpointDescGeneric": "為此供應商新增一個新的 API 端點。",
+  "columnType": "類型",
   "endpointUrlLabel": "URL",
   "endpointUrlPlaceholder": "https://api.example.com/v1",
   "endpointLabelOptional": "標籤（選填）",
   "endpointLabelPlaceholder": "生產環境",
+  "sortOrder": "排序",
   "editEndpoint": "編輯端點",
   "editVendor": "編輯供應商",
   "vendorName": "供應商名稱",
@@ -99,5 +103,18 @@
   "vendorUpdateSuccess": "供應商已更新",
   "vendorUpdateFailed": "更新供應商失敗",
   "vendorDeleteSuccess": "供應商已刪除",
-  "vendorDeleteFailed": "刪除供應商失敗"
+  "vendorDeleteFailed": "刪除供應商失敗",
+  "endpointStatus": {
+    "viewDetails": "檢視詳情（{count}）",
+    "activeEndpoints": "啟用端點",
+    "noEndpoints": "無端點",
+    "healthy": "健康",
+    "unhealthy": "故障",
+    "unknown": "未知",
+    "circuitOpen": "熔斷開啟",
+    "circuitHalfOpen": "熔斷半開",
+    "resetCircuit": "重置熔斷",
+    "resetCircuitSuccess": "端點熔斷已重置",
+    "resetCircuitFailed": "重置端點熔斷失敗"
+  }
 }

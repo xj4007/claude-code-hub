@@ -165,6 +165,15 @@ export class AgentPoolImpl implements AgentPool {
   };
   /** Pending agent creation promises to prevent race conditions */
   private pendingCreations: Map<string, Promise<GetAgentResult>> = new Map();
+  /**
+   * Pending destroy/close promises (best-effort).
+   *
+   * 说明：
+   * - 驱逐/清理路径为了避免全局卡死，必须 fire-and-forget（不 await）。
+   * - 但在 shutdown() 中我们仍希望尽量“优雅收尾”，因此在这里追踪 pending 的关闭任务。
+   * - 若某些 dispatcher 永不 settle，这里会在超时后丢弃引用，避免内存泄漏。
+   */
+  private pendingCleanups: Set<Promise<void>> = new Set();
 
   constructor(config: Partial<AgentPoolConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -329,13 +338,31 @@ export class AgentPoolImpl implements AgentPool {
       this.cleanupTimer = null;
     }
 
-    const closePromises: Promise<void>[] = [];
+    // closeAgent 本身是 fire-and-forget（不 await destroy/close），这里并行触发即可。
+    await Promise.allSettled(
+      Array.from(this.cache.entries()).map(([key, cached]) => this.closeAgent(cached.agent, key))
+    );
 
-    for (const [key, cached] of this.cache.entries()) {
-      closePromises.push(this.closeAgent(cached.agent, key));
+    // Best-effort：等待部分 pending cleanup 完成，但永不无限等待（避免重蹈 “close() 等待 in-flight” 的覆辙）
+    if (this.pendingCleanups.size > 0) {
+      const pending = Array.from(this.pendingCleanups);
+      const WAIT_MS = 2000;
+      let timeoutId: NodeJS.Timeout | null = null;
+      try {
+        await Promise.race([
+          Promise.allSettled(pending).then(() => {}),
+          new Promise<void>((resolve) => {
+            timeoutId = setTimeout(resolve, WAIT_MS);
+            timeoutId.unref();
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+
+      this.pendingCleanups.clear();
     }
 
-    await Promise.all(closePromises);
     this.cache.clear();
     this.unhealthyKeys.clear();
 
@@ -356,12 +383,50 @@ export class AgentPoolImpl implements AgentPool {
   }
 
   private async closeAgent(agent: Dispatcher, key: string): Promise<void> {
+    // 防御性处理：极端情况下（例如 mock/第三方 dispatcher 异常）可能传入空值
+    if (!agent) return;
+
     try {
-      if (typeof agent.close === "function") {
-        await agent.close();
-      } else if (typeof agent.destroy === "function") {
-        await agent.destroy();
-      }
+      // 注意：优先 destroy。undici 的 close() 可能会等待 in-flight 请求结束（流式/卡住时会导致长期阻塞），
+      // 从而让 getAgent/evictEndpoint/cleanup 也被卡住，最终表现为“所有请求都卡在 requesting”。
+      // destroy() 会强制关闭底层连接，更适合作为驱逐/清理时的兜底手段。
+      const operation =
+        typeof agent.destroy === "function"
+          ? ("destroy" as const)
+          : typeof agent.close === "function"
+            ? ("close" as const)
+            : null;
+
+      // 关键点：驱逐/清理路径不能等待 in-flight（否则会把 getAgent() 也阻塞住，导致全局“requesting”）
+      // 因此这里发起 destroy/close 后不 await，仅记录异常，确保 eviction 始终快速返回。
+      // 同时将 promise 纳入 pendingCleanups，便于 shutdown() 做 best-effort 的“优雅收尾”。
+      const cleanupPromise =
+        operation === "destroy" ? agent.destroy() : operation === "close" ? agent.close() : null;
+
+      if (!cleanupPromise) return;
+
+      let dropRefTimeoutId: NodeJS.Timeout | null = null;
+
+      const trackedPromise: Promise<void> = cleanupPromise
+        .catch((error) => {
+          logger.warn("AgentPool: Error closing agent", {
+            key,
+            operation,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          if (dropRefTimeoutId) clearTimeout(dropRefTimeoutId);
+          this.pendingCleanups.delete(trackedPromise);
+        });
+
+      this.pendingCleanups.add(trackedPromise);
+
+      // 避免某些 dispatcher 永不 settle 导致 pendingCleanups 长期持有引用
+      dropRefTimeoutId = setTimeout(() => {
+        this.pendingCleanups.delete(trackedPromise);
+      }, 60000);
+      dropRefTimeoutId.unref();
     } catch (error) {
       logger.warn("AgentPool: Error closing agent", {
         key,
