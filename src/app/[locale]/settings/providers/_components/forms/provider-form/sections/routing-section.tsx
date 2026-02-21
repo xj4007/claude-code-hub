@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Info, Layers, Route, Scale, Settings, Timer } from "lucide-react";
+import { Info, Layers, Route, Scale, Settings, Timer, Users } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
